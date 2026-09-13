@@ -66,10 +66,10 @@ Todos os parâmetros são campos Schemastery `Config` (alteráveis pelo cordis.y
 | `enabled` | `true` | Interruptor mestre; `false` remove serviço, ferramentas, snapshot, comando, painel e answerer (não editável na página de configurações: um plugin desabilitado não tem entrada de configurações) |
 | `panel.enabled` | `true` | Mostrar o botão flutuante do painel web; ao salvar `false` na página de configurações, a entrada 🧠 é ocultada imediatamente, sem recarregar (a página de configurações não é afetada) |
 | `dbPath` | `''` → `$DSH_HOME/dsh-memento/memory.db` | Absoluto, ou relativo a `$DSH_HOME` (no Windows cai para `~/.dsh`) |
-| `budgets.user.userGlobal` | `2000` | Orçamento rígido de caracteres da camada user-global da trilha user |
-| `budgets.user.workspace` | `2000` | Orçamento rígido de caracteres da camada workspace da trilha user |
-| `budgets.agent.userGlobal` | `4000` | Orçamento rígido de caracteres da camada user-global da trilha agent |
-| `budgets.agent.workspace` | `4000` | Orçamento rígido de caracteres da camada workspace da trilha agent |
+| `budgets.user.userGlobal` | `2000` | Linha de aviso suave da camada user-global da trilha user |
+| `budgets.user.workspace` | `2000` | Linha de aviso suave da camada workspace da trilha user |
+| `budgets.agent.userGlobal` | `4000` | Linha de aviso suave da camada user-global da trilha agent |
+| `budgets.agent.workspace` | `4000` | Linha de aviso suave da camada workspace da trilha agent |
 | `writePolicy` | `'ask'` | Política de escrita padrão: `ask` / `auto` / `off` (invisível para o modelo) |
 | `writePolicies` | `{}` | Sobrescritas por trilha/escopo ou por origem (ex.: `user/workspace`, `source:claude`) |
 | `language` | `'en'` | Idioma do texto visível e da saída do comando: `en` / `zh` |
@@ -167,7 +167,7 @@ O `yammory_system` é o ensaio comunitário do protocolo de memória DSH — uma
 - **Entry spec** — duas trilhas × duas camadas × chave por agente, mais `tags` curtos (≤16 × ≤32 caracteres) e um `version` por entrada que incrementa a cada `replace`.
 - **Write semantics** — escritas condicionais idempotentes por substring única; payloads de aprovar-o-que-se-vê (`replace` / `remove` / `consolidate` carregam o texto completo que alteram).
 - **Audit contract** — toda escrita reconstruível a partir de `approval/asked` + `approval/decided` + o livro-razão do provedor.
-- **Budget model** — semântica `BUDGET_EXCEEDED` / `AMBIGUOUS_MATCH`.
+- **Modelo de aviso** — linhas de aviso suaves / semântica `AMBIGUOUS_MATCH`.
 - **Schema versioning** — regras de migração com verificações de versão ruidosas.
 
 - **Spec** — [docs/protocol-v1.md](docs/protocol-v1.md) (中文: [protocol-v1.zh.md](docs/protocol-v1.zh.md)); JSON Schema normativo em [docs/schemas/dsh-memory-protocol-v1.schema.json](docs/schemas/dsh-memory-protocol-v1.schema.json).

@@ -139,7 +139,7 @@ Structured errors expose a stable `code`; tools and models branch on the code, n
 | --- | --- | --- |
 | `INVALID_INPUT` | bad track/scope/text/tags/match/matches/envelope | — |
 | `WRITE_REQUIRES_AGENT` | write without an owning agent session | — |
-| `BUDGET_EXCEEDED` | over-budget write or seed batch | `track, scope, used, limit, needed` |
+| `BUDGET_EXCEEDED` | v1 legacy: over-budget write. v2 never emits it — writes are never refused by capacity (budget is a soft warning line). | `track, scope, used, limit, needed` |
 | `ENTRY_NOT_FOUND` | zero-hit match | `track, scope, match` |
 | `AMBIGUOUS_MATCH` | multi-hit match | `candidates`, `sample` |
 | `STALE_WRITE` | target entry changed while the write was being approved | `track`, `scope`, `match`, `expected`, `actual` |

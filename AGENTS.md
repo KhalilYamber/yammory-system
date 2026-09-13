@@ -11,7 +11,7 @@ index.mjs            插件入口（唯一 host 面文件）：服务/审批门/
 types.d.ts           类型契约：ctx.memory / ctx.memoryAdapters 服务与 memory/* SessionEventMap 声明合并
 lib/constants.mjs    词汇表与协议常量（轨道/作用域/错误码/schema 版本/硬上限，零依赖）
 lib/errors.mjs       结构化领域错误（code + details，零依赖）
-lib/budget.mjs       每轨每层硬字符预算（纯函数，零依赖）
+lib/budget.mjs       每轨每层软预警线核算（纯函数，零依赖）
 lib/match.mjs        唯一子串匹配（零/多命中语义，零依赖）
 lib/gate.mjs         审批门策略与 reason 编解码（零依赖）
 lib/protocol.mjs     协议 v1：写语义核心 MemoryProtocolCore + 条目/信封/审计校验（零 DSH 依赖）
@@ -81,7 +81,7 @@ npm run test:conformance  # 协议一致性套件（黄金参考；第三方 Pro
 - **注册即 effect**：一切贡献走 `ctx.effect()` / `ctx.on()` / 服务 `register()`（返回 disposer）；绝不手动收尾。
 - **模型可见 ⟺ 落盘**：注入模型的快照文本可自会话日志重建（system/message + snapshot 审计行 + 审批 reason 携带完整载荷）。
 - **审批门不可绕过**：写路径的强制点位于 `MemoryProtocolCore`（`lib/protocol.mjs`）写方法内部（`MemoryService` 继承它并注入 `ctx.approval.request` 传输），不在工具层；`writePolicy` 是 Config，模型不可见、不可改；禁用（`enabled:false`）时一切贡献整体消失，不留半残状态。
-- **失败要大声**：库损坏/版本过新/非法配置在加载期抛错；写满报 `BUDGET_EXCEEDED`；子串歧义报 `AMBIGUOUS_MATCH`；绝不静默吞、绝不静默截断。
+- **失败要大声**：库损坏/版本过新/非法配置在加载期抛错；子串歧义报 `AMBIGUOUS_MATCH`；绝不静默吞、绝不静默截断。（v2：写入不因容量被拒，预算只是软预警线。）
 - **本地优先**：零网络、零凭据；记忆库只写 `dbPath`（默认 `$DSH_HOME/dsh-memento/memory.db`），POSIX 权限 0600。
 - **systemPrompt 提供者必须同步**（0.1.2-rc.1 不 await）：SQLite 同步读 + WeakMap 按 Session 冻结。
 

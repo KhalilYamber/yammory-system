@@ -12,7 +12,6 @@ import {
   MemoryService,
   MemoryError,
   InvalidInputError,
-  BudgetExceededError,
   EntryNotFoundError,
   AmbiguousMatchError,
   WriteDeniedError,
@@ -196,7 +195,7 @@ test('F8：auto 策略下服务直写经 answerer 自动放行并记录审批来
   assert.equal(mounted.approval.asked.length, 1)
 })
 
-test('F3/F5：写满返回结构化超限错误（含用量与上限），模型整合删除后重试成功', async (t) => {
+test('F3：越预警线不再拒写（软预警），写入照常落盘，工具结果 ok:true', async (t) => {
   const mounted = mount({
     writePolicy: 'auto',
     budgets: {
@@ -209,27 +208,18 @@ test('F3/F5：写满返回结构化超限错误（含用量与上限），模型
   const service = mock.services.get('memory')
   const session = makeSession()
   const write = { agent: makeAgent(session) }
-  await service.add({ track: 'user', scope: 'user-global', text: 'abcdefghijkl' }, write) // 12/12 满
-  await assert.rejects(
-    () => service.add({ track: 'user', scope: 'user-global', text: 'oops' }, write),
-    (error) => error instanceof BudgetExceededError
-      && error.details.used === 12
-      && error.details.limit === 12
-      && error.details.needed === 16,
-  )
-  assert.equal(service.query({ track: 'user', scope: 'user-global' }).total, 1, '超限写不落盘')
-  // 工具层：ok:false + 结构化 error（模型整合入口）
+  await service.add({ track: 'user', scope: 'user-global', text: 'abcdefghijkl' }, write) // 12/12，已到预警线
+  // v2：越线不拦写——第二条照常落盘
+  const second = await service.add({ track: 'user', scope: 'user-global', text: 'oops' }, write)
+  assert.ok(second.entry.id)
+  assert.equal(service.query({ track: 'user', scope: 'user-global' }).total, 2, '越线写照常落盘')
+  assert.equal(second.usage.used, 16)
+  assert.equal(second.usage.limit, 12, 'usage.limit 现为预警线（沿用旧上限值）')
+  // 工具层：成功结果（不再有 BUDGET_EXCEEDED）
   const tool = mock.tools.find((t) => t.name === 'memory')
   const exec = makeExec({ agent: makeAgent(makeSession()) })
-  const toolResult = await tool.execute({ action: 'add', track: 'user', scope: 'user-global', text: 'oops' }, exec)
-  assert.equal(toolResult.ok, false)
-  assert.equal(toolResult.error.code, 'BUDGET_EXCEEDED')
-  assert.deepEqual(toolResult.error.usage, { track: 'user', scope: 'user-global', used: 12, limit: 12 })
-  // 模型整合：删一条 → 重试成功
-  await service.remove({ track: 'user', scope: 'user-global', match: 'abcd' }, write)
-  const retry = await service.add({ track: 'user', scope: 'user-global', text: '整合后' }, write)
-  assert.ok(retry.entry.id)
-  assert.equal(retry.usage.used, 3)
+  const toolResult = await tool.execute({ action: 'add', track: 'user', scope: 'user-global', text: 'more' }, exec)
+  assert.equal(toolResult.ok, true)
 })
 
 test('F2：replace/remove 唯一子串——歧义报错给候选，要求更具体', async (t) => {
@@ -339,7 +329,7 @@ test('读过滤：会话内 query 按 agentKey 可见集过滤（共享 + 本 ag
   assert.ok(!toolResult.entries.some((entry) => entry.text === 'reviewer 偏好'), '不泄漏其它 agent 条目')
 })
 
-test('P0-4：replace 审批期间并发新增填满预算 → 复审以此刻用量拒绝，零落盘', async (t) => {
+test('F3：replace 审批期间并发新增把层填过预警线 → 仍不拒写（软预警）', async (t) => {
   const mounted = mount({
     writePolicy: 'ask',
     budgets: { user: { userGlobal: 10, workspace: 10 }, agent: { userGlobal: 10, workspace: 10 } },
@@ -359,12 +349,9 @@ test('P0-4：replace 审批期间并发新增填满预算 → 复审以此刻用
   await service.add({ track: 'user', scope: 'workspace', text: 'ab' }, write)
   await service.add({ track: 'user', scope: 'workspace', text: 'cd' }, write)
   duringAsk = () => service.store.insertEntry({ track: 'user', scope: 'workspace', text: 'zzzzzzzz' })
-  // 预检：used 4 + net 6 = 10 ≤ 10 通过；并发后 used 12 + net 6 = 18 → 复审响亮拒绝
-  await assert.rejects(
-    () => service.replace({ track: 'user', scope: 'workspace', match: 'ab', text: 'abcdefgh' }, write),
-    (error) => error instanceof BudgetExceededError && error.details.used === 12 && error.details.needed === 18,
-  )
-  assert.equal(service.query({ track: 'user', scope: 'workspace', text: 'ab' }).total, 1, '目标条目未被替换')
+  // v2：并发把层填过预警线不再阻 write，replace 照常落盘
+  const replaced = await service.replace({ track: 'user', scope: 'workspace', match: 'ab', text: 'abcdefgh' }, write)
+  assert.equal(replaced.entry.text, 'abcdefgh', '越线不阻 replace')
 })
 
 test('P0-4：replace 审批期间目标被并发改写 → STALE_WRITE（乐观锁，绝不静默覆盖）', async (t) => {
@@ -546,7 +533,7 @@ test('F5：工具 execute 返回规范 JSON，render 是纯函数且尊重 signa
   assert.equal(noAgent.error.code, 'WRITE_REQUIRES_AGENT')
 })
 
-test('F12：seed 一次 ask 批量落盘；超预算整批拒绝零部分写入', async (t) => {
+test('F12：seed 一次 ask 批量落盘；越预警线仍整批落盘（软预警）', async (t) => {
   const mounted = mount({
     writePolicy: 'auto',
     budgets: {
@@ -569,14 +556,13 @@ test('F12：seed 一次 ask 批量落盘；超预算整批拒绝零部分写入'
   assert.equal(parsed.count, 2)
   assert.equal(service.query({ track: 'agent', scope: 'workspace' }).total, 2)
 
-  await assert.rejects(
-    () => service.seed([
-      { track: 'agent', scope: 'workspace', text: 'ccccccccc' },
-      { track: 'agent', scope: 'workspace', text: 'dd' },
-    ], write),
-    (error) => error instanceof BudgetExceededError,
-  )
-  assert.equal(service.query({ track: 'agent', scope: 'workspace' }).total, 2, '超限批次零部分写入')
+  // v2：越预警线不再整批拒绝——照常落盘
+  const over = await service.seed([
+    { track: 'agent', scope: 'workspace', text: 'ccccccccc' },
+    { track: 'agent', scope: 'workspace', text: 'dd' },
+  ], write)
+  assert.equal(over.added, 2)
+  assert.equal(service.query({ track: 'agent', scope: 'workspace' }).total, 4, '越线批次照常落盘')
 })
 
 test('consolidate：一次审批整合多条；预算净变化；拒绝零落盘', async (t) => {

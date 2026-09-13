@@ -79,10 +79,10 @@ memory 工具(add)
    - **审批载荷完整化（approve-what-you-see）**：add/seed 载荷 = 新文本全文；replace 载荷 = `from:\n<旧条目全文>\n\nto:\n<新文本>`；remove 载荷 = 被删条目全文（不再是裸子串）；consolidate 载荷 = 每个目标的定位原文（单条 >300 字截断标注）+ 新文本。人批准的是具体变更而非抽象动作，approval/asked 的 reason 因此携带可重建变更的完整信息。
    - **被拒写也留痕**：`rejected/cancelled/unavailable` 一律在抛出 WriteDeniedError 前落 `<action>-denied` 审计行（outcome 标注真实裁决来源）。turn 内路径另有 approval/asked+decided 审计对；turn 外 gate 路径（/memory 命令）没有审计对可落，denied 行是拒绝的唯一证据链。
 
-3. **预算在 Service 层双重校验（审批前后各一次），Provider 层绝不截断**。
-   - 预检在打扰用户之前拒绝明显超限；复审以审批等待后的真实用量为权威（期间可能有其它写）；
-   - 写满抛结构化 `BUDGET_EXCEEDED`（含 used/limit/needed），由模型整合/删除后重试；绝不自动压缩、绝不静默截断；
-   - 计数单位是 JS 字符（UTF-16 code unit）：中文场景一个汉字计 1，预算可预测，按需调大（默认 user 2000 / agent 4000 字符/层）。
+3. **预算 = 软预警线，Provider 层绝不截断（v2 拆上限）**。
+   - 写入永不因容量被拒：越线只做提示，不拦写、不报错；`checkBudget` 只报「是否越线」；
+   - `Config.budgets` 语义由「硬上限」改「软预警线」（值不变：user 2000 / agent 4000）；`BUDGET_EXCEEDED` 保留码位但不再产生；
+   - 计数单位是 JS 字符（UTF-16 code unit）：中文场景一个汉字计 1，可预测；真正的收敛回路是整理机（F6）。
 
 4. **memory/* 会话事件：词汇已声明，运行时自适应派发（rc.6 约束）**。
    - `types.d.ts` 声明合并了 `memory/added|updated|removed|recalled|snapshot` 的 SessionEventMap 词汇与载荷形状；
@@ -137,7 +137,7 @@ memory 工具(add)
 - 把 Claude `memory/*.md` 解析为条目数组，每条 `{ track: 'agent', scope: 'workspace', text, source: 'claude', workspaceKey }`（workspaceKey 用会话 cwd 规范化键，缺省时取写方 agent 的会话 cwd）；
 - 以 `ctx.get('memory')` 可选依赖读取服务（dsh-claude-move 已有 `withService` 同款模式），服务缺失时优雅跳过——**不破坏其现有行为**；
 - seed 的 `write.agent` 必须存在（审批路由），dsh-claude-move 的导入命令/工具有 invocation/exec agent 可传入；
-- 预算吃紧时 seed 整批失败并返回结构化 `BUDGET_EXCEEDED`，由导入方拆分批次重试。
+- v2 起 seed 不再因预算整批失败；越预警线照常落盘。
 
 ### F13：auto-review hook 点（不实现第二模型）
 

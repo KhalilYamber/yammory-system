@@ -32,7 +32,7 @@
 
 - **The approval gate cannot be bypassed.** Every write path (`add` / `replace` / `remove` / `seed`) is forced through the approval waterfall inside the service, not in the tool layer. `writePolicy: ask | auto | off` is model-invisible configuration; `replace` / `remove` / `consolidate` carry the full text of the entries they change in the approval payload, and a denied write still lands a `*-denied` audit row.
 - **Model-visible ⟺ logged.** The injected snapshot lands verbatim in `system/message`; every write is reconstructable from `approval/asked` + `approval/decided` + the plugin's own audit table.
-- **Bounded and honest.** Hard per-track/per-layer character budgets (default user 2000 / agent 4000). A full store fails with a structured error (usage + limit) — never truncated, never auto-compacted.
+- **Bounded and honest.** Soft per-track/per-layer warning lines (default user 2000 / agent 4000). Crossing one never blocks a write — it only flags that the layer is worth consolidating. Never truncated, never auto-compacted.
 
 Two tracks × two layers × per-agent key: a `user` track (facts about the user) and an `agent` track (environment facts and conventions), each split into `user-global` and `workspace` layers, isolated per `agentPreset`. The snapshot is frozen once per session at first prompt assembly and never changes mid-session. The warm-up block carries the speaking constraints and the standing profile, and closes with a one-line directory (`N more workspace / agent-track entries stay out of this block`) so the model knows there is something to fetch with `memory_recall` — the count is one line, the content stays on demand.
 
@@ -63,10 +63,10 @@ All tunables are Schemastery `Config` fields (changeable from cordis.yml). Inval
 | `enabled` | `true` | Master switch; `false` removes the service, tools, snapshot, command, panel, and answerer (not editable from the settings page — a disabled plugin has no settings entry) |
 | `panel.enabled` | `true` | Show the web panel's floating button; saving `false` from the settings page hides the 🧠 entry immediately, no reload needed (the settings page itself stays reachable) |
 | `dbPath` | `''` → `$DSH_HOME/dsh-memento/memory.db` | Absolute, or relative to `$DSH_HOME` (falls back to `~/.dsh` on Windows) |
-| `budgets.user.userGlobal` | `2000` | Hard character budget for the user track's user-global layer |
-| `budgets.user.workspace` | `2000` | Hard character budget for the user track's workspace layer |
-| `budgets.agent.userGlobal` | `4000` | Hard character budget for the agent track's user-global layer |
-| `budgets.agent.workspace` | `4000` | Hard character budget for the agent track's workspace layer |
+| `budgets.user.userGlobal` | `2000` | Soft warning line for the user track's user-global layer |
+| `budgets.user.workspace` | `2000` | Soft warning line for the user track's workspace layer |
+| `budgets.agent.userGlobal` | `4000` | Soft warning line for the agent track's user-global layer |
+| `budgets.agent.workspace` | `4000` | Soft warning line for the agent track's workspace layer |
 | `writePolicy` | `'ask'` | Default write policy: `ask` / `auto` / `off` (model-invisible) |
 | `writePolicies` | `{}` | Per-track/scope or per-source overrides (e.g. `user/workspace`, `source:claude`) |
 | `language` | `'en'` | Model-visible and command output language: `en` / `zh` |
@@ -164,7 +164,7 @@ The name is **`yammory_system`** (published on npm and GitHub). Not `dsh-recall`
 - **Entry spec** — two tracks × two layers × per-agent key, plus short `tags` (≤16 × ≤32 chars) and a per-entry `version` that increments on every `replace`.
 - **Write semantics** — idempotent unique-substring conditional writes; approve-what-you-see payloads (`replace` / `remove` / `consolidate` carry the full text they change).
 - **Audit contract** — every write reconstructable from `approval/asked` + `approval/decided` + the provider ledger.
-- **Budget model** — `BUDGET_EXCEEDED` / `AMBIGUOUS_MATCH` semantics.
+- **Warning-line model** — soft per-layer warning lines / `AMBIGUOUS_MATCH` semantics.
 - **Schema versioning** — migration rules with loud version checks.
 
 - **Spec** — [docs/protocol-v1.md](docs/protocol-v1.md) (中文: [protocol-v1.zh.md](docs/protocol-v1.zh.md)); normative JSON Schema at [docs/schemas/dsh-memory-protocol-v1.schema.json](docs/schemas/dsh-memory-protocol-v1.schema.json).
@@ -191,7 +191,7 @@ The name is **`yammory_system`** (published on npm and GitHub). Not `dsh-recall`
 
 - **Public services only.** Consumes `tools`, `systemPrompt`, and the approval seam; no engine / agent-loop / apiproxy / official-UI changes.
 - **Zero network, zero credentials.** Local database with POSIX file mode `0600`.
-- **Fail loud.** Corrupt DB, newer schema, or invalid config fails at load; full budgets and ambiguous substring matches fail with structured errors.
+- **Fail loud.** Corrupt DB, newer schema, or invalid config fails at load; ambiguous substring matches fail with structured errors. Crossing a warning line never fails a write.
 - **One process, one store.** Multiple sessions share the SQLite store; two processes sharing one `$DSH_HOME` write the same file (last-writer-wins under SQLite locking).
 
 ## Known limitations

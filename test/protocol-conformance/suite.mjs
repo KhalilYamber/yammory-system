@@ -241,7 +241,7 @@ export const CONFORMANCE_CASES = /** @type {ConformanceCase[]} */ ([
   {
     id: 'B6',
     section: 'write-semantics',
-    name: 'seed 批量原子：新 id/version 1；任一条超预算整批拒绝',
+    name: 'seed 批量原子：新 id/version 1',
     async run(provider) {
       const result = await provider.seed([
         { track: 'user', scope: 'user-global', text: '种子一' },
@@ -284,36 +284,25 @@ export const CONFORMANCE_CASES = /** @type {ConformanceCase[]} */ ([
   {
     id: 'C1',
     section: 'budget-model',
-    name: '超预算 add 以 BUDGET_EXCEEDED 报 used/limit/needed 且不落盘',
+    name: '越预警线 add 仍落盘（软预警，不拒写）',
     providerOptions: { budgets: { user: { userGlobal: 100, workspace: 100 }, agent: { userGlobal: 100, workspace: 100 } } },
     async run(provider) {
-      await assert.rejects(
-        provider.add({ track: 'user', scope: 'user-global', text: 'x'.repeat(150) }, makeWrite()),
-        (error) => {
-          assertCode(error, 'BUDGET_EXCEEDED')
-          const details = /** @type {{details?: {used?: unknown, limit?: unknown, needed?: unknown}}} */ (error).details
-          assert.equal(details?.limit, 100)
-          assert.ok(/** @type {number} */ (details?.needed) >= 150)
-          return true
-        },
-      )
-      assert.equal(provider.listEntries().length, 0)
+      await provider.add({ track: 'user', scope: 'user-global', text: 'x'.repeat(150) }, makeWrite())
+      assert.equal(provider.listEntries().length, 1)
     },
   },
   {
     id: 'C2',
     section: 'budget-model',
-    name: 'seed 任一条超预算 → 整批拒绝（无部分写入）',
+    name: 'seed 越预警线仍整批落盘（软预警）',
     providerOptions: { budgets: { user: { userGlobal: 100, workspace: 100 }, agent: { userGlobal: 100, workspace: 100 } } },
     async run(provider) {
-      await assert.rejects(
-        provider.seed([
-          { track: 'user', scope: 'user-global', text: '小条目' },
-          { track: 'user', scope: 'user-global', text: 'y'.repeat(120) },
-        ], makeWrite()),
-        (error) => { assertCode(error, 'BUDGET_EXCEEDED'); return true },
-      )
-      assert.equal(provider.listEntries().length, 0)
+      const result = await provider.seed([
+        { track: 'user', scope: 'user-global', text: '小条目' },
+        { track: 'user', scope: 'user-global', text: 'y'.repeat(120) },
+      ], makeWrite())
+      assert.equal(result.added, 2)
+      assert.equal(provider.listEntries().length, 2)
     },
   },
   {

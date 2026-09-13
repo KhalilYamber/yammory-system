@@ -123,7 +123,7 @@
 | --- | --- | --- |
 | `INVALID_INPUT` | 非法 track/scope/text/tags/match/matches/信封 | — |
 | `WRITE_REQUIRES_AGENT` | 写缺少 owning agent 会话 | — |
-| `BUDGET_EXCEEDED` | 超预算写或 seed 批次 | `track, scope, used, limit, needed` |
+| `BUDGET_EXCEEDED` | v1 遗留：超预算写。v2 不再产生——写入永不因容量被拒（预算为软预警线）。 | `track, scope, used, limit, needed` |
 | `ENTRY_NOT_FOUND` | 零命中匹配 | `track, scope, match` |
 | `AMBIGUOUS_MATCH` | 多命中匹配 | `candidates`, `sample` |
 | `STALE_WRITE` | 审批期间目标条目被并发改动 | `track`, `scope`, `match`, `expected`, `actual` |

@@ -25,11 +25,11 @@ test('entryUsage 只统计同 track+scope 的字符数（中文计 1 个字符�
   assert.equal(entryUsage(entries, 'agent', 'workspace'), 0)
 })
 
-test('checkBudget 恰好等于上限放行，超过则报 ok:false 并带用量事实', () => {
-  assert.deepEqual(checkBudget(90, 100, 10), { ok: true })
-  assert.deepEqual(checkBudget(90, 100, 11), { ok: false, used: 90, limit: 100, needed: 101 })
-  // replace 净变化可为负
-  assert.deepEqual(checkBudget(90, 100, -50), { ok: true })
+test('checkBudget 只报是否越预警线，不再阻断（等于线不越、超过越线、净减不越）', () => {
+  assert.deepEqual(checkBudget(90, 100, 10), { used: 90, line: 100, projected: 100, over: false })
+  assert.deepEqual(checkBudget(90, 100, 11), { used: 90, line: 100, projected: 101, over: true })
+  // 净减不为越线
+  assert.deepEqual(checkBudget(90, 100, -50), { used: 90, line: 100, projected: 40, over: false })
 })
 
 test('budgetReport 覆盖全部 4 组并带正确上限', () => {

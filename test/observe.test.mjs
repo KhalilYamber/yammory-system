@@ -595,7 +595,7 @@ test('memory_observe commit：坏条目零落盘（低把握/坏面/超条数/�
   assert.equal(mounted.mock.services.get('memory').store.listEntries().length, 0)
 })
 
-test('memory_observe commit：层超预算整批失败并给出当前用量（绝不部分写入）', async (t) => {
+test('memory_observe commit：越预警线仍整批落盘（软预警）', async (t) => {
   const mounted = mount()
   t.after(() => teardown(mounted))
   const tool = observeTool(mounted.mock)
@@ -610,9 +610,8 @@ test('memory_observe commit：层超预算整批失败并给出当前用量（�
     action: 'commit',
     entries: [{ face: '人格特质', text: huge, evidence: 'y' }],
   }, makeExec({ agent: makeAgent(session) }))
-  assert.equal(second.ok, false)
-  assert.equal(second.error.code, 'BUDGET_EXCEEDED')
-  assert.equal(mounted.mock.services.get('memory').store.listEntries().length, 1, '第二批判整批失败，无部分写入')
+  assert.equal(second.ok, true)
+  assert.equal(mounted.mock.services.get('memory').store.listEntries().length, 2, '越线批次照常落盘')
 })
 
 // ── 渲染 ──────────────────────────────────────────────────────────────────────

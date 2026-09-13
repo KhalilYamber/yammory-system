@@ -155,7 +155,7 @@ export const name = 'yammory_system'
 
 export const inject = ['tools', 'systemPrompt', 'approval']
 
-/** 默认预算：user 轨 2000 字符/层，agent 轨 4000 字符/层（中文场景按需调大，见 README）。 */
+/** 默认预警线：user 轨 2000 字符/层，agent 轨 4000 字符/层（沿用旧「硬上限」值；写入不再因越线被拒）。 */
 export const DEFAULT_BUDGETS = Object.freeze({
   user: Object.freeze({ userGlobal: 2000, workspace: 2000 }),
   agent: Object.freeze({ userGlobal: 4000, workspace: 4000 }),
@@ -186,7 +186,7 @@ export const DEFAULT_OBSERVE = Object.freeze({
  * @property {boolean} [enabled] 整体开关；false 时工具/注入/服务/审批 answerer 全部消失。
  * @property {string} [dbPath] 记忆库路径；空 = $DSH_HOME/dsh-memento/memory.db（变更时重开 store，即时生效）。
  * @property {{user: {userGlobal: number, workspace: number}, agent: {userGlobal: number, workspace: number}}} [budgets]
- *   每轨每层硬字符预算（热生效）。
+ *   每轨每层软预警线（热生效；越线只提示、不拦写）。
  * @property {'ask'|'auto'|'off'} [writePolicy] 写审批策略；模型不可见、不可改（热生效）。
  * @property {Record<string, 'ask'|'auto'|'off'>} [writePolicies] 粒度写策略（键 `track/scope` 或 `source:<name>`；未命中回退 writePolicy；热生效）。
  * @property {'en'|'zh'} [language] 模型可见文案与命令输出语言（默认 en；命令/快照/面板热生效，工具描述注册期固定）。
@@ -365,12 +365,12 @@ const MEMORY_TOOL_DESCRIPTION = {
     '',
     'Tracks: "user" holds facts about the user (preferences, communication style, landmines, corrections); "agent" holds environment facts, project conventions, lessons learned, and completed-work summaries. Layers: "user-global" applies to every workspace; "workspace" applies only to the current working directory.',
     '',
-    'Each track/layer pair has a hard character budget (shown in the session memory snapshot header). A write that would exceed it FAILS with a structured error carrying current usage and the limit — consolidate or remove entries, then retry. Never truncate or silently drop content.',
+    'Each track/layer pair has a soft warning line (shown in the session memory snapshot header). Crossing it NEVER blocks a write — it only flags that this layer is worth consolidating. Never truncate or silently drop content.',
     '',
     'SAVE: user preferences and corrections; environment facts and project conventions; lessons learned from mistakes; summaries of completed work; anything the user explicitly asks you to remember.',
     'SKIP: trivial or re-derivable facts; encyclopedia knowledge a fresh search can answer; large data dumps or logs; one-off file paths; content already available in the current workspace.',
     '',
-    'Writes (add/replace/remove/consolidate) require approval under the configured policy and are audited; reads (query) are free. replace/remove target an entry by a UNIQUE case-insensitive substring — an ambiguous match fails with the candidate list, so use a longer substring. consolidate merges 1..20 existing entries (unique substrings) into ONE new entry with a single approval and one atomic write — use it when a layer is over budget. Each session starts with a FROZEN warm-up block: the user\u2019s per-domain knowledge level (as speaking constraints) plus the standing user-global profile. That block never changes mid-session. Workspace-scoped and agent-track memory is deliberately NOT in it — fetch those on demand with memory_recall (or query); a closing line in the block tells you how many such entries are waiting.',
+    'Writes (add/replace/remove/consolidate) require approval under the configured policy and are audited; reads (query) are free. replace/remove target an entry by a UNIQUE case-insensitive substring — an ambiguous match fails with the candidate list, so use a longer substring. consolidate merges 1..20 existing entries (unique substrings) into ONE new entry with a single approval and one atomic write — use it when a layer crosses its warning line. Each session starts with a FROZEN warm-up block: the user\u2019s per-domain knowledge level (as speaking constraints) plus the standing user-global profile. That block never changes mid-session. Workspace-scoped and agent-track memory is deliberately NOT in it — fetch those on demand with memory_recall (or query); a closing line in the block tells you how many such entries are waiting.',
     '',
     'PROFILE COORDINATES: every entry can carry two optional coordinates. facet tags which face of the user profile the entry belongs to (one of: 躯体 | 心智 | 价值与意愿 | 能力与技能 | 行为与习惯 | 社会与处境 | 经历与轨迹). level (1..10) is the per-domain knowledge level and belongs only on entries about the user\u2019s knowledge/subject level; the structured per-domain scale itself is written with memory_profile, not with this tool. On replace, an omitted facet/level keeps the existing coordinate.',
   ].join('\n'),
@@ -379,12 +379,12 @@ const MEMORY_TOOL_DESCRIPTION = {
     '',
     '轨道："user" 存用户相关事实（偏好、沟通风格、雷区、纠正）；"agent" 存环境事实、项目约定、教训与已完成工作总结。层："user-global" 对所有工作区生效；"workspace" 只对当前工作目录生效。',
     '',
-    '每对轨道/层有硬字符预算（显示在会话记忆快照头部）。会超限的写入以结构化错误失败（携带当前用量与上限）——整合或删除条目后重试。绝不截断、绝不静默丢弃内容。',
+    '每对轨道/层有一条软预警线（显示在会话记忆快照头部）。越线绝不拦写——只提示这一格值得整合。绝不截断、绝不静默丢弃内容。',
     '',
     '应存（SAVE）：用户偏好与纠正；环境事实与项目约定；犯错得到的教训；已完成工作总结；用户明确要求记住的内容。',
     '应跳过（SKIP）：琐碎或可再推导的事实；重新搜索即可回答的百科知识；大数据转储或日志；一次性文件路径；当前工作区已有的内容。',
     '',
-    '写（add/replace/remove/consolidate）需按配置策略审批并落审计；读（query）免费。replace/remove 用唯一大小写不敏感子串定位——歧义时报候选清单，请用更长子串。consolidate 以一次审批 + 一次原子写把 1..20 条整合为一条——层超预算时使用。每个会话启动时获得一个冻结的预热块：用户分领域知识水平（表达约束）＋ 常驻 user-global 画像。该块在会话内不变。工作区层与 agent 轨记忆刻意不入此块——需要时用 memory_recall（或 query）按需取；该块末行会告诉你这类条目还有几条在等着。',
+    '写（add/replace/remove/consolidate）需按配置策略审批并落审计；读（query）免费。replace/remove 用唯一大小写不敏感子串定位——歧义时报候选清单，请用更长子串。consolidate 以一次审批 + 一次原子写把 1..20 条整合为一条——层越预警线时使用。每个会话启动时获得一个冻结的预热块：用户分领域知识水平（表达约束）＋ 常驻 user-global 画像。该块在会话内不变。工作区层与 agent 轨记忆刻意不入此块——需要时用 memory_recall（或 query）按需取；该块末行会告诉你这类条目还有几条在等着。',
     '',
     '画像坐标：每条条目可带两个可选坐标。facet 标明该条目属于用户画像的哪一面（取值：躯体 | 心智 | 价值与意愿 | 能力与技能 | 行为与习惯 | 社会与处境 | 经历与轨迹）。level（1..10）是分领域知识水平，只用在「知识与学科水平」类条目上；结构化的分领域刻度本身请用 memory_profile 写，不用本工具。replace 时省略 facet/level 即保持原坐标。',
   ].join('\n'),
@@ -786,7 +786,7 @@ const MEMORY_OBSERVE_TOOL_DESCRIPTION = {
     'Observe the user from his own past words (yammory_system) — the second leg of profile collection, the one that reads behaviour instead of asking questions.',
     '',
     'ACTION scan (read-only, free): samples the user\u2019s OWN messages from recent conversation history and returns one bounded slice for you to reason over. Only real human messages are included — system-injected pseudo messages (runtime context, AGENTS.md, skill catalogs, goal rounds, subagent notices) are filtered out and counted in the result. There is deliberately no session id parameter: you may ask for "the last N days", never for a named session. When the character budget is reached the result states exactly what was NOT covered.',
-    'ACTION commit (approval-gated): writes 1..8 observation entries in ONE atomic batch behind ONE approval. source is pinned to \u2018observation\u2019; each entry lands on user/user-global carrying a facet (one of the seven faces) plus the observation sub-face and the date in tags. If the layer is over budget the whole batch fails with current usage — consolidate or remove entries, then retry.',
+    'ACTION commit (approval-gated): writes 1..8 observation entries in ONE atomic batch behind ONE approval. source is pinned to \u2018observation\u2019; each entry lands on user/user-global carrying a facet (one of the seven faces) plus the observation sub-face and the date in tags. Crossing the layer’s warning line never blocks the batch — it only flags that the layer is worth consolidating.',
     '',
     'WRITE LESS, NOT MORE. Every entry must quote the user\u2019s own words as evidence; without a quotable fragment the conclusion is not written. Zero entries is a legitimate outcome. At most 3 entries per observation — more than 3 means you are padding.',
     'NEVER write personality-type labels (MBTI, enneagram, Big Five, attachment style), clinical diagnoses, or negative character judgements. NEVER extract health conditions, sexuality, religion or politics, exact finances, addresses, or identity numbers unless the user explicitly asked you to remember them.',
@@ -796,7 +796,7 @@ const MEMORY_OBSERVE_TOOL_DESCRIPTION = {
     '从用户本人的旧发言里观察他（yammory_system）——采集系统的第二条腿，读行为而非问问题的那条。',
     '',
     '动作 scan（只读、免费）：从近期会话历史里采样「他本人」的发言，返回一段有界切片供你推断。只取真人发言——系统注入的伪消息（运行时上下文、AGENTS.md、skill 目录、goal 轮次、子代理通知）一律过滤并在结果里计数。刻意不提供 sessionId 入参：你只能说「最近 N 天」，不能点名某个会话。字符预算到顶时，结果会明确报出「没看到哪些」。',
-    '动作 commit（走审批门）：以一次审批、一次原子写落 1..8 条观察条目。source 锚死为 observation；每条落 user/user-global，带 facet（七面之一）＋ tags 里的观察子板块与日期。该层超预算时整批失败并给出当前用量——先整合或删除条目再重试。',
+    '动作 commit（走审批门）：以一次审批、一次原子写落 1..8 条观察条目。source 锚死为 observation；每条落 user/user-global，带 facet（七面之一）＋ tags 里的观察子板块与日期。越预警线不拦写——只提示该层值得整合。',
     '',
     '宁少勿多。每条必须附用户原话作为证据；找不到可引用的原话就不写。0 条是合法输出。一次观察最多 3 条——超过 3 条说明你在凑数。',
     '绝不写人格类型标签（MBTI、九型、大五、依恋类型）、临床诊断或负面人格评价。绝不提取健康状况、性取向、宗教与政治立场、精确财务数字、住址与证件号——除非用户明确要求你记住。',
@@ -2050,7 +2050,7 @@ const COMMAND_TEXT = /** @type {{en: CommandTextBundle, zh: CommandTextBundle}} 
     noMatch: (text) => `No entry contains "${text}".`,
     matches: (total, shown) => `Matches (${total} total, showing first ${shown}):`,
     matchesFull: (total) => `Matches (${total}):`,
-    budgets: 'Budget usage:',
+    budgets: 'Warning-line usage:',
     proposalsNone: 'No pending memory proposals.',
     proposalsList: (n, rows) => `Pending proposals (${n}):\n${rows}\nApprove: /memory proposals approve <id>; dismiss: /memory proposals dismiss <id>`,
     proposalsUsage: 'proposals usage: /memory proposals | proposals approve <id> | proposals dismiss <id>',
@@ -2075,7 +2075,7 @@ const COMMAND_TEXT = /** @type {{en: CommandTextBundle, zh: CommandTextBundle}} 
     importNoEntries: 'import: the export document contains no entries',
     importTooMany: (max) => `import: the export document has more than ${max} entries; split it and import in batches`,
     importBadEntry: 'import: every entry needs a string track, scope, and non-empty text',
-    imported: (n) => `Imported ${n} entries into memory (single approval; budgets re-checked). Entries get fresh ids and timestamps; proposals, audit rows and recall counts are not migrated.`,
+    imported: (n) => `Imported ${n} entries into memory (single approval). Entries get fresh ids and timestamps; proposals, audit rows and recall counts are not migrated.`,
     adaptersEmpty: 'No memory adapters registered.',
     adaptersList: (n, rows) => `Memory adapters (${n}):\n${rows}\nImport: /memory import --adapter=<id> <path|inline JSON>; export: /memory export --adapter=<id>`,
     adapterExportUsage: 'adapter export usage: /memory export --adapter=<id> (read-only conversion to stdout)',
@@ -2084,7 +2084,7 @@ const COMMAND_TEXT = /** @type {{en: CommandTextBundle, zh: CommandTextBundle}} 
     adapterBadFlag: 'adapter id missing or invalid: use --adapter=<id> (lowercase kebab-case)',
     adapterUnknown: (id) => `no memory adapter "${id}" is registered; run /memory adapters`,
     adapterPayload: (id, message) => `adapter ${id} rejected the payload: ${message}`,
-    adapterImported: (n, id) => `Imported ${n} entries via adapter ${id} (single approval; budgets re-checked). Entries get fresh ids and timestamps.`,
+    adapterImported: (n, id) => `Imported ${n} entries via adapter ${id} (single approval). Entries get fresh ids and timestamps.`,
     observeUsage: 'observe usage: /memory observe [--days=N] [--sessions=N] [--per-session=N] [--chars=N] [--budget=N] — read-only scan of your own past messages (no approval, no writes). Parameters are clamped to the hard limits; the output states what was NOT covered. To have the model infer from it, just say "observe me".',
     observeUnavailable: 'observe: this profile provides no session-query service, so conversation history cannot be read.',
     observeHint: 'Hand this slice to the model for inference: say "observe me" (the yammory-observe skill drives memory_observe commit through the approval gate). This command itself only reads — nothing was written.',
@@ -2101,7 +2101,7 @@ const COMMAND_TEXT = /** @type {{en: CommandTextBundle, zh: CommandTextBundle}} 
     noMatch: (text) => `没有条目包含「${text}」。`,
     matches: (total, shown) => `命中（共 ${total} 条，显示前 ${shown} 条）：`,
     matchesFull: (total) => `命中（${total} 条）：`,
-    budgets: '预算用量：',
+    budgets: '预警线用量：',
     proposalsNone: '暂无待审批记忆提案。',
     proposalsList: (n, rows) => `待审批提案（${n} 条）：\n${rows}\n审批：/memory proposals approve <id>；驳回：/memory proposals dismiss <id>`,
     proposalsUsage: 'proposals 用法：/memory proposals | proposals approve <id> | proposals dismiss <id>',
@@ -2126,7 +2126,7 @@ const COMMAND_TEXT = /** @type {{en: CommandTextBundle, zh: CommandTextBundle}} 
     importNoEntries: 'import：导出文档没有任何条目',
     importTooMany: (max) => `import：导出文档超过 ${max} 条；请拆分后分批导入`,
     importBadEntry: 'import：每条都需要字符串 track、scope 与非空 text',
-    imported: (n) => `已导入 ${n} 条记忆（单次审批；预算已复检）。条目获得新 id 与新时间戳；提案、审计行与召回计数不迁移。`,
+    imported: (n) => `已导入 ${n} 条记忆（单次审批）。条目获得新 id 与新时间戳；提案、审计行与召回计数不迁移。`,
     adaptersEmpty: '没有已注册的记忆适配器。',
     adaptersList: (n, rows) => `记忆适配器（${n} 个）：\n${rows}\n导入：/memory import --adapter=<id> <路径|内联 JSON>；导出：/memory export --adapter=<id>`,
     adapterExportUsage: '适配器导出用法：/memory export --adapter=<id>（只读转换输出到 stdout）',
@@ -2135,7 +2135,7 @@ const COMMAND_TEXT = /** @type {{en: CommandTextBundle, zh: CommandTextBundle}} 
     adapterBadFlag: '适配器 id 缺失或非法：请用 --adapter=<id>（小写 kebab-case）',
     adapterUnknown: (id) => `没有注册记忆适配器「${id}」；请运行 /memory adapters`,
     adapterPayload: (id, message) => `适配器 ${id} 拒绝了载荷：${message}`,
-    adapterImported: (n, id) => `已通过适配器 ${id} 导入 ${n} 条记忆（单次审批；预算已复检）。条目获得新 id 与新时间戳。`,
+    adapterImported: (n, id) => `已通过适配器 ${id} 导入 ${n} 条记忆（单次审批）。条目获得新 id 与新时间戳。`,
     observeUsage: 'observe 用法：/memory observe [--days=N] [--sessions=N] [--per-session=N] [--chars=N] [--budget=N]——只读扫描你自己的旧发言（无审批、不写入）。参数会被夹到硬上限；输出会写明「没看到哪些」。想让模型据此推断，直接说「观察一下我」。',
     observeUnavailable: 'observe：本 profile 未提供 session-query 服务，读不到会话历史。',
     observeHint: '把这段交给模型推断：说「观察一下我」（yammory-observe skill 会引导 memory_observe commit 走审批门落库）。本命令自身只读，没有写入任何东西。',

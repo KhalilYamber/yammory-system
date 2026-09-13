@@ -33,7 +33,7 @@
 
 - **审批门不可绕过。** 每条写路径（`add` / `replace` / `remove` / `seed`）都被强制经过服务内部的审批 waterfall，而非工具层。`writePolicy: ask | auto | off` 是模型看不见的配置；`replace` / `remove` / `consolidate` 的审批载荷携带将被改动条目的全文，被拒的写同样落一条 `*-denied` 审计行。
 - **模型可见 ⟺ 已记录。** 注入的快照逐字进入 `system/message`；每次写都能从 `approval/asked` + `approval/decided` + 插件自有审计表重建。
-- **有界且诚实。** 每轨每层硬字符预算（默认 user 2000 / agent 4000）。写满返回结构化错误（用量 + 上限）——绝不截断、绝不自动压缩。
+- **有界且诚实。** 每轨每层软预警线（默认 user 2000 / agent 4000）。越线绝不拦写——只提示这一格值得整合。绝不截断、绝不自动压缩。
 
 两条轨道 × 两个层级 × 按 agent 隔离：`user` 轨（关于用户的事实）与 `agent` 轨（环境事实与约定），各自再分为 `user-global` 与 `workspace` 层，并按 `agentPreset` 隔离。快照在会话首次组装提示时冻结一次，会话中途不再变化。预热块承载表达约束与常驻画像，末行是一行目录（`本工作区与 agent 轨另有 N 条记忆不在本块`），让模型知道还有东西可按需取——只报条数，正文仍留在 `memory_recall` 那一侧。
 
@@ -66,10 +66,10 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 | `enabled` | `true` | 总开关；`false` 移除服务、工具、快照、命令、面板与 answerer（设置页不可编辑——禁用的插件没有设置项） |
 | `panel.enabled` | `true` | 显示 Web 面板悬浮按钮；在设置页保存 `false` 后立即隐藏 🧠 入口，无需刷新（设置页本身不受影响） |
 | `dbPath` | `''` → `$DSH_HOME/dsh-memento/memory.db` | 绝对路径，或相对 `$DSH_HOME`（Windows 上回退到 `~/.dsh`） |
-| `budgets.user.userGlobal` | `2000` | user 轨 user-global 层的硬字符预算 |
-| `budgets.user.workspace` | `2000` | user 轨 workspace 层的硬字符预算 |
-| `budgets.agent.userGlobal` | `4000` | agent 轨 user-global 层的硬字符预算 |
-| `budgets.agent.workspace` | `4000` | agent 轨 workspace 层的硬字符预算 |
+| `budgets.user.userGlobal` | `2000` | user 轨 user-global 层的软预警线 |
+| `budgets.user.workspace` | `2000` | user 轨 workspace 层的软预警线 |
+| `budgets.agent.userGlobal` | `4000` | agent 轨 user-global 层的软预警线 |
+| `budgets.agent.workspace` | `4000` | agent 轨 workspace 层的软预警线 |
 | `writePolicy` | `'ask'` | 默认写策略：`ask` / `auto` / `off`（模型不可见） |
 | `writePolicies` | `{}` | 按轨/作用域或按来源的覆盖（如 `user/workspace`、`source:claude`） |
 | `language` | `'en'` | 模型可见文本与命令输出语言：`en` / `zh` |
@@ -167,7 +167,7 @@ Claude Desktop（`claude_desktop_config.json`）配置示例：
 - **Entry spec** — 两条轨道 × 两个层级 × 按 agent 隔离，外加短 `tags`（≤16 × ≤32 字符）与每次 `replace` 递增的每条目 `version`。
 - **Write semantics** — 幂等的唯一子串条件写；批准即所见载荷（`replace` / `remove` / `consolidate` 携带将被改动的全文）。
 - **Audit contract** — 每次写都能从 `approval/asked` + `approval/decided` + 提供方账本重建。
-- **Budget model** — `BUDGET_EXCEEDED` / `AMBIGUOUS_MATCH` 语义。
+- **预警线模型** — 每层软预警线 / `AMBIGUOUS_MATCH` 语义。
 - **Schema versioning** — 带响亮版本检查的迁移规则。
 
 - **Spec** — [docs/protocol-v1.md](docs/protocol-v1.md)（中文: [protocol-v1.zh.md](docs/protocol-v1.zh.md)）；规范性 JSON Schema 见 [docs/schemas/dsh-memory-protocol-v1.schema.json](docs/schemas/dsh-memory-protocol-v1.schema.json)。
@@ -194,7 +194,7 @@ Claude Desktop（`claude_desktop_config.json`）配置示例：
 
 - **仅公开服务。** 只消费 `tools`、`systemPrompt` 与审批接缝；不改 engine / agent-loop / apiproxy / 官方 UI。
 - **零网络、零凭据。** 本地数据库，POSIX 文件权限 `0600`。
-- **失败要大声。** 库损坏、schema 过新或非法配置在加载期抛错；写满与子串歧义返回结构化错误。
+- **失败要大声。** 库损坏、schema 过新或非法配置在加载期抛错；子串歧义返回结构化错误。越预警线不拦写。
 - **一进程一库。** 多个会话共享 SQLite 库；共享同一 `$DSH_HOME` 的两个进程写同一文件（SQLite 锁下后写覆盖）。
 
 ## Known limitations

@@ -36,7 +36,7 @@ export function makeProvider(options) {
 
 Writes receive `write = { agent: { session: { id, header? } } }`. Failures must throw with the
 protocol error code on the error's `code` field (`INVALID_INPUT`, `WRITE_REQUIRES_AGENT`,
-`BUDGET_EXCEEDED`, `ENTRY_NOT_FOUND`, `AMBIGUOUS_MATCH`, `WRITE_DENIED`).
+`ENTRY_NOT_FOUND`, `AMBIGUOUS_MATCH`, `WRITE_DENIED`). Note: since v2 the budget model is a soft warning line — C1/C2 assert that crossing it still writes (the old `BUDGET_EXCEEDED` is never emitted).
 
 ## Run
 
