@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Renamed the project from `dsh-memento` to `yammory_system`.** The identity face changed (npm package name, Cordis plugin name, settings namespace, client module id, approval markers, snapshot headers, tool descriptions, error prefixes, MCP server name, CI workflow). Upstream attribution and the Apache-2.0 licence are preserved verbatim, and the upstream lineage (`dsh-memento`) is retained in the changelog history and in the export envelope's `plugin` field.
+- Distribution pointers now target the new repository: `package.json` (`repository` / `homepage` / `bugs`), the five READMEs, `SECURITY.md`, the protocol schema `$id`, and the README-gate URL check. Upstream-only channels were removed from the READMEs (1024 ranking, Gitee mirror, upstream doctor badge, npm badges).
+- The data plane was deliberately left unchanged for compatibility with existing stores: the default store directory `$DSH_HOME/dsh-memento/`, the `DSH_MEMENTO_DB_PATH` environment variable, and the `/api/memento/*` routes keep their original names.
+
 ## [0.5.12] - 2026-09-12
 
 ### Changed

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/PerryLink/dsh-memento/blob/main/docs/schemas/dsh-memory-protocol-v1.schema.json",
+  "$id": "https://github.com/KhalilYamber/yammory-system/blob/main/docs/schemas/dsh-memory-protocol-v1.schema.json",
   "title": "dsh-memory-protocol v1",
   "description": "Normative JSON Schema for dsh-memory-protocol v1: memory entries, the export envelope, and audit rows. The prose spec is docs/protocol-v1.md; the zero-dependency validator in lib/protocol.mjs implements the same constraints.",
   "type": "object",

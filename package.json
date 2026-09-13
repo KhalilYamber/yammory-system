@@ -47,11 +47,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/PerryLink/dsh-memento.git"
+    "url": "git+https://github.com/KhalilYamber/yammory-system.git"
   },
-  "homepage": "https://github.com/PerryLink/dsh-memento#readme",
+  "homepage": "https://github.com/KhalilYamber/yammory-system#readme",
   "bugs": {
-    "url": "https://github.com/PerryLink/dsh-memento/issues"
+    "url": "https://github.com/KhalilYamber/yammory-system/issues"
   },
   "dsh": {
     "bundle": {

@@ -25,7 +25,7 @@ for (const file of FILES) {
     ['topic dsh', /`dsh`/.test(text)],
     ['topic dsh-plugin', /`dsh-plugin`/.test(text)],
     ['install cmd', text.includes('dsh plugin --profile')],
-    ['install gh url', text.includes('git+https://github.com/PerryLink/dsh-memento.git')],
+    ['install gh url', text.includes('git+https://github.com/KhalilYamber/yammory-system.git')],
     ['no unpublished npm claim', !text.includes('once published')],
     ['db path', text.includes('$DSH_HOME/dsh-memento/memory.db')],
     ['license link', text.includes('[Apache License 2.0](LICENSE)')],

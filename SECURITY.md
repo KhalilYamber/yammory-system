@@ -4,7 +4,7 @@
 
 Please report vulnerabilities **privately** through GitHub's private vulnerability reporting:
 
-1. Open the [Security tab](https://github.com/PerryLink/dsh-memento/security) of this repository.
+1. Open the [Security tab](https://github.com/KhalilYamber/yammory-system/security) of this repository.
 2. Click **Report a vulnerability**.
 
 Do **not** open a public issue containing a working exploit or sensitive details.
