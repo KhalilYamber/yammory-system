@@ -102,6 +102,35 @@ async function bootPanel() {
   installPanel(state)
 }
 
+/**
+ * 右下角让位：dsh-tidewatch 的峰谷徽章（.tw-root）也住在右下。
+ * 它在，就把本按钮抬到徽章之上（按实测矩形算，徽章上下移动都跟得上）；
+ * 它不在，回落默认的 56px。与另一插件的耦合只此一处，且失败也不影响功能。
+ * @param {HTMLElement} el - #mem-open 按钮。
+ * @returns {() => void} 解绑函数。
+ */
+function placeOpenButton(el) {
+  const GAP = 10
+  const DEFAULT_BOTTOM = 56
+  function apply() {
+    const tw = document.querySelector('.tw-root')
+    let bottom = DEFAULT_BOTTOM
+    if (tw !== null) {
+      const r = tw.getBoundingClientRect()
+      if (r.height > 0) bottom = Math.max(DEFAULT_BOTTOM, Math.round(window.innerHeight - r.top + GAP))
+    }
+    el.style.bottom = `${bottom}px`
+  }
+  apply()
+  window.addEventListener('resize', apply)
+  const mo = new MutationObserver(apply)
+  mo.observe(document.body, { childList: true, subtree: true })
+  return () => {
+    window.removeEventListener('resize', apply)
+    mo.disconnect()
+  }
+}
+
 function installPanel(state) {
   if (document.getElementById(PANEL_ID)) return
   let S = STRINGS[state.language] ?? STRINGS.en
@@ -153,6 +182,7 @@ function installPanel(state) {
   root.appendChild(drawer)
   document.body.appendChild(root)
   document.head.appendChild(style)
+  placeOpenButton(openBtn)
 
   const body = document.getElementById('mem-body')
   const filter = document.getElementById('mem-filter')
