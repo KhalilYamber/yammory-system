@@ -197,7 +197,7 @@ export const DEFAULT_OBSERVE = Object.freeze({
  *   memory_recall 历史段默认值（默认 8/5/300/30；热生效）。
  * @property {{days?: number, sessions?: number, perSession?: number, messageChars?: number, totalChars?: number}} [observe]
  *   memory_observe scan 的默认窗口与预算（模型入参在 Provider 层夹到 OBSERVE_LIMITS；热生效）。
- * @property {{vector?: boolean}} [retrieval] 语义召回开关（默认 false：substring 主路径；变更时拆旧装新检索器，即时生效）。
+ * @property {{vector?: boolean}} [retrieval] 语义召回开关（默认 false：keyword 主路径；变更时拆旧装新检索器，即时生效）。
  * @property {number} [panelEntriesLimit] 面板条目页上限与钳制（默认 200；热生效）。
  * @property {number} [panelAuditLimit] 面板审计默认条数（默认 20；上限 200 为协议常量；热生效）。
  * @property {number} [auditRetentionDays] 审计保留天数（默认 0 = 不限；变更时随 dbPath 重开 store，即时生效）。

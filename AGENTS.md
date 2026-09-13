@@ -24,7 +24,7 @@ lib/extract.mjs      会话事件文本抽取（memory_recall 历史片段用，
 lib/observe.mjs      观察通道纯函数核心（闸一授权收窄 / 闸二真人发言白名单 / 均匀采样 / 预算记账 / 观察条目组装，零依赖）
 lib/strings.mjs      模型可见/命令面双语词表（预热头/约束头/四档说话要求/分组标题/提案头，零依赖）
 lib/store.mjs        node:sqlite Provider：条目表+审计账本+迁移（零依赖）
-lib/retrieval.mjs    可插拔检索 Provider seam：substring 主路径 + vector 可选后端（零 DSH 依赖）
+lib/retrieval.mjs    可插拔检索 Provider seam：keyword 主路径（分词＋多词召回＋相关度排序，F2 层 A）+ substring 对照 + vector 可选后端（零 DSH 依赖）
 lib/embedding.mjs    嵌入 Provider seam：确定性伪嵌入（零 DSH 依赖，仅 node: 内置模块）
 lib/mcp.mjs          stdio MCP server 导出：只读工具面 memory_search / memory_stats（零 DSH 依赖）
 bin/mcp-server.mjs   MCP 可执行入口（零 DSH 依赖）
