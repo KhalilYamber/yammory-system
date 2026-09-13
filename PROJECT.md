@@ -58,7 +58,8 @@ AI 不知道用户的知识水位，就按自己的水位说话——术语、�
 | **F2 · 检索主梁（层 A）** | `KeywordRetriever` 默认承接 `memory_recall`（分词＋多词召回＋相关度排序）；`docs/F2检索升级方案.md` | ✅ 测试 263/263 |
 | **S4b · 观察通道** | `memory_observe` 工具 ＋ `yammory-observe` skill ＋ `/memory observe` ＋ 预热段目录行；`docs/观察通道方案.md` | ✅ 测试 263/263 · 门链 8/8 |
 | **R1 · 红队硬化** | 2026-09-13 红队 11 条全部收口：面板路由过大信任栅栏① · `replace` 乐观锁⑦ · NUL、脏标签、迁移幂等、import 越界、gate 白名单、词汇校验、入参、maxChars；`test/redteam.test.mjs` 回归 9 条 | ✅ 测试 272/272 · 门链 8/8 |
-| **F3 ＋ F4 · 拆上限 ＋ 分级注入** | 写入永不因容量被拒（`Config.budgets` 语义改「软预警线」，值不变）；`checkBudget` 由「拒」改「报越线」；`renderWarmup` 常驻段加软线收窄；协议一致性套件 C 组同步改口径 | ✅ 测试 272/272 · 一致性 22/22 · 门链 8/8 |
+| **F3 ＋ F4 · 拆上限 ＋ 分级注入** | 写入永不因容量被拒（`Config.budgets` 语义改「软预警线」，值不变）；`checkBudget` 由「拒」改「报越线」；`renderWarmup` 常驻段加软线收窄；协议一致性套件 C 组同步改口径 | ✅ 测试 273/273 · 一致性 22/22 · 门链 8/8 |
+| **R2 · F3/F4 后审视** | 清理拆上限后残留的「有界/硬预算」口径（协议文档 en/zh、JSDoc、errors 注释、package.json、5 语言 README tagline、工具描述）；`consolidate` 补上与 `replace` 同型的乐观锁（`expectedVersions` → `STALE_WRITE`） | ✅ 测试 273/273 · 门链 8/8 |
 
 **待办**：S5 治理（soft delete 行为 ＋ **分面裁决**）· **v2 各机制**（F5 会话开关 / F6 整理机 / F7 尺子，见 `docs/记忆机制v2规格.md`）· S6 Dream（并入整理机）· **R1-⑪ 已随 F3 一并处理**（预算改软预警后不再「耗光即卡死」；按 workspaceKey 分账仍留作 F6 整理机的边界工作）。
 

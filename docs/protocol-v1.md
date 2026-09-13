@@ -5,7 +5,7 @@
 > the conformance suite lives in [`test/protocol-conformance/`](../test/protocol-conformance/README.md).
 > 中文版见 [protocol-v1.zh.md](protocol-v1.zh.md)。
 
-**`dsh-memory-protocol/v1`** is an interoperability protocol for bounded, layered, approval-gated,
+**`dsh-memory-protocol/v1`** is an interoperability protocol for layered, approval-gated,
 auditable cross-session memory in DeepSeek Harness. dsh-memento is the reference implementation;
 any other memory plugin can claim conformance by implementing the same provider surface and
 passing the same conformance suite.
@@ -20,8 +20,8 @@ Design anchors (non-negotiable for any conforming provider):
   the approval pair (`approval/asked` with the full payload + `approval/decided` with the outcome)
   plus a provider-side audit ledger. Denied writes leave a denied row too.
 - **Local-first.** Zero network, zero credentials; storage is a local file owned by the user.
-- **Bounded and honest.** Hard per-track/per-layer character budgets; over-budget writes fail
-  with a structured error. Never truncate, never silently drop.
+- **Honest, softly bounded.** Soft per-track/per-layer character warning lines; crossing one
+  never refuses a write — it is a hint to consolidate. Never truncate, never silently drop.
 
 ## 1. Protocol identity and versioning
 
@@ -70,8 +70,8 @@ keep the full cross-agent view.
 
 ## 3. Write operations
 
-All writes share one pipeline — **budget pre-check → approval transport → budget re-check →
-atomic persist → audit row** — and every failure leaves zero partial writes.
+All writes share one pipeline — **approval transport → atomic persist → audit row** — and
+every failure leaves zero partial writes.
 
 | Operation | Input | Semantics |
 | --- | --- | --- |
@@ -79,7 +79,7 @@ atomic persist → audit row** — and every failure leaves zero partial writes.
 | `replace` | unique substring `match`, new `text`, optional `tags` | rewrites **exactly one** entry located by a case-insensitive unique substring of its text. Id is stable; `version` increments; `tags` update when provided, otherwise preserved. |
 | `remove` | unique substring `match` | deletes exactly one entry located by a unique substring. |
 | `consolidate` | 1..20 `matches`, new `text`, optional `tags` | atomically deletes all targets and inserts one new entry (`version` 1) — one approval, one transaction. |
-| `seed` | entry input list | batch insert under one approval; all-or-nothing (any entry over budget rejects the whole batch); fresh ids and `version` 1 per entry. |
+| `seed` | entry input list | batch insert under one approval, all-or-nothing (one atomic transaction); fresh ids and `version` 1 per entry. |
 
 **Idempotency and conflict arbitration:**
 
@@ -88,9 +88,8 @@ atomic persist → audit row** — and every failure leaves zero partial writes.
   exists), so double-apply cannot happen by retry. Zero hits → `ENTRY_NOT_FOUND`; multiple hits →
   `AMBIGUOUS_MATCH` with the candidate count and text samples — the caller must supply a longer,
   unique substring.
-- The authoritative target is **re-resolved after approval returns** (concurrent writers may have
-  changed the store during the approval wait); the final budget check and the mutation happen
-  with no `await` between them, so there is no stale-write window.
+- `replace` pins the version it showed the approver: if the target changed during the approval
+  wait, it fails with `STALE_WRITE` instead of overwriting the concurrent change.
 - `consolidate` resolves all targets inside one transaction: any mismatch rolls the whole
   operation back.
 
@@ -108,14 +107,14 @@ carries each target's resolved text (300-char excerpt cap per target) + the new 
 - Ranking: entries that hit a query get `recallCount + 1` and `lastRecalled` updated; query
   results order by `recall_count DESC, updated_at DESC`.
 
-## 5. Budget model
+## 5. Warning-line model (v2)
 
-- Hard character budgets per track × scope (reference defaults: user 2000 / agent 4000 per layer).
-  Budgets count `text` only — `tags` and metadata are outside the budget.
-- An over-budget write fails with `BUDGET_EXCEEDED` carrying `{track, scope, used, limit, needed}`;
-  the caller consolidates/removes and retries. **Never truncate, never auto-compact.**
-- `seed` pre-checks the whole batch; any single entry over budget rejects the entire batch
-  before anything is written.
+- Soft character warning lines per track × scope (reference defaults: user 2000 / agent 4000 per
+  layer). They count `text` only — `tags` and metadata are outside the line.
+- Crossing a warning line **never refuses a write**: it is a hint that the layer is worth
+  consolidating. `BUDGET_EXCEEDED` stays in the enum for v1 compatibility but is never emitted.
+  **Never truncate, never auto-compact.**
+- `seed` writes the whole batch atomically (no partial writes); crossing a line does not reject it.
 
 ## 6. Audit and reconstruction
 
@@ -154,7 +153,7 @@ Structured errors expose a stable `code`; tools and models branch on the code, n
   `{plugin: "dsh-memento", schema: "memory-export-v1", exportedAt, budgets, entries}` — a
   complete backup/migration round-trip. Export is read-only (no approval, no audit row).
 - `/memory import` (and `import --adapter=<id>`) restores entries through **`seed`** — one
-  approval, full budget pre-check, one atomic transaction, per-entry audit rows. Imported
+  approval, one atomic transaction, per-entry audit rows. Imported
   entries get fresh ids/timestamps, `version` 1, reset recall counts; unknown envelope schema
   versions are rejected loudly; one import is capped at 1000 entries.
 

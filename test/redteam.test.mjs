@@ -125,3 +125,19 @@ test('红队⑦：replace 乐观锁——版本前置不满足即 STALE_WRITE，
   assert.equal(store.queryEntries({ track: 'user', scope: 'user-global', text: '第一次改' }).total, 1, '并发写保留')
   assert.equal(store.queryEntries({ track: 'user', scope: 'user-global', text: '第二次改' }).total, 0, '落后版本没写进去')
 })
+
+test('⑦同型：consolidate 版本前置不满足 → STALE_WRITE（不静默合并新内容）', (t) => {
+  const { store, cleanup } = tempCore()
+  t.after(cleanup)
+  const a = store.insertEntry({ track: 'user', scope: 'user-global', text: '甲内容' })
+  store.insertEntry({ track: 'user', scope: 'user-global', text: '乙内容' })
+  store.replaceEntry({ track: 'user', scope: 'user-global', match: '甲内容', text: '甲改' }) // 甲 → version 2
+  assert.throws(
+    () => store.consolidateEntries({
+      track: 'user', scope: 'user-global', matches: ['甲改', '乙内容'], text: '合成内容',
+      expectedVersions: [a.version, 1],
+    }),
+    (error) => error.code === 'STALE_WRITE' && error.details.expected === 1 && error.details.actual === 2,
+  )
+  assert.equal(store.listEntries().length, 2, '冲突时零落盘（事务回滚）')
+})

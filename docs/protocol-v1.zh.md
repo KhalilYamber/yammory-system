@@ -5,7 +5,7 @@
 > 一致性套件：[`test/protocol-conformance/`](../test/protocol-conformance/README.md)。
 > English version: [protocol-v1.md](protocol-v1.md)。
 
-**`dsh-memory-protocol/v1`** 是 DeepSeek Harness 中有界、分层、带审批门、可审计的跨会话记忆
+**`dsh-memory-protocol/v1`** 是 DeepSeek Harness 中分层、带审批门、可审计的跨会话记忆
 互操作协议。dsh-memento 是参考实现；任何其它记忆插件实现同一 Provider 面并通过同一套
 一致性用例，即可声称协议兼容。
 
@@ -17,7 +17,7 @@
 - **模型可见 ⟺ 可重建。** 任何写入都必须能由审计证据重建：审批对（携带完整载荷的
   `approval/asked` + 携带结果的 `approval/decided`）+ Provider 自有审计账本。被拒写同样留痕。
 - **本地优先。** 零网络、零凭据；存储是用户自有的本地文件。
-- **有界且诚实。** 每轨每层硬字符预算；超预算写以结构化错误失败。绝不截断、绝不静默丢弃。
+- **诚实、软有界。** 每轨每层软字符预警线；越线绝不拒写——只提示值得整合。绝不截断、绝不静默丢弃。
 
 ## 1. 协议标识与版本规则
 
@@ -62,7 +62,7 @@
 
 ## 3. 写操作
 
-所有写共享同一条流水线——**预算预检 → 审批传输 → 预算复审 → 原子落盘 → 审计行**——
+所有写共享同一条流水线——**审批传输 → 原子落盘 → 审计行**——
 任何一步失败都零部分写入。
 
 | 操作 | 输入 | 语义 |
@@ -71,15 +71,14 @@
 | `replace` | 唯一子串 `match`、新 `text`、可选 `tags` | 按文本的大小写不敏感唯一子串定位并改写**恰好一条**。id 稳定；`version` 自增；给 `tags` 则更新，否则保留。 |
 | `remove` | 唯一子串 `match` | 删除恰好一条。 |
 | `consolidate` | 1..20 个 `matches`、新 `text`、可选 `tags` | 原子删除全部目标并插入一条新条目（`version` 1）——一次审批、一个事务。 |
-| `seed` | 条目输入列表 | 一次审批批量插入；全有或全无（任一条超预算整批拒绝）；每条新 id、`version` 1。 |
+| `seed` | 条目输入列表 | 一次审批批量插入，全有或全无（单事务）；每条新 id、`version` 1。 |
 
 **幂等与冲突裁决：**
 
 - `replace`/`remove`/`consolidate` 是以唯一子串匹配为键的**条件写**：成功后重跑同一操作会以
   `ENTRY_NOT_FOUND` 失败（匹配已不存在），重试不可能造成双写。零命中 → `ENTRY_NOT_FOUND`；
   多命中 → `AMBIGUOUS_MATCH`（带候选数与文本样例）——调用方必须给更长、唯一的子串。
-- 权威目标在**审批返回后重新解析**（审批等待期间并发写可能已改库）；最终预算复审与落盘之间
-  无 `await`，不存在陈旧写窗口。
+- `replace` 钉入审批时展示的版本：审批期间目标被并发改动即以 `STALE_WRITE` 失败，而不覆盖那次改动。
 - `consolidate` 在单事务内解析全部目标：任何不匹配整体回滚。
 
 **审批载荷（approve-what-you-see）：** 审批请求携带完整变更而非抽象动作：`add`/`seed` 带新文本；
@@ -95,13 +94,13 @@
 - 排序：命中 query 的条目 `recallCount + 1` 并更新 `lastRecalled`；结果按
   `recall_count DESC, updated_at DESC` 排序。
 
-## 5. 预算模型
+## 5. 预警线模型（v2）
 
-- 每轨每层硬字符预算（参考默认：user 2000 / agent 4000 每层）。预算只计 `text`——
+- 每轨每层软字符预警线（参考默认：user 2000 / agent 4000 每层）。只计 `text`——
   `tags` 与元数据不计入。
-- 超预算写以 `BUDGET_EXCEEDED` 失败，携带 `{track, scope, used, limit, needed}`；
-  调用方整合/删除后重试。**绝不截断、绝不自动压缩。**
-- `seed` 先全量预检；任一条超预算整批拒绝，写任何内容之前即失败。
+- 越预警线**绝不拒写**：只提示该层值得整合。`BUDGET_EXCEEDED` 为 v1 兼容保留码位但不再产生。
+  **绝不截断、绝不自动压缩。**
+- `seed` 单事务原子落盘（无部分写入）；越线不拒批。
 
 ## 6. 审计与重建
 
@@ -137,8 +136,8 @@
 - `/memory export` 产出一份 JSON 文档
   `{plugin: "dsh-memento", schema: "memory-export-v1", exportedAt, budgets, entries}`——
   完整的备份/迁移往返。导出只读（无审批、不落审计）。
-- `/memory import`（及 `import --adapter=<id>`）经 **`seed`** 恢复条目——一次审批、全量
-  预算预检、单事务原子落盘、逐条审计。导入条目获得新 id/时间戳、`version` 1、召回计数归零；
+- `/memory import`（及 `import --adapter=<id>`）经 **`seed`** 恢复条目——一次审批、单事务
+  原子落盘、逐条审计。导入条目获得新 id/时间戳、`version` 1、召回计数归零；
   未知信封 schema 版本响亮拒绝；单次导入上限 1000 条。
 
 ## 9. 适配器注册表（`ctx.memoryAdapters`）

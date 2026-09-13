@@ -2,7 +2,7 @@
 
 # yammory_system
 
-**Memória entre sessões limitada, em camadas, com porta de aprovação e auditável para o DeepSeek Harness.**
+**Memória entre sessões em camadas, com porta de aprovação e auditável para o DeepSeek Harness — linhas de aviso suaves em vez de um limite rígido.**
 
 *Uma costura tipada `ctx.memory`, uma porta de aprovação de escrita que nenhum caminho do modelo pode contornar e trilhas de auditoria reconstruíveis a partir do log de sessão.*
 

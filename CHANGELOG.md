@@ -39,9 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`/memory import` no longer honours payload `workspaceKey` / `agentKey` (red team ⑤).** Imported entries fall back to the calling session's workspace and agent, so an import can no longer plant memory into another workspace (where it would enter that session's system prompt).
 - **`write.gate` needs an internal registration (red team ⑥).** A caller-supplied `gate` can no longer override the approval transport; only gates created by the command path (`trustWriteGate`) are accepted — defence in depth.
 
+- **Doc/comment cleanup after the v2 cap drop.** The protocol document (`docs/protocol-v1.md` / `.zh.md`), the `lib/protocol.mjs` JSDoc, the `BudgetExceededError` comment, the `package.json` description and all five README taglines still described the removed hard cap (and `seed`'s "any entry over budget rejects the batch"). They now state the soft warning-line model. Protocol version stays v1.
+- **`consolidate` gained the same optimistic lock as `replace`.** `store.consolidateEntries` accepts `expectedVersions` (the versions shown to the approver); a target that changed during the approval wait now fails with `STALE_WRITE` instead of silently merging the concurrent change.
+
 ### Tests
 
-- 272/272 (`node --test "test/*.test.mjs"`): the 263 existing tests plus `test/redteam.test.mjs` (②③④⑥⑦⑧⑨⑩) and a `/memory import` scope-injection case in `v2.test.mjs` (⑤); the panel-route tests and the Loader composition / hot-reload fixture were migrated from the `webServer` mock to a `connection.fetch` mock (`test/fixtures/mock-connection.mjs`).
+- 273/273 (`node --test "test/*.test.mjs"`): the 263 existing tests plus `test/redteam.test.mjs` (②③④⑥⑦⑧⑨⑩ + the `consolidate` lock) and a `/memory import` scope-injection case in `v2.test.mjs` (⑤); the panel-route tests and the Loader composition / hot-reload fixture were migrated from the `webServer` mock to a `connection.fetch` mock (`test/fixtures/mock-connection.mjs`).
 
 ## [0.5.12] - 2026-09-12
 

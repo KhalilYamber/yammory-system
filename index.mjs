@@ -361,7 +361,7 @@ function toToolError(/** @type {unknown} */ error) {
 /** 记忆工具描述：内嵌 Save/Skip 行为指引（学 Hermes 官方 memory.md 清单）。en 为源文，zh 为对应译文。 */
 const MEMORY_TOOL_DESCRIPTION = {
   en: [
-    'Read and write the bounded, layered, approval-gated cross-session memory store (yammory_system).',
+    'Read and write the layered, approval-gated cross-session memory store (yammory_system).',
     '',
     'Tracks: "user" holds facts about the user (preferences, communication style, landmines, corrections); "agent" holds environment facts, project conventions, lessons learned, and completed-work summaries. Layers: "user-global" applies to every workspace; "workspace" applies only to the current working directory.',
     '',
@@ -375,7 +375,7 @@ const MEMORY_TOOL_DESCRIPTION = {
     'PROFILE COORDINATES: every entry can carry two optional coordinates. facet tags which face of the user profile the entry belongs to (one of: 躯体 | 心智 | 价值与意愿 | 能力与技能 | 行为与习惯 | 社会与处境 | 经历与轨迹). level (1..10) is the per-domain knowledge level and belongs only on entries about the user\u2019s knowledge/subject level; the structured per-domain scale itself is written with memory_profile, not with this tool. On replace, an omitted facet/level keeps the existing coordinate.',
   ].join('\n'),
   zh: [
-    '读写有界、分层、带审批门、可审计的跨会话记忆库（yammory_system）。',
+    '读写分层、带审批门、可审计的跨会话记忆库（yammory_system）。',
     '',
     '轨道："user" 存用户相关事实（偏好、沟通风格、雷区、纠正）；"agent" 存环境事实、项目约定、教训与已完成工作总结。层："user-global" 对所有工作区生效；"workspace" 只对当前工作目录生效。',
     '',

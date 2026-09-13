@@ -70,7 +70,7 @@ try {
       if (ctx.get('memory') === undefined) throw new Error('reload: ctx.memory service is missing')
       const tool = ctx.tools.get('memory')
       if (tool === undefined) throw new Error('reload: memory tool is missing')
-      const languageOk = language === 'zh' ? tool.description.includes('读写') : tool.description.includes('bounded')
+      const languageOk = language === 'zh' ? tool.description.includes('读写') : tool.description.includes('approval-gated')
       if (!languageOk) throw new Error(`reload: memory tool description does not reflect language=${language}`)
       if (connection.list().length !== 3) throw new Error(`reload: expected 3 routes, got ${connection.list().length}`)
     }
@@ -106,7 +106,7 @@ try {
 
   // The tool description language proves the `language` config was applied.
   const description = ctx.tools.get('memory').description
-  const languageApplied = expected === 'zh' ? description.includes('读写') : description.includes('bounded')
+  const languageApplied = expected === 'zh' ? description.includes('读写') : description.includes('approval-gated')
   if (!languageApplied) {
     throw new Error(`Loader composition: memory tool description does not reflect language=${expected}`)
   }

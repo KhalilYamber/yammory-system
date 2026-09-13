@@ -1,7 +1,7 @@
 <div align="center">
 
 # yammory_system
-**Bounded, layered, approval-gated, auditable cross-session memory for DeepSeek Harness.**
+**Layered, approval-gated, auditable cross-session memory for DeepSeek Harness — soft warning lines instead of a hard cap.**
 
 *A typed `ctx.memory` seam, a write-approval gate no model path can bypass, and audit trails rebuilt from the session log.*
 
