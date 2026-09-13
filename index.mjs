@@ -1275,6 +1275,7 @@ export function makeMemoryObserveTool(service, ctx, live) {
               messages: { type: 'integer', required: true },
               injected: { type: 'integer', required: true },
               unreadable: { type: 'integer', required: true },
+              skippedOff: { type: 'integer', required: true },
             },
           },
           covered: {
@@ -1444,8 +1445,8 @@ export function renderMemoryObserveResult(/** @type {object} */ _args, /** @type
   }
   const days = Math.round((value.window.to - value.window.from) / 86400000)
   const lines = [zh
-    ? `观察切片（只读）：窗口 ${days} 天｜候选 ${value.scanned.sessions} 会话｜读到 ${value.scanned.messages} 条真人发言（挡下 ${value.scanned.injected} 条系统注入${value.scanned.unreadable > 0 ? `，${value.scanned.unreadable} 个会话读不动` : ''}）`
-    : `observation slice (read-only): ${days}-day window | ${value.scanned.sessions} candidate session(s) | ${value.scanned.messages} real user message(s) (${value.scanned.injected} injected pseudo message(s) filtered${value.scanned.unreadable > 0 ? `, ${value.scanned.unreadable} session(s) unreadable` : ''})`]
+    ? `观察切片（只读）：窗口 ${days} 天｜候选 ${value.scanned.sessions} 会话｜读到 ${value.scanned.messages} 条真人发言（挡下 ${value.scanned.injected} 条系统注入${value.scanned.unreadable > 0 ? `，${value.scanned.unreadable} 个会话读不动` : ''}${value.scanned.skippedOff > 0 ? `，${value.scanned.skippedOff} 个会话因记忆关闭被跳过` : ''}）`
+    : `observation slice (read-only): ${days}-day window | ${value.scanned.sessions} candidate session(s) | ${value.scanned.messages} real user message(s) (${value.scanned.injected} injected pseudo message(s) filtered${value.scanned.unreadable > 0 ? `, ${value.scanned.unreadable} session(s) unreadable` : ''}${value.scanned.skippedOff > 0 ? `, ${value.scanned.skippedOff} session(s) skipped (memory off)` : ''})`]
   lines.push(zh
     ? `覆盖：${value.covered.sessions} 会话 / ${value.covered.messages} 条 / ${value.budget.used} 字符（预算 ${value.budget.limit}${value.budget.truncated ? '，已到顶' : '，未到顶'}）`
     : `covered: ${value.covered.sessions} session(s) / ${value.covered.messages} message(s) / ${value.budget.used} of ${value.budget.limit} chars${value.budget.truncated ? ' (budget reached)' : ''}`)

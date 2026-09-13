@@ -397,6 +397,24 @@ test('F5 memory_observe：关了 → scan 拒绝；选区先滤掉关闭的历�
   assert.equal(service.store.listEntries().filter((/** @type {{tags: string[]}} */ entry) => entry.tags.includes('observation')).length, 0, '零观察条目落盘')
 })
 
+test('F5 memory_observe：scan 返回的 scanned 字段全部在 output schema 里声明（真机校验器 additionalProperties:false 否则丢掉整份返回）', async (t) => {
+  const mounted = mount()
+  t.after(() => teardown(mounted))
+  const { mock } = mounted
+  const now = Date.now()
+  mock.ctx.provide('sessionQuery', fakeSessionQuery([
+    { id: 'mine', cwd: 'D:\\proj', createdAt: now - 60000, events: [message('我在说话', 0, now - 60000)] },
+  ]))
+  const tool = observeTool(mock)
+  const declared = Object.keys(tool.output.schema.properties.scanned.properties)
+  assert.ok(declared.includes('skippedOff'), 'scanned.skippedOff 必须在 output schema 里声明')
+  const mine = makeSession({ id: 'mine', cwd: 'D:\\proj' })
+  const value = await tool.execute({ action: 'scan', days: 7 }, makeExec({ agent: makeAgent(mine) }))
+  for (const key of Object.keys(value.scanned)) {
+    assert.ok(declared.includes(key), `scanned.${key} 未在 output schema 里声明，真机会被校验器丢弃`)
+  }
+})
+
 test('F5 命令：status / off / on 三态输出与审计行，缺 id 或非法参数响亮报错', async (t) => {
   const mounted = mount({ language: 'en' })
   t.after(() => teardown(mounted))
