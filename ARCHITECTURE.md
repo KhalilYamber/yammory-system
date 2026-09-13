@@ -194,16 +194,26 @@ gate → 预算复审 → 落盘 → 审计的完整流水线、唯一子串定�
 三角色 seam（Service Definition / Provider / Consumer），零 DSH 依赖、零重依赖：
 
 - **检索 seam**（`ctx.memoryRetrieval`，`lib/retrieval.mjs`）：`RetrievalProvider` 契约 +
-  `RetrievalProviderRegistry`（register 可逆 / list / get / resolve）。内置 `SubstringRetriever`
-  是零依赖主路径（大小写不敏感子串 + 召回频次排序，语义与 `store.queryEntries` 的 instr 一致）；
+  `RetrievalProviderRegistry`（register 可逆 / list / get / resolve）。默认主路径是
+  `KeywordRetriever`（F2 层 A，零依赖：CJK 相邻二字 bigram ＋ 拉丁整词切出词元 → 命中任一
+  词元即召回 → 相关度 = 0.5×覆盖率 ＋ 0.3×词元长度权重 ＋ 0.2 整串精确加成，`min(1, …)` 封顶
+  → 相关度 DESC，平手退 `rankOrder`）；`SubstringRetriever` 是整串字面命中的对照件
+  （语义与 `store.queryEntries` 的 instr 一致），仍注册供对照、MCP 与第三方显式选用；
   `VectorRetriever` 是可选后端，消费嵌入 provider 做内存内暴力余弦排序（小语料，与决策 10 一致）。
 - **嵌入 seam**（`ctx.memoryEmbedding`，`lib/embedding.mjs`）：`EmbeddingProvider` 契约 +
   `EmbeddingProviderRegistry`。默认 `FakeEmbeddingProvider` 是确定性的 token 哈希分桶计数 +
   L2 归一化（固定 256 维单位向量）——它不做语义建模，只验证 seam 接线与余弦召回路径可复现；
   真实嵌入由可选 provider 注册（本地模型 / peer），本仓库不引入 sqlite-vec / ONNX / 本地模型。
-- **Consumer 接线**：`Config.retrieval.vector`（默认 `false`）开启后，`memory_recall` 的记忆段改走
-  vector 检索器（可见集 = `visibleEntries` + 检索器排序 + `store.bumpRecall` + `recalled` 审计）；
-  默认仍走 `service.query` 的 substring 主路径，行为不变。
+- **Consumer 接线**：`memory_recall` 的记忆段恒走检索器路径（`live.retriever` 初值即
+  `KeywordRetriever`，非空；可见集 = `visibleEntries` + 检索器排序 + `store.bumpRecall` +
+  `recalled` 审计）。`Config.retrieval.vector`（默认 `false`）开启且探测到嵌入 provider 时换装
+  `VectorRetriever`；vector 关闭或探测失败回落 `KeywordRetriever`（不再回落 null / `service.query`）。
+  keyword 检索器**不进注册表**（`live.retriever` 持单例），`retrievers.get('keyword')` 为空属预期。
 - **探测 → 使用 → 优雅降级**：`detectVectorBackend` 只要求 embedding provider 可用；sqlite-vec 是
   可选 loadable 扩展、恒不在本仓库打包（`sqliteVec: false`），P0 向量召回走内存内暴力余弦。
-  缺 embedding / vector 关闭时优雅降级回 substring，绝不响亮失败（可选后端缺失不是配置错误）。
+  缺 embedding / vector 关闭时优雅降级回 keyword，绝不响亮失败（可选后端缺失不是配置错误）。
+- **层 A 的已知边界**（层 B 再议，见 `docs/F2检索升级方案.md`）：词元按「连续字母/数字段」切，
+  CJK 与拉丁同段书写（无空格，如「用户偏好abc」）时整段走 bigram，拉丁部分不再以整词形态成为
+  词元；相邻二字滑窗会产生跨词 bigram（「用户偏好英文」切出「好英」），因此长查询的排序由
+  覆盖率与整串加成共同主导。召回面是旧路径的超集（放宽为「命中任一词元」），代价是好坏参半：
+  多词查询从零命中变为可召回，代价是弱关联条目也会占位（如 `mode` 命中 WAL 条目）。

@@ -48,7 +48,7 @@ import { openMemoryStore, resolveDbPath } from './lib/store.mjs'
 import { workspaceKeyOf, agentKeyOf } from './lib/workspace.mjs'
 import { extractEventText } from './lib/extract.mjs'
 import { EmbeddingProviderRegistry, FakeEmbeddingProvider } from './lib/embedding.mjs'
-import { RetrievalProviderRegistry, SubstringRetriever, VectorRetriever, detectVectorBackend } from './lib/retrieval.mjs'
+import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, VectorRetriever, detectVectorBackend } from './lib/retrieval.mjs'
 
 /**
  * @typedef {import('./types.js').MemoryEntry} MemoryEntry
@@ -935,7 +935,7 @@ export function renderMemoryProfileResult(/** @type {object} */ _args, /** @type
  * @property {number} auditRetentionDays
  * @property {{enabled: boolean, maxChars: number, maxPending: number}} proposals
  * @property {{enabled: boolean}} panel
- * @property {import('./lib/retrieval.mjs').RetrievalProvider | null} [retriever] - 当前向量检索器（vector 开启且探测到 embedding 时非空；运行面非配置面）。
+ * @property {import('./lib/retrieval.mjs').RetrievalProvider | null} [retriever] - 当前检索器：keyword（默认）或 vector（vector 开启且探测到 embedding 时），非空；运行面非配置面。
  */
 /**
  * 组合配置补默认（与 SettingsSchema 默认值同源，SHARED_CONFIG_FIELDS / DEFAULT_*）。
@@ -1051,8 +1051,10 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
   if (resolved.enabled === false) return
   validateMemoryConfig(resolved)
   // 运行期可变值容器：settings onChange 维护；服务缺失时保持组合值。
+  // F2 层 A：检索器默认非空（keyword）——memory_recall 的记忆段恒走检索器路径。
+  const keywordRetriever = new KeywordRetriever()
   /** @type {MemoryRuntimeValues} */
-  const live = { ...resolved, retriever: null }
+  const live = { ...resolved, retriever: keywordRetriever }
   /** @type {MemoryService | undefined} */
   let service
   let booted = false
@@ -1108,12 +1110,12 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
         applied.push('dbPath/auditRetentionDays')
       }
       if (next.retrieval.vector !== live.retrieval.vector) {
-        // retrieval.vector：拆旧检索器，按新值重装（探测不到 embedding 时降级 null）。
+        // retrieval.vector：拆旧检索器，按新值重装（探测不到 embedding 时回落 keyword）。
         if (vectorDisposer !== null) {
           vectorDisposer()
           vectorDisposer = null
         }
-        live.retriever = null
+        live.retriever = keywordRetriever
         if (next.retrieval.vector === true) {
           const retriever = buildVectorRetriever(embeddings)
           if (retriever !== null) {
@@ -1208,9 +1210,10 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
   ctx.provide('memoryEmbedding', embeddings)
   ctx.effect(() => embeddings.register(new FakeEmbeddingProvider()), 'yammory_system.embedding.fake-hash')
 
-  // retrieval Provider seam（ctx.memoryRetrieval）：内置 substring 检索器（零依赖
-  // 主路径）+ 可选 vector 检索器。vector 仅当 Config.retrieval.vector=true 且探测到
-  // embedding provider 时启用；否则优雅降级回 substring（live.retriever 保持 null）。
+  // retrieval Provider seam（ctx.memoryRetrieval）：keyword 检索器（零依赖主路径，
+  // F2 层 A：分词 + 多词召回 + 相关度排序）承接 memory_recall 默认路径（live.retriever
+  // 初值即 keyword）；substring 检索器仍注册供对照 / MCP / 第三方显式选用；vector 仅当
+  // Config.retrieval.vector=true 且探测到 embedding provider 时换装，否则回落 keyword。
   // 装配走 buildVectorRetriever + 调用方注册：settings 回调可在运行期拆旧装新。
   const retrievers = new RetrievalProviderRegistry()
   ctx.provide('memoryRetrieval', retrievers)
@@ -1953,12 +1956,12 @@ function renderEntryLine(/** @type {{track: string, scope: string, workspaceKey?
 /**
  * memory_recall 工具（F11）：语义不明确时把记忆 query 与近期会话历史合并
  * 返回两段式召回（"记忆 + 历史会话"）。sessionQuery 服务缺失时降级为纯记忆
- * 结果（history 段为空，绝不报错）。recall 参数、渲染语言与向量检索器读
- * live（热生效，检索器可随 retrieval.vector 变更重装）；工具描述/参数文案
+ * 结果（history 段为空，绝不报错）。recall 参数、渲染语言与当前检索器读 live
+ * （热生效；默认 keyword，retrieval.vector 开启时换装 vector）；工具描述/参数文案
  * 注册期固定（换语言重载后更新）。
  * @param {MemoryService} service - ctx.memory。
  * @param {import('@deepseek-ai/cordis').Context} ctx - Cordis 上下文（查 sessionQuery）。
- * @param {{recall: {historyLimitDefault: number, snippetCap: number, snippetChars: number, windowDays: number}, language: 'en'|'zh', retriever?: import('./lib/retrieval.mjs').RetrievalProvider | null}} live - 运行期可变值容器（onChange 维护）。
+ * @param {{recall: {historyLimitDefault: number, snippetCap: number, snippetChars: number, windowDays: number}, language: 'en'|'zh', retriever?: import('./lib/retrieval.mjs').RetrievalProvider | null}} live - 运行期可变值容器（onChange 维护；retriever 恒非空）。
  * @returns {object} 工具定义。
  */
 export function makeMemoryRecallTool(service, ctx, live) {
@@ -1967,21 +1970,21 @@ export function makeMemoryRecallTool(service, ctx, live) {
     ? [
       '对记忆与会话历史的两段式召回：返回 (1) yammory_system 库中与查询匹配的有界记忆条目，以及 (2) 经 session-query 服务的近期会话历史匹配。',
       '当仅凭记忆查询有歧义、或答案可能在更早的对话而非记忆中时使用。普通记忆查询请优先用 memory 工具的 action=query。',
-      '查询对记忆条目是大小写不敏感子串（与 memory 工具一致），对会话历史是大小写不敏感语义文本扫描。',
+      '查询对记忆条目按词元匹配（任一词元命中即召回，中文按相邻二字、英文按整词切分）并按相关度排序；对会话历史是大小写不敏感语义文本扫描。',
     ].join('\n')
     : [
       'Two-part recall over memory and session history: returns (1) bounded memory entries matching the query from the yammory_system store, and (2) recent session-history matches via the session-query service.',
       'Use when a memory query alone is ambiguous or when the answer may live in an earlier conversation rather than in memory. For plain memory lookup prefer the memory tool with action=query.',
-      'The query is a case-insensitive substring for memory entries (same as the memory tool) and a case-insensitive semantic-text scan for session history.',
+      'The query is tokenized for memory entries (any token matches; CJK bigrams, Latin words as-is) and ranked by relevance, and is a case-insensitive semantic-text scan for session history.',
     ].join('\n')
   const parameters = language === 'zh'
     ? {
-        query: '两个数据源的大小写不敏感检索词。',
+        query: '两个数据源的大小写不敏感检索词（记忆段按词元命中，任一词元命中即召回）。',
         memoryLimit: '最多返回的记忆条目数（默认 10）。',
         historyLimit: '最多扫描的历史会话数（默认 8）。',
       }
     : {
-        query: 'Case-insensitive search terms for both sources.',
+        query: 'Case-insensitive search terms for both sources (memory matches any query token).',
         memoryLimit: 'Max memory entries to return (default 10).',
         historyLimit: 'Max history sessions to scan (default 8).',
       }
@@ -2054,10 +2057,8 @@ export function makeMemoryRecallTool(service, ctx, live) {
       const session = /** @type {MemorySessionLike | null | undefined} */ (exec.agent?.session ?? null)
       const agentKey = agentKeyOf(/** @type {string | undefined} */ (exec.agent?.session?.header?.agentPreset))
       const limit = args.memoryLimit ?? 10
-      const retriever = live.retriever ?? null
-      const memory = retriever === null
-        ? service.query({ text: args.query, limit }, { sessionId, session, agentKey })
-        : recallViaRetriever(service, retriever, args.query, limit, { sessionId, session, agentKey })
+      const retriever = /** @type {import('./lib/retrieval.mjs').RetrievalProvider} */ (live.retriever)
+      const memory = recallViaRetriever(service, retriever, args.query, limit, { sessionId, session, agentKey })
       const history = await recallHistory(
         ctx,
         args.query,

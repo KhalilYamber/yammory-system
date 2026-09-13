@@ -78,7 +78,7 @@ All tunables are Schemastery `Config` fields (changeable from cordis.yml). Inval
 | `recall.snippetCap` | `5` | `memory_recall` snippets per session |
 | `recall.snippetChars` | `300` | `memory_recall` snippet characters |
 | `recall.windowDays` | `30` | `memory_recall` recency window in days |
-| `retrieval.vector` | `false` | Semantic recall switch: `true` enables `memory_recall` vector recall (fake hash embedding) when an embedding provider is available; otherwise degrades to substring |
+| `retrieval.vector` | `false` | Semantic recall switch: `true` enables `memory_recall` vector recall (fake hash embedding) when an embedding provider is available; otherwise the zero-dependency keyword retriever (CJK bigram tokenizing, any-token match, relevance ranking) stays in place |
 | `panelEntriesLimit` | `200` | Web panel entries page size |
 | `panelAuditLimit` | `20` | Web panel audit rows by default |
 | `auditRetentionDays` | `0` | Audit retention (0 = keep forever) |
@@ -93,7 +93,7 @@ All tunables are Schemastery `Config` fields (changeable from cordis.yml). Inval
 | `memory` | tool | add/replace/remove/consolidate/query with Save/Skip guidance; entries may carry profile coordinates (`facet` = one of the seven facets, `level` = per-domain knowledge level); writes ride the approval gate |
 | `memory_profile` | tool | Per-domain knowledge level over the 31-subdomain scale (`set` / `list` / `get`); `set` is approval-gated and audited, `tier` derives from `level` |
 | `yammory-survey` | skill | User-initiated profile questionnaire covering the 24 questionnaire-legal sub-blocks; writes through `memory` + `memory_profile`. Source: `skills/yammory-survey/` |
-| `memory_recall` | tool | Bounded memory matches plus recent session-history matches |
+| `memory_recall` | tool | Bounded memory matches (query tokenized: CJK bigrams, Latin words as-is; any token recalls, ranked by relevance) plus recent session-history matches |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` |
 | web panel | client drawer | Read-only: browse entries, search, budget bars, audit tail; the floating entry button can be hidden (`panel.enabled`) |
 | settings section | DSH settings sidebar → `yammory-system` | Edit every config field (except `enabled`) without touching files; live vs reload-required timing is marked on the page |

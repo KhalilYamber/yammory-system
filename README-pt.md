@@ -81,7 +81,7 @@ Todos os parâmetros são campos Schemastery `Config` (alteráveis pelo cordis.y
 | `recall.snippetCap` | `5` | Fragmentos por sessão no `memory_recall` |
 | `recall.snippetChars` | `300` | Caracteres de fragmento no `memory_recall` |
 | `recall.windowDays` | `30` | Janela de recência em dias do `memory_recall` |
-| `retrieval.vector` | `false` | Interruptor de recuperação semântica: `true` ativa a recuperação vetorial do `memory_recall` (embedding de hash falso) quando há um provedor de embedding; caso contrário degrada para substring |
+| `retrieval.vector` | `false` | Interruptor de recuperação semântica: `true` ativa a recuperação vetorial do `memory_recall` (embedding de hash falso) quando há um provedor de embedding; caso contrário permanece o recuperador keyword sem dependências (tokenização CJK em bigramas, correspondência por qualquer token, ordenação por relevância) |
 | `panelEntriesLimit` | `200` | Tamanho de página de entradas do painel web |
 | `panelAuditLimit` | `20` | Linhas de auditoria do painel web por padrão |
 | `auditRetentionDays` | `0` | Retenção de auditoria (0 = manter para sempre) |
@@ -96,7 +96,7 @@ Todos os parâmetros são campos Schemastery `Config` (alteráveis pelo cordis.y
 | `memory` | tool | add/replace/remove/consolidate/query com orientação Save/Skip; as entradas podem carregar coordenadas de perfil (`facet` = uma das sete facetas, `level` = nível de conhecimento por domínio); escritas passam pela porta de aprovação |
 | `memory_profile` | tool | Nível de conhecimento por domínio na escala de 31 subdomínios (`set` / `list` / `get`); `set` passa pela porta de aprovação e é auditado, `tier` é derivado de `level` |
 | `yammory-survey` | skill | Questionário de perfil iniciado pelo usuário, cobrindo os 24 subblocos elegíveis; grava via `memory` + `memory_profile`. Código-fonte: `skills/yammory-survey/` |
-| `memory_recall` | tool | Correspondências limitadas de memória mais correspondências recentes do histórico de sessão |
+| `memory_recall` | tool | Correspondências limitadas de memória (consulta tokenizada: bigramas CJK, palavras latinas como estão; qualquer token recupera, ordenado por relevância) mais correspondências recentes do histórico de sessão |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` |
 | web panel | client drawer | Somente leitura: navegar entradas, buscar, barras de orçamento, cauda de auditoria; o botão flutuante pode ser ocultado (`panel.enabled`) |
 | settings section | Barra lateral de configurações do DSH → `yammory-system` | Edita todos os campos de configuração (exceto `enabled`) sem tocar em arquivos; o momento de aplicação (ao vivo ou após recarga) é indicado na página |

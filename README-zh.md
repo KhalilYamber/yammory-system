@@ -81,7 +81,7 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 | `recall.snippetCap` | `5` | `memory_recall` 每个会话的片段数 |
 | `recall.snippetChars` | `300` | `memory_recall` 片段字符数 |
 | `recall.windowDays` | `30` | `memory_recall` 近期窗口天数 |
-| `retrieval.vector` | `false` | 语义召回开关：`true` 且探测到嵌入 provider 时 `memory_recall` 走向量召回（伪嵌入），否则优雅降级回 substring |
+| `retrieval.vector` | `false` | 语义召回开关：`true` 且探测到嵌入 provider 时 `memory_recall` 走向量召回（伪嵌入），否则保持零依赖 keyword 检索器（中文二字分词、任一词元命中、相关度排序） |
 | `panelEntriesLimit` | `200` | Web 面板条目分页大小 |
 | `panelAuditLimit` | `20` | Web 面板默认审计行数 |
 | `auditRetentionDays` | `0` | 审计保留天数（0 = 永久保留） |
@@ -96,7 +96,7 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 | `memory` | tool | 带 Save/Skip 指引的 add/replace/remove/consolidate/query；条目可带画像坐标（`facet` 七面之一、`level` 分领域知识水平）；写入走审批门 |
 | `memory_profile` | tool | 31 个子领域刻度上的分领域知识水平（`set` / `list` / `get`）；`set` 走审批门并落审计，`tier` 由 `level` 推导 |
 | `yammory-survey` | skill | 用户主动激发的画像问卷，覆盖 24 个问卷合法子板块；经 `memory` + `memory_profile` 落库。源文件：`skills/yammory-survey/` |
-| `memory_recall` | tool | 有界的记忆匹配 + 近期会话历史匹配 |
+| `memory_recall` | tool | 有界的记忆匹配（查询按词元切分：中文二字、英文整词；任一词元命中即召回，按相关度排序）+ 近期会话历史匹配 |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` |
 | web panel | client drawer | 只读：浏览条目、搜索、预算条、审计尾部；悬浮入口按钮可隐藏（`panel.enabled`） |
 | settings section | DSH 设置侧栏 → `yammory-system` | 免改文件编辑除 `enabled` 外的全部配置字段；即时/重载生效时机在页面内标注 |
