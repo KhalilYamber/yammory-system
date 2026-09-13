@@ -32,7 +32,7 @@ AI 不知道用户的知识水位，就按自己的水位说话——术语、�
 | 路径 | 说明 |
 |---|---|
 | `施工清单.md` | 架构定稿与施工顺序（主文档） |
-| `lib/`, `index.mjs` | 插件源码（源自 dsh-memento，待改造） |
+| `lib/`, `index.mjs` | 插件源码（源自 dsh-memento；S1 / S2 已改造：七面 schema ＋ 分路注入 ＋ 表达约束） |
 | `_candidates/` | 选型时的候选源码（已 gitignore） |
 | `_refs/` | 开发参考资料（已 gitignore） |
 
@@ -44,7 +44,15 @@ AI 不知道用户的知识水位，就按自己的水位说话——术语、�
 
 ## 状态
 
-**S0（立基座）**：repo 已起，骨架已入位，参考知识已就位。
+| 关卡 | 内容 | 状态 |
+|---|---|---|
+| **S0 · 立基座** | repo、基座 `dsh-memento`、开发知识 | ✅ |
+| **S1 · 数据模型** | SCHEMA v5：`facet` / `level` / `status` 三列 ＋ profile 表（8 大类 31 领域） | ✅ |
+| **S2 · 分路注入 ＋ 表达约束** | `lib/constraint.mjs` ＋ `renderWarmup`（预热段） | ✅ 测试 207/207 · typecheck 0 错 |
+
+**待办**：S3 问卷（用户主动激发的 skill）· S4 观察（后台离线分析历史对话）· S5 治理（soft delete 行为 ＋ 观察优先仲裁）· S6 Dream（备忘录，不做）。
+
+**身份**：项目已由 `dsh-memento` 更名为 `yammory_system`；出处与 Apache-2.0 归属保留；仓库指向 <https://github.com/KhalilYamber/yammory-system>；数据面（库目录 / 环境变量 / 路由）为兼容旧数据**保持不变**。
 
 ---
 
