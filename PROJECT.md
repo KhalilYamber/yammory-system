@@ -15,7 +15,7 @@ AI 不知道用户的知识水位，就按自己的水位说话——术语、�
 - 多边形：躯体 / 心智 / 价值与意愿 / 能力与技能 / 行为与习惯 / 社会与处境 / 经历与轨迹
 - 注入：开场限流预热（普遍相关）＋ 按需召回（情境相关），外加一段表达约束
 - 采集：问卷（用户主动激发的 skill）＋ 观察（后台离线分析历史对话）
-- 治理：soft delete 留痕，观察优先于问卷
+- 治理：soft delete 留痕；冲突走**分面裁决**（能力听观察 / 意愿听自陈 / 落差两条都留）
 
 完整设计见 [`施工清单.md`](./施工清单.md)。
 
@@ -32,6 +32,7 @@ AI 不知道用户的知识水位，就按自己的水位说话——术语、�
 | 路径 | 说明 |
 |---|---|
 | `施工清单.md` | 架构定稿与施工顺序（主文档） |
+| `docs/记忆机制v2规格.md` | 记忆机制 v2 施工契约（拆上限＋软预警、分级注入、会话开关、静默整理机） |
 | `lib/`, `index.mjs` | 插件源码（源自 dsh-memento；S1 / S2 已改造：七面 schema ＋ 分路注入 ＋ 表达约束；S3 补 facet/level 入参与 `memory_profile` 通道） |
 | `skills/` | DSH 原生 skill 源文件（S3：`yammory-survey` 画像问卷 ＋ 题库；安装见 `skills/README.md`） |
 | `_candidates/` | 选型时的候选源码（已 gitignore） |
@@ -51,8 +52,11 @@ AI 不知道用户的知识水位，就按自己的水位说话——术语、�
 | **S1 · 数据模型** | SCHEMA v5：`facet` / `level` / `status` 三列 ＋ profile 表（8 大类 31 领域） | ✅ |
 | **S2 · 分路注入 ＋ 表达约束** | `lib/constraint.mjs` ＋ `renderWarmup`（预热段） | ✅ 测试 207/207 · typecheck 0 错 |
 | **S3 · 问卷通道** | `memory` 工具 facet/level 入参 ＋ `memory_profile` 工具（profile 表写入通道）＋ `skills/yammory-survey` 原生 skill | ✅ 测试 214/214 · typecheck 0 错 · lint 0 错 |
+| **S4 · 观察通道（探路）** | `docs/观察通道方案.md`：落点＝模型面工具 ＋ skill，v1 显式触发 | ✅ 只读轮 |
+| **F1 · 冷启动 dogfood** | 插件挂进 DSH `web` profile；问卷端到端跑通，预热块真机可见 | ✅ 真机首跑 |
+| **v2 · 记忆机制规格（D1）** | `docs/记忆机制v2规格.md` | ✅ 落纸（待 F 层施工） |
 
-**待办**：S4 观察（后台离线分析历史对话）· S5 治理（soft delete 行为 ＋ 观察优先仲裁）· S6 Dream（备忘录，不做）。
+**待办**：S4b 观察（按方案施工）· S5 治理（soft delete 行为 ＋ **分面裁决**）· **v2 各机制**（见 `docs/记忆机制v2规格.md`）· S6 Dream（并入整理机）。
 
 **身份**：项目已由 `dsh-memento` 更名为 `yammory_system`；出处与 Apache-2.0 归属保留；仓库指向 <https://github.com/KhalilYamber/yammory-system>；数据面（库目录 / 环境变量 / 路由）为兼容旧数据**保持不变**。
 
