@@ -57,6 +57,8 @@ import { renderSnapshot, renderWarmup, visibleEntries, visibleProposals } from '
 import { openMemoryStore, resolveDbPath } from './lib/store.mjs'
 import { workspaceKeyOf, agentKeyOf } from './lib/workspace.mjs'
 import { extractEventText } from './lib/extract.mjs'
+import { backlogOf, buildTidyPlan, TIDY_DEFAULTS } from './lib/consolidate.mjs'
+import { AUDIT_WINDOW, buildStats } from './lib/stats.mjs'
 import {
   buildObservationSlice,
   formatStamp,
@@ -86,6 +88,9 @@ import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, Vector
  * @property {(input: object) => {previous: MemoryEntry, entry: MemoryEntry}} replaceEntry
  * @property {(input: object) => MemoryEntry} removeEntry
  * @property {(input: object) => {removed: MemoryEntry[], entry: MemoryEntry}} consolidateEntries
+ * @property {(input: object) => {superseded: MemoryEntry[], entry: MemoryEntry | null}} supersedeEntries
+ * @property {(id: string) => MemoryEntry | null} entryById
+ * @property {() => MemoryEntry[]} allEntries
  * @property {(row: object) => object} auditAppend
  * @property {(limit?: number) => object[]} auditList
  * @property {(input: object) => object | null} proposalUpsert
@@ -140,6 +145,10 @@ import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, Vector
  * @property {number} [total]
  * @property {PublicEntry} [entry]
  * @property {Array<{id: string, text: string}>} [removed]
+ * @property {Array<{id: string, text: string}>} [superseded]
+ * @property {string} [plan]
+ * @property {number} [candidates]
+ * @property {{count: number, chars: number, due: boolean, reason?: string}} [backlog]
  * @property {{used: number, limit: number}} [usage]
  * @typedef {{domain: string, level: number, tier: string, updatedAt: number}} ProfileRowValue
  * @typedef {object} MemoryProfileToolValue - memory_profile 工具规范结果形状。
@@ -184,6 +193,165 @@ export const DEFAULT_OBSERVE = Object.freeze({
   messageChars: 400,
   totalChars: 12000,
 })
+
+/**
+ * 查「上次整理」时回看的审计行数：整理收尾固定落一行 `action='consolidation'`，
+ * 在窗口内找不到就按「从没整理过」处理（开工线的字符/条数两条仍然生效，只是没有
+ * 12 小时兜底那一路——绝不为了凑一个数去猜）。
+ */
+export const TIDY_AUDIT_WINDOW = 200
+
+/** 同进程内两次「该整理了」审计提示的最小间隔（turn-stopping 每轮都会检查一次）。 */
+export const TIDY_NOTICE_INTERVAL = 3600000
+
+/** F6 整理机的开工线（规格 3.5.1 的三个可调默认，出处单一：lib/consolidate.mjs）。 */
+export const TIDY_LINES = TIDY_DEFAULTS
+
+/**
+ * F6/F7 的命令面、提示行与工具渲染文案（en/zh）。
+ * 方案 §3 的施工分解未点名 `lib/strings.mjs`，故按禁区纪律内联在本文件；命令动词
+ * 两种语言同形，`usage` 只在既有 COMMAND_TEXT 文本后追加动词表，不动那份词表。
+ */
+const TIDY_TEXT = {
+  en: {
+    verbs: ' | tidy [--days=N] | stats',
+    tidyHeader: 'Tidy plan (read-only: this command writes nothing; the semantic call belongs to the model):',
+    tidyUsage: 'tidy usage: /memory tidy [--days=N] — read-only plan (backlog + per-bucket candidates + similar pairs). Writes go through the model: memory action=supersede.',
+    tidied: (/** @type {number} */ n, /** @type {string} */ text) => `Tidied (${n} superseded, 1 merged entry tagged \`merged\`): ${text}`,
+    backlogLine: (/** @type {{count: number, chars: number, hours: number | null, due: boolean, reason: string | null}} */ b) =>
+      `Backlog since the last consolidation: ${b.count} entr${b.count === 1 ? 'y' : 'ies'} / ${b.chars} chars`
+      + ` (work line ${TIDY_LINES.charsLine} chars or ${TIDY_LINES.entriesLine} entries; last consolidation ${b.hours === null ? 'never recorded' : `${b.hours}h ago`})`
+      + ` — ${b.due ? `over the line (${b.reason})` : 'below the line'}`,
+    candidatesLine: (/** @type {number} */ n, /** @type {number} */ days, /** @type {number} */ merged, /** @type {number} */ superseded) =>
+      `Candidates: ${n} (heat window ${days}d; skipped ${merged} already-merged, ${superseded} superseded)`,
+    bucketLine: (/** @type {string} */ key, /** @type {number} */ n, /** @type {number} */ batches) => `Bucket ${key} — ${n} candidate(s), ${batches} write batch(es) of <=20`,
+    candidateLine: (/** @type {{id: string, text: string, recallCount: number}} */ row) => `  - [${row.id}] ${row.text} (recalled x${row.recallCount})`,
+    pairLine: (/** @type {{aId: string, bId: string, similarity: number}} */ pair) => `  ~ possibly the same thing: ${pair.aId} <-> ${pair.bId} (similarity ${pair.similarity})`,
+    tidyEmpty: 'No candidates: everything is either outside the heat window or already merged.',
+    tidyHint: 'Next: say "tidy my memory" so the model decides which entries say the same thing (memory tool action=supersede: the merge carries the `merged` tag, the old entries are superseded with a trace, never deleted). Buckets are never crossed.',
+    supersedeSummary: (/** @type {number} */ n, /** @type {string} */ text) => `Tidied: ${n} entr${n === 1 ? 'y' : 'ies'} superseded (kept, marked superseded), 1 merged entry added with the \`merged\` tag: ${text}`,
+    supersedeDemoted: (/** @type {number} */ n) => `Tidied: ${n} entr${n === 1 ? 'y' : 'ies'} superseded (kept on disk, out of every session's view; rollback is S5's job).`,
+    statsHeader: 'Observability — the three numbers (read-only, no model, no audit rows):',
+    statsRepetition: (/** @type {{ratio: number | null, pairs: number, comparablePairs: number, entries: number, threshold: number, truncated: boolean, superseded: number}} */ r) =>
+      `(1) Repetition rate: ${r.ratio === null ? 'n/a (no comparable pairs)' : `${(r.ratio * 100).toFixed(2)}%`}`
+      + ` — ${r.pairs} of ${r.comparablePairs} comparable pairs score >= ${r.threshold}`
+      + ` (${r.entries} active entr${r.entries === 1 ? 'y' : 'ies'}${r.truncated ? ', capped' : ''}; ${r.superseded} superseded)`,
+    statsRecall: (/** @type {{rate: number | null, hits: number, total: number, empty: number, unknown: number}} */ r, /** @type {number} */ window) =>
+      `(2) Recall hit rate: ${r.rate === null ? 'n/a (no recalls recorded)' : `${(r.rate * 100).toFixed(2)}%`}`
+      + ` — ${r.hits} hit(s) / ${r.total} recall(s) (${r.empty} zero-hit, ${r.unknown} unlabelled; audit window ${window} rows)`,
+    statsInjection: (/** @type {{lastChars: number | null, lastEntries: number | null, samples: number, avgChars: number | null, avgEntries: number | null}} */ i) =>
+      i.samples === 0
+        ? '(3) Injection: no snapshot audit rows yet (the warm-up block has not been rendered).'
+        : `(3) Injection: last warm-up block ${i.lastChars} chars / ~${i.lastEntries} entry lines (${i.samples} snapshot(s): avg ${i.avgChars} chars / ~${i.avgEntries} lines)`,
+    statsSuccess: 'Success rate: needs a feedback channel, not defined yet — this line deliberately reports nothing else.',
+    statsReading: 'Reading: lower repetition is better; a high recall hit rate means on-demand fetch is earning its keep; injection is the fixed per-session cost. Recall rows written before F7 recorded zero-hit queries as "ok", so an old window reads slightly high.',
+  },
+  zh: {
+    verbs: ' | tidy [--days=N] | stats',
+    tidyHeader: '整理计划（只读：本命令不写库，语义判断归模型）：',
+    tidyUsage: 'tidy 用法：/memory tidy [--days=N]——只读计划（积压 ＋ 分桶候选 ＋ 桶内相似线索）。落写由模型经 memory 工具 action=supersede 完成。',
+    tidied: (/** @type {number} */ n, /** @type {string} */ text) => `已整理（降级 ${n} 条，新增 1 条带 \`merged\` 标）：${text}`,
+    backlogLine: (/** @type {{count: number, chars: number, hours: number | null, due: boolean, reason: string | null}} */ b) =>
+      `积压：自上次整理以来 ${b.count} 条 / ${b.chars} 字符`
+      + `（开工线 ${TIDY_LINES.charsLine} 字符或 ${TIDY_LINES.entriesLine} 条；上次整理 ${b.hours === null ? '无记录' : `${b.hours} 小时前`}）`
+      + `——${b.due ? `已过线（${b.reason}）` : '未过线'}`,
+    candidatesLine: (/** @type {number} */ n, /** @type {number} */ days, /** @type {number} */ merged, /** @type {number} */ superseded) =>
+      `候选 ${n} 条（热度窗口 ${days} 天；跳过：已整理 ${merged} 条、已降级 ${superseded} 条）`,
+    bucketLine: (/** @type {string} */ key, /** @type {number} */ n, /** @type {number} */ batches) => `桶 ${key}——${n} 条候选，落写建议 ${batches} 批（每批 ≤20）`,
+    candidateLine: (/** @type {{id: string, text: string, recallCount: number}} */ row) => `  - [${row.id}] ${row.text}（召回 ×${row.recallCount}）`,
+    pairLine: (/** @type {{aId: string, bId: string, similarity: number}} */ pair) => `  ~ 可能同一件事：${pair.aId} ↔ ${pair.bId}（相似度 ${pair.similarity}）`,
+    tidyEmpty: '没有候选：要么都在热度窗口外，要么都已整理过。',
+    tidyHint: '下一步：说「整理一下记忆」，让模型判哪几条在讲同一件事（memory 工具 action=supersede：合并产出自带 `merged` 标，旧条目降级留痕、绝不物理删）。桶内不跨。',
+    supersedeSummary: (/** @type {number} */ n, /** @type {string} */ text) => `已整理：降级 ${n} 条（留痕），新增 1 条带 \`merged\` 标的合并条目：${text}`,
+    supersedeDemoted: (/** @type {number} */ n) => `已整理：降级 ${n} 条（仍在库里，但不进任何会话的可见集；回滚归 S5）。`,
+    statsHeader: '可观测三数（只读、零模型、不落审计）：',
+    statsRepetition: (/** @type {{ratio: number | null, pairs: number, comparablePairs: number, entries: number, threshold: number, truncated: boolean, superseded: number}} */ r) =>
+      `① 重复率：${r.ratio === null ? '无样本（没有可比对的两条）' : `${(r.ratio * 100).toFixed(2)}%`}`
+      + `——${r.comparablePairs} 个可比对中 ${r.pairs} 对 ≥ ${r.threshold}`
+      + `（在场 ${r.entries} 条${r.truncated ? '，已截断' : ''}；已降级 ${r.superseded} 条）`,
+    statsRecall: (/** @type {{rate: number | null, hits: number, total: number, empty: number, unknown: number}} */ r, /** @type {number} */ window) =>
+      `② 召回命中率：${r.rate === null ? '无样本（窗口内没有召回记录）' : `${(r.rate * 100).toFixed(2)}%`}`
+      + `——${r.total} 次召回里 ${r.hits} 次有命中（零命中 ${r.empty} 次、旧格式 ${r.unknown} 行；审计窗口 ${window} 行）`,
+    statsInjection: (/** @type {{lastChars: number | null, lastEntries: number | null, samples: number, avgChars: number | null, avgEntries: number | null}} */ i) =>
+      i.samples === 0
+        ? '③ 注入量：还没有 snapshot 审计行（预热段尚未渲染过）。'
+        : `③ 注入量：最近一次预热段 ${i.lastChars} 字符 / 约 ${i.lastEntries} 条（${i.samples} 次快照：均 ${i.avgChars} 字符 / 约 ${i.avgEntries} 条）`,
+    statsSuccess: '成功率：需反馈通道，待定义——本行刻意不报别的数。',
+    statsReading: '解读：重复率越低越好；命中率高说明按需取真派上了用场；注入量是每次会话的固定开销。F7 之前的召回行把零命中也记成 ok，所以旧窗口的命中率会偏高一点。',
+  },
+}
+
+/** 预热段末行的整理提示（过开工线时才追加；只报数与动作，不搬正文）。 */
+export const WARMUP_TIDY_HINT = {
+  en: (/** @type {{count: number, chars: number}} */ b) => `Memory is due for a tidy: ${b.count} entr${b.count === 1 ? 'y' : 'ies'} / ${b.chars} chars changed since the last consolidation. Say "tidy my memory" and the model will merge what says the same thing (old entries are superseded, never deleted); /memory tidy prints the plan.`,
+  zh: (/** @type {{count: number, chars: number}} */ b) => `记忆该整理了：自上次整理以来 ${b.count} 条 / ${b.chars} 字符。说「整理一下记忆」，模型会把讲同一件事的合并（旧条目降级留痕，不物理删）；/memory tidy 可先看计划。`,
+}
+
+/**
+ * 取上次整理时间（audit 行按 seq 倒序）：整理收尾固定落 `action='consolidation'`，
+ * 窗口内没有就返回 0（= 从没整理过）。
+ * @param {Array<{action?: string, ts?: number}>} auditRows - 审计行。
+ * @returns {number} 上次整理时间戳；无记录为 0。
+ */
+function lastTidyTs(auditRows) {
+  for (const row of auditRows) {
+    if (row.action === 'consolidation' && typeof row.ts === 'number') return row.ts
+  }
+  return 0
+}
+
+/**
+ * 只读算一次积压（turn-stopping 与预热段提示共用）：O(n) 读，不写库、不落审计。
+ * @param {StoreHandle} store - Provider。
+ * @param {number} [now] - 当前时间（测试注入）。
+ * @returns {ReturnType<typeof backlogOf>} 积压账目。
+ */
+function readTidyBacklog(store, now = Date.now()) {
+  const since = lastTidyTs(store.auditList(TIDY_AUDIT_WINDOW))
+  return backlogOf(/** @type {Array<{text: string, status?: string, createdAt: number, updatedAt: number}>} */ (store.listEntries()), { since, now })
+}
+
+/**
+ * 渲染整理计划的文本行（`/memory tidy` 与 memory 工具 action=tidy 共用同一份）。
+ * @param {ReturnType<typeof buildTidyPlan>} plan - 计划。
+ * @param {'en'|'zh'} language - 语言。
+ * @returns {string[]} 文本行。
+ */
+function tidyPlanLines(plan, language) {
+  const text = TIDY_TEXT[language] ?? TIDY_TEXT.en
+  const lines = [text.tidyHeader, text.backlogLine(plan.backlog)]
+  if (plan.candidates === 0) {
+    lines.push(text.tidyEmpty)
+    return lines
+  }
+  lines.push(text.candidatesLine(plan.candidates, plan.windowDays, plan.skippedMerged, plan.skippedSuperseded))
+  for (const bucket of plan.buckets) {
+    lines.push(text.bucketLine(bucket.key, bucket.candidates.length, bucket.batchHint))
+    for (const row of bucket.candidates) lines.push(text.candidateLine(row))
+    for (const pair of bucket.pairs) lines.push(text.pairLine(pair))
+  }
+  lines.push(text.tidyHint)
+  return lines
+}
+
+/**
+ * 渲染三数报告（`/memory stats` 与面板 stats 路由共用）。
+ * @param {ReturnType<typeof buildStats>} stats - 三数报告。
+ * @param {'en'|'zh'} language - 语言。
+ * @returns {string[]} 文本行。
+ */
+function statsLines(stats, language) {
+  const text = TIDY_TEXT[language] ?? TIDY_TEXT.en
+  return [
+    text.statsHeader,
+    text.statsRepetition({ ...stats.repetition, superseded: stats.superseded }),
+    ...stats.repetition.top.map((pair) => `    ${pair.a} ~ ${pair.b} (${pair.similarity})`),
+    text.statsRecall(stats.recall, stats.auditWindow),
+    text.statsInjection(stats.injection),
+    text.statsSuccess,
+    text.statsReading,
+  ]
+}
 
 /**
  * 插件配置（Schemastery）。Config 是 cordis 组合面（含 enabled 整体开关）；
@@ -378,7 +546,7 @@ const MEMORY_TOOL_DESCRIPTION = {
     'SAVE: user preferences and corrections; environment facts and project conventions; lessons learned from mistakes; summaries of completed work; anything the user explicitly asks you to remember.',
     'SKIP: trivial or re-derivable facts; encyclopedia knowledge a fresh search can answer; large data dumps or logs; one-off file paths; content already available in the current workspace.',
     '',
-    'Writes (add/replace/remove/consolidate) require approval under the configured policy and are audited; reads (query) are free. replace/remove target an entry by a UNIQUE case-insensitive substring — an ambiguous match fails with the candidate list, so use a longer substring. consolidate merges 1..20 existing entries (unique substrings) into ONE new entry with a single approval and one atomic write — use it when a layer crosses its warning line. Each session starts with a FROZEN warm-up block: the user\u2019s per-domain knowledge level (as speaking constraints) plus the standing user-global profile. That block never changes mid-session. Workspace-scoped and agent-track memory is deliberately NOT in it — fetch those on demand with memory_recall (or query); a closing line in the block tells you how many such entries are waiting.',
+    'Writes (add/replace/remove/consolidate/supersede) require approval under the configured policy and are audited; reads (query/tidy) are free. replace/remove target an entry by a UNIQUE case-insensitive substring — an ambiguous match fails with the candidate list, so use a longer substring. consolidate merges 1..20 existing entries (unique substrings) into ONE new entry with a single approval and one atomic write — use it when a layer crosses its warning line. supersede is the tidy path: it merges 1..20 entries (by id, from a tidy plan) into one entry that carries the `merged` tag while the old ones are KEPT and demoted to `superseded` (kept on disk, out of every session\u2019s view; never physically deleted). It stays inside one bucket (track x scope x agentKey, plus workspaceKey on the workspace layer) — never cross buckets, never merge entries that merely look similar: when in doubt, leave them alone. Each session starts with a FROZEN warm-up block: the user\u2019s per-domain knowledge level (as speaking constraints) plus the standing user-global profile. That block never changes mid-session. Workspace-scoped and agent-track memory is deliberately NOT in it — fetch those on demand with memory_recall (or query); a closing line in the block tells you how many such entries are waiting.',
     '',
     'PROFILE COORDINATES: every entry can carry two optional coordinates. facet tags which face of the user profile the entry belongs to (one of: 躯体 | 心智 | 价值与意愿 | 能力与技能 | 行为与习惯 | 社会与处境 | 经历与轨迹). level (1..10) is the per-domain knowledge level and belongs only on entries about the user\u2019s knowledge/subject level; the structured per-domain scale itself is written with memory_profile, not with this tool. On replace, an omitted facet/level keeps the existing coordinate.',
   ].join('\n'),
@@ -392,7 +560,7 @@ const MEMORY_TOOL_DESCRIPTION = {
     '应存（SAVE）：用户偏好与纠正；环境事实与项目约定；犯错得到的教训；已完成工作总结；用户明确要求记住的内容。',
     '应跳过（SKIP）：琐碎或可再推导的事实；重新搜索即可回答的百科知识；大数据转储或日志；一次性文件路径；当前工作区已有的内容。',
     '',
-    '写（add/replace/remove/consolidate）需按配置策略审批并落审计；读（query）免费。replace/remove 用唯一大小写不敏感子串定位——歧义时报候选清单，请用更长子串。consolidate 以一次审批 + 一次原子写把 1..20 条整合为一条——层越预警线时使用。每个会话启动时获得一个冻结的预热块：用户分领域知识水平（表达约束）＋ 常驻 user-global 画像。该块在会话内不变。工作区层与 agent 轨记忆刻意不入此块——需要时用 memory_recall（或 query）按需取；该块末行会告诉你这类条目还有几条在等着。',
+    '写（add/replace/remove/consolidate/supersede）需按配置策略审批并落审计；读（query/tidy）免费。replace/remove 用唯一大小写不敏感子串定位——歧义时报候选清单，请用更长子串。consolidate 以一次审批 + 一次原子写把 1..20 条整合为一条——层越预警线时使用。supersede 是整理机那条路：按 id（取自 tidy 计划）把 1..20 条合并成一条带 `merged` 标的新条目，旧条目**保留**并降级为 `superseded`（仍在库里，但不进任何会话的可见集；绝不物理删）。它只在同一个桶内进行（track × scope × agentKey，workspace 层再加 workspaceKey）——绝不跨桶，也不要只因「看着像」就合并：拿不准就留着。每个会话启动时获得一个冻结的预热块：用户分领域知识水平（表达约束）＋ 常驻 user-global 画像。该块在会话内不变。工作区层与 agent 轨记忆刻意不入此块——需要时用 memory_recall（或 query）按需取；该块末行会告诉你这类条目还有几条在等着。',
     '',
     '画像坐标：每条条目可带两个可选坐标。facet 标明该条目属于用户画像的哪一面（取值：躯体 | 心智 | 价值与意愿 | 能力与技能 | 行为与习惯 | 社会与处境 | 经历与轨迹）。level（1..10）是分领域知识水平，只用在「知识与学科水平」类条目上；结构化的分领域刻度本身请用 memory_profile 写，不用本工具。replace 时省略 facet/level 即保持原坐标。',
   ].join('\n'),
@@ -401,28 +569,30 @@ const MEMORY_TOOL_DESCRIPTION = {
 /** 记忆工具参数描述（双语）。 */
 const MEMORY_TOOL_PARAMETERS = {
   en: {
-    action: 'add = insert a new entry; replace = rewrite one existing entry; remove = delete one existing entry; consolidate = merge 1..20 existing entries into one new entry (single approval, atomic); query = substring search over existing entries.',
+    action: 'add = insert a new entry; replace = rewrite one existing entry; remove = delete one existing entry; consolidate = merge 1..20 existing entries into one new entry (single approval, atomic); supersede = merge 1..20 existing entries into one new `merged`-tagged entry while the old ones are kept and demoted to `superseded` (the tidy path; single approval, atomic); tidy = read-only tidy plan (backlog + per-bucket candidates + similar pairs); query = substring search over existing entries.',
     track: 'Memory track. Defaults to "user". user = facts about the user; agent = environment/project facts and conventions.',
     scope: 'Layer. Defaults to "workspace". user-global applies to every workspace; workspace applies only to this working directory.',
-    text: 'add/replace: the exact entry text. query: case-insensitive substring filter.',
+    text: 'add/replace: the exact entry text. supersede: optional merged text (omit to only demote). query: case-insensitive substring filter.',
     match: 'replace/remove: a UNIQUE case-insensitive substring of the existing entry to target.',
     matches: 'consolidate: 1..20 UNIQUE case-insensitive substrings of the entries to merge into the new text.',
+    ids: 'supersede: 1..20 entry ids (from a tidy plan) to demote to `superseded`. Every id must sit in the SAME bucket (track x scope x agentKey, plus workspaceKey on the workspace layer); buckets are never crossed.',
     limit: 'query: maximum entries to return (default 20; hard-capped at 1000).',
-    tags: 'Optional short labels for the entry (e.g. ["project-x", "decision"]). At most 16 tags, each at most 32 characters; applies to add/replace/consolidate.',
-    facet: 'Optional profile face this entry belongs to (one of the seven facets). Applies to add/replace/consolidate; on replace an omitted facet keeps the current one.',
-    level: 'Optional per-domain knowledge level 1..10 (科普 1-3 / 本科 4-6 / 硕士 7-8 / 专家 9-10), for entries about the user\u2019s knowledge or subject level. Applies to add/replace/consolidate; on replace an omitted level keeps the current one.',
+    tags: 'Optional short labels for the entry (e.g. ["project-x", "decision"]). At most 16 tags, each at most 32 characters; applies to add/replace/consolidate/supersede (supersede always adds the `merged` tag).',
+    facet: 'Optional profile face this entry belongs to (one of the seven facets). Applies to add/replace/consolidate/supersede; on replace an omitted facet keeps the current one.',
+    level: 'Optional per-domain knowledge level 1..10 (科普 1-3 / 本科 4-6 / 硕士 7-8 / 专家 9-10), for entries about the user\u2019s knowledge or subject level. Applies to add/replace/consolidate/supersede; on replace an omitted level keeps the current one.',
   },
   zh: {
-    action: 'add = 新增一条；replace = 改写一条既有条目；remove = 删除一条既有条目；consolidate = 把 1..20 条既有条目整合为一条新条目（单次审批、原子执行）；query = 对既有条目的子串检索。',
+    action: 'add = 新增一条；replace = 改写一条既有条目；remove = 删除一条既有条目；consolidate = 把 1..20 条既有条目整合为一条新条目（单次审批、原子执行）；supersede = 整理机：把 1..20 条既有条目合并成一条带 `merged` 标的新条目，旧条目保留并降级为 `superseded`（单次审批、原子执行）；tidy = 只读整理计划（积压 ＋ 分桶候选 ＋ 相似线索）；query = 对既有条目的子串检索。',
     track: '记忆轨道。默认 "user"。user = 用户相关事实；agent = 环境/项目事实与约定。',
     scope: '层。默认 "workspace"。user-global 对所有工作区生效；workspace 只对当前工作目录生效。',
-    text: 'add/replace：完整条目文本。query：大小写不敏感子串过滤。',
+    text: 'add/replace：完整条目文本。supersede：可选的合并后文本（省略即只降级、不落新条目）。query：大小写不敏感子串过滤。',
     match: 'replace/remove：目标条目的唯一大小写不敏感子串。',
     matches: 'consolidate：要并入新文本的 1..20 个唯一大小写不敏感子串。',
+    ids: 'supersede：要降级为 `superseded` 的 1..20 个条目 id（取自 tidy 计划）。所有 id 必须同属一个桶（track × scope × agentKey，workspace 层再加 workspaceKey）；桶内不跨。',
     limit: 'query：最多返回条数（默认 20；硬钳 1000）。',
-    tags: '可选短标签（如 ["project-x", "decision"]）。最多 16 个、每个最多 32 字符；用于 add/replace/consolidate。',
-    facet: '可选：该条目属于七面中的哪一面。用于 add/replace/consolidate；replace 时省略即保持原面。',
-    level: '可选：分领域知识水平 1..10（科普 1-3 / 本科 4-6 / 硕士 7-8 / 专家 9-10），用于「知识与学科水平」类条目。用于 add/replace/consolidate；replace 时省略即保持原值。',
+    tags: '可选短标签（如 ["project-x", "decision"]）。最多 16 个、每个最多 32 字符；用于 add/replace/consolidate/supersede（supersede 恒补 `merged` 标）。',
+    facet: '可选：该条目属于七面中的哪一面。用于 add/replace/consolidate/supersede；replace 时省略即保持原面。',
+    level: '可选：分领域知识水平 1..10（科普 1-3 / 本科 4-6 / 硕士 7-8 / 专家 9-10），用于「知识与学科水平」类条目。用于 add/replace/consolidate/supersede；replace 时省略即保持原值。',
   },
 }
 
@@ -442,7 +612,7 @@ export function makeMemoryTool(service, language = 'en') {
       action: {
         type: 'string',
         required: true,
-        enum: ['add', 'replace', 'remove', 'consolidate', 'query'],
+        enum: ['add', 'replace', 'remove', 'consolidate', 'supersede', 'tidy', 'query'],
         description: parameters.action,
       },
       track: {
@@ -468,6 +638,11 @@ export function makeMemoryTool(service, language = 'en') {
         items: { type: 'string' },
         description: parameters.matches,
       },
+      ids: {
+        type: 'array',
+        items: { type: 'string' },
+        description: parameters.ids,
+      },
       limit: {
         type: 'integer',
         description: parameters.limit,
@@ -492,7 +667,7 @@ export function makeMemoryTool(service, language = 'en') {
         type: 'object',
         additionalProperties: false,
         properties: {
-          action: { type: 'string', required: true, enum: ['add', 'replace', 'remove', 'consolidate', 'query'] },
+          action: { type: 'string', required: true, enum: ['add', 'replace', 'remove', 'consolidate', 'supersede', 'tidy', 'query'] },
           ok: { type: 'boolean', required: true },
           entry: {
             type: 'object',
@@ -517,6 +692,29 @@ export function makeMemoryTool(service, language = 'en') {
                 id: { type: 'string', required: true },
                 text: { type: 'string', required: true },
               },
+            },
+          },
+          superseded: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                id: { type: 'string', required: true },
+                text: { type: 'string', required: true },
+              },
+            },
+          },
+          plan: { type: 'string' },
+          candidates: { type: 'integer' },
+          backlog: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              count: { type: 'integer', required: true },
+              chars: { type: 'integer', required: true },
+              due: { type: 'boolean', required: true },
+              reason: { type: 'string' },
             },
           },
           previous: {
@@ -592,7 +790,9 @@ export function makeMemoryTool(service, language = 'en') {
       // 协议层拦（同一开关的第二道，也是安全保证的那一道），此处只是不重复打听。
       // 抛出点放在 try 内：拒绝要变成结构化结果，绝不让裸错误逃出工具层。
       try {
-        if (args.action === 'query' && !service.store.sessionEnabled(exec.agent?.session?.id)) {
+        // F5 会话级开关：关了记忆的会话，模型面读库（query / tidy）一律拒。写动作由
+        // 协议层拦（同一开关的第二道，也是安全保证的那一道），此处只是不重复打听。
+        if ((args.action === 'query' || args.action === 'tidy') && !service.store.sessionEnabled(exec.agent?.session?.id)) {
           throw new SessionMemoryOffError(/** @type {string | undefined} */ (exec.agent?.session?.id))
         }
         switch (args.action) {
@@ -689,6 +889,56 @@ export function makeMemoryTool(service, language = 'en') {
               usage: result.usage,
             }
           }
+          case 'supersede': {
+            // F6 整理机的落写面：合并 ＋ 降级（旧条目留痕不删），一次审批一次原子写。
+            // source 锚死 'consolidation'：粒度键 `source:consolidation`（规格 3.5.7）
+            // 才有着力点——用户想「整理免审批」就改这一条，不必放宽全局策略。
+            const result = await service.supersede(
+              {
+                ids: args.ids,
+                ...(args.text === undefined ? {} : { text: args.text }),
+                source: 'consolidation',
+                ...(args.tags === undefined ? {} : { tags: args.tags }),
+                ...(args.facet === undefined ? {} : { facet: args.facet }),
+                ...(args.level === undefined ? {} : { level: args.level }),
+              },
+              write,
+            )
+            return {
+              action: 'supersede',
+              ok: true,
+              ...(result.entry === null ? {} : { entry: publicEntry(result.entry) }),
+              superseded: result.superseded.map((old) => ({ id: old.id, text: old.text })),
+              usage: result.usage,
+            }
+          }
+          case 'tidy': {
+            // 只读整理计划：算积压 ＋ 分组候选 ＋ 桶内相似线索。不写库、不落审计、
+            // 不调模型——语义判断（哪几条在讲同一件事）由本会话的模型自己做。
+            const plan = buildTidyPlan(
+              visibleFullEntries(
+                service.store.listEntries(),
+                workspaceKeyOf(/** @type {string | undefined} */ (exec.agent?.session?.header?.cwd)),
+                agentKeyOf(/** @type {string | undefined} */ (exec.agent?.session?.header?.agentPreset)),
+              ),
+              {
+                since: lastTidyTs(service.store.auditList(TIDY_AUDIT_WINDOW)),
+                ...(Number.isInteger(args.limit) && args.limit > 0 ? { candidateLimit: args.limit } : {}),
+              },
+            )
+            return {
+              action: 'tidy',
+              ok: true,
+              plan: tidyPlanLines(plan, service.language).join('\n'),
+              candidates: plan.candidates,
+              backlog: {
+                count: plan.backlog.count,
+                chars: plan.backlog.chars,
+                due: plan.backlog.due,
+                ...(plan.backlog.reason === null ? {} : { reason: plan.backlog.reason }),
+              },
+            }
+          }
           default: {
             throw new InvalidInputError(`unknown memory action ${JSON.stringify(args.action)}`)
           }
@@ -743,6 +993,15 @@ export function renderMemoryResult(/** @type {object} */ _args, /** @type {Memor
       return [{ type: 'text', text: `memory entry removed (${value.entry.track}/${value.entry.scope}): ${value.entry.text}${coordinateTag(value.entry)}\nbudget: ${value.usage.used}/${value.usage.limit} chars used` }]
     case 'consolidate':
       return [{ type: 'text', text: `memory entries consolidated (${value.entry.track}/${value.entry.scope}): ${value.removed.length} removed → ${value.entry.text}${coordinateTag(value.entry)}\nbudget: ${value.usage.used}/${value.usage.limit} chars used` }]
+    case 'supersede':
+      return [{
+        type: 'text',
+        text: value.entry === undefined
+          ? `memory entries superseded: ${value.superseded.length} demoted to superseded (kept on disk, out of every session\u2019s view)\nbudget: ${value.usage.used}/${value.usage.limit} chars used`
+          : `memory entries tidied (${value.entry.track}/${value.entry.scope}): ${value.superseded.length} superseded (kept) → 1 merged entry tagged \`merged\`: ${value.entry.text}${coordinateTag(value.entry)}\nbudget: ${value.usage.used}/${value.usage.limit} chars used`,
+      }]
+    case 'tidy':
+      return [{ type: 'text', text: value.plan }]
     default:
       return [{ type: 'text', text: `memory ${value.action}: ok` }]
   }
@@ -755,6 +1014,23 @@ function coordinateTag(/** @type {PublicEntry} */ entry) {
     ...(Number.isInteger(entry.level) ? [`level: ${entry.level}/10`] : []),
   ]
   return parts.length === 0 ? '' : ` [${parts.join(' · ')}]`
+}
+
+/**
+ * 会话可见集过滤（与快照 `visibleEntries`、写定位同一语义）：agentKey 为 ''（共享层）
+ * 或等于本会话 agentKey；scope=user-global 全见，workspace 只匹配本会话 cwd 键。
+ * 与 lib/snapshot.mjs 的版本差异只在形状：这里原样保留条目全字段（整理计划要 tags/热度），
+ * 故不能复用那个只面向渲染的窄形状函数（@template 让调用方的条目类型原样透传）。
+ * @template {{agentKey: string, scope: string, workspaceKey: string}} T
+ * @param {T[]} entries - 全部条目。
+ * @param {string} workspaceKey - 会话 cwd 的规范化键。
+ * @param {string} [agentKey] - 会话 agentPreset 键（'' = 共享层）。
+ * @returns {T[]} 可见条目（保序）。
+ */
+function visibleFullEntries(entries, workspaceKey, agentKey = '') {
+  return entries.filter((entry) =>
+    (entry.agentKey === '' || entry.agentKey === agentKey)
+    && (entry.scope === 'user-global' || (entry.scope === 'workspace' && entry.workspaceKey === workspaceKey)))
 }
 
 /** memory_profile 工具描述：分领域知识水平（表达约束的数据源）。en 为源文，zh 为对应译文。 */
@@ -1862,6 +2138,12 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
           live.language,
           proposals,
         )
+        // F6-3：过开工线时在预热段末行提示「该整理了」（只读算一次积压；绝不自动跑整理，
+        // 那会成会话日志外的黑箱）。空块不硬塞提示——那种情况下可见集本来就是空的。
+        const backlog = readTidyBacklog(store)
+        if (backlog.due && frozen.length > 0) {
+          frozen = `${frozen}\n\n${(WARMUP_TIDY_HINT[live.language] ?? WARMUP_TIDY_HINT.en)(backlog)}`
+        }
         snapshots.set(session, frozen)
         store.auditAppend({
           action: 'snapshot',
@@ -1893,6 +2175,36 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
   const summaries = new WeakMap()
   ctx.on('session/event', (session, event) => {
     handleSessionEvent(store, session, event, live.proposals, summaries)
+  })
+
+  // F6-3 整理机的触发检测：挂在 agent/turn-stopping，**只读**算一次积压（O(n)，无模型、
+  // 无定时器、不自动跑整理——自动跑会成会话日志外的黑箱）。过线时留一行审计提示，
+  // 同进程内节流到 TIDY_NOTICE_INTERVAL，免得每轮都刷；下一次会话的预热段末行同样会提示。
+  // 该事件是串行派发：监听器抛错会以错误结束该轮，故整体吞住异常（吞的是只读检查的失败）。
+  const tidyNotice = { at: 0 }
+  ctx.on('agent/turn-stopping', (payload) => {
+    try {
+      const sessionId = /** @type {{agent?: {session?: MemorySessionLike | null} | null} | undefined} */ (payload)?.agent?.session?.id
+      // 会话关了记忆就不碰：提示也是记忆机制的一部分。
+      if (!store.sessionEnabled(sessionId)) return
+      const backlog = readTidyBacklog(store)
+      if (!backlog.due) return
+      const now = Date.now()
+      if (now - tidyNotice.at < TIDY_NOTICE_INTERVAL) return
+      tidyNotice.at = now
+      store.auditAppend({
+        action: 'tidy-due',
+        track: null,
+        scope: null,
+        entryId: null,
+        text: `backlog ${backlog.count} entr${backlog.count === 1 ? 'y' : 'ies'} / ${backlog.chars} chars since the last consolidation (line: ${backlog.reason}); run /memory tidy for the plan, or say "tidy my memory" to let the model merge`,
+        outcome: 'over-line',
+        source: DEFAULT_SOURCE,
+        sessionId: typeof sessionId === 'string' ? sessionId : null,
+      })
+    } catch {
+      // 只读检查绝不能让一轮对话失败（turn-stopping 串行派发，抛错会以错误收尾本轮）。
+    }
   })
 }
 
@@ -2018,12 +2330,12 @@ function makeCommandGate(ctx, write) {
 
 const COMMAND_DESCRIPTION = /** @type {{en: {description: string, hint: string}, zh: {description: string, hint: string}}} */ ({
   en: {
-    description: 'View/manage yammory_system memory: list | query <word> | add [--track=user|agent] [--scope=user-global|workspace] <text> | remove <substring> | consolidate <substring...> => <new text> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path> | observe [--days=N]',
-    hint: 'list | query <word> | add <text> | remove <substring> | consolidate <substring...> => <new text> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path> | observe [--days=N]',
+    description: 'View/manage yammory_system memory: list | query <word> | add [--track=user|agent] [--scope=user-global|workspace] <text> | remove <substring> | consolidate <substring...> => <new text> | tidy [--days=N] (read-only tidy plan) | stats (the three observability numbers) | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path> | observe [--days=N] | session [on|off]',
+    hint: 'list | query <word> | add <text> | remove <substring> | consolidate <substring...> => <new text> | tidy [--days=N] | stats | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path> | observe [--days=N] | session [on|off]',
   },
   zh: {
-    description: '查看/管理 yammory_system 记忆：list | query <词> | add [--track=user|agent] [--scope=user-global|workspace] <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径> | observe [--days=N]',
-    hint: 'list | query <词> | add <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径> | observe [--days=N]',
+    description: '查看/管理 yammory_system 记忆：list | query <词> | add [--track=user|agent] [--scope=user-global|workspace] <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | tidy [--days=N]（只读整理计划） | stats（可观测三数） | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径> | observe [--days=N] | session [on|off]',
+    hint: 'list | query <词> | add <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | tidy [--days=N] | stats | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径> | observe [--days=N] | session [on|off]',
   },
 })
 
@@ -2077,10 +2389,13 @@ export async function handleMemoryCommand(ctx, service, /** @type {{rawInput?: u
  */
 async function runMemoryCommand(ctx, service, invocation, live) {
   const text = COMMAND_TEXT[service.language] ?? COMMAND_TEXT.en
+  // F6/F7 新增两个动词；动词表与文案住在 TIDY_TEXT（§3 未点名 lib/strings.mjs，
+  // 故这里只往既有 usage/unknownVerb 文本尾部追加动词，不动那份词表）。
+  const extraVerbs = (TIDY_TEXT[service.language] ?? TIDY_TEXT.en).verbs
   const raw = String(invocation?.rawInput ?? '').trim()
   const [verb, ...rest] = raw.split(/\s+/)
   if (verb === undefined || verb.length === 0) {
-    return { kind: 'success', text: text.usage }
+    return { kind: 'success', text: `${text.usage}${extraVerbs}` }
   }
   switch (verb) {
     case 'list': {
@@ -2306,6 +2621,32 @@ async function runMemoryCommand(ctx, service, invocation, live) {
       }
       return { kind: 'success', text: `${text.sessionState(shortSessionId(sessionId), enabled ? text.sessionOn : text.sessionOff, mode === 'status')}\n${enabled ? text.sessionToggleHintOn : text.sessionToggleHintOff}` }
     }
+    case 'tidy': {
+      // F6 命令面：只读整理计划（积压 ＋ 分桶候选 ＋ 桶内相似线索）。不写库、不落审计、
+      // 不调模型——语义判断归模型（yammory-tidy skill 引导它调 memory action=supersede）。
+      // 会话关了记忆就拒：整理只动会话可见集，关掉的会话连看都不看。
+      if (!service.store.sessionEnabled(invocation?.agent?.session?.id)) return { kind: 'error', text: text.sessionOffRead }
+      const flags = parseTidyFlags(rest)
+      if (!flags.ok) return { kind: 'error', text: (TIDY_TEXT[service.language] ?? TIDY_TEXT.en).tidyUsage }
+      const session = invocation?.agent?.session
+      const plan = buildTidyPlan(
+        visibleFullEntries(
+          service.store.listEntries(),
+          workspaceKeyOf(/** @type {string | undefined} */ (session?.header?.cwd)),
+          agentKeyOf(/** @type {string | undefined} */ (session?.header?.agentPreset)),
+        ),
+        {
+          since: lastTidyTs(service.store.auditList(TIDY_AUDIT_WINDOW)),
+          ...(flags.days === undefined ? {} : { windowDays: flags.days }),
+        },
+      )
+      return { kind: 'success', text: tidyPlanLines(plan, service.language).join('\n') }
+    }
+    case 'stats': {
+      // F7 命令面：只读三数（重复率 / 召回命中率 / 注入量 ＋ 成功率的诚实留白）。
+      // 与 list/budgets 同档：不查会话开关、不写库、不落审计。
+      return { kind: 'success', text: statsLines(readStats(service), service.language).join('\n') }
+    }
     case 'observe': {
       // 观察通道的命令面：只读扫描 ＋ 打印切片与账单。推断由模型做（本命令不叫模型、
       // 不写库）；参数与工具面同一套钳制，故模型/用户都无法放大预算。
@@ -2343,7 +2684,7 @@ async function runMemoryCommand(ctx, service, invocation, live) {
       return { kind: 'success', text: `${rendered}\n\n${text.observeHint}` }
     }
     default:
-      return { kind: 'error', text: text.unknownVerb(verb) }
+      return { kind: 'error', text: `${text.unknownVerb(verb)}${extraVerbs}` }
   }
 }
 
@@ -2365,8 +2706,39 @@ function parseObserveFlags(args) {
   return flags
 }
 
-/** 读取 ctx.memoryAdapters（命令路径用）；缺失返回 null（headless 未挂载时响亮报缺）。 */
-function adapterRegistryOf(/** @type {import('@deepseek-ai/cordis').Context} */ ctx) {
+/**
+ * 解析 /memory tidy 的标志：只认 `--days=N`（1..365），其余一律报用法。
+ * @param {string[]} args - 子命令参数。
+ * @returns {{ok: true, days?: number} | {ok: false}} 解析结果。
+ */
+function parseTidyFlags(args) {
+  let days
+  for (const arg of args) {
+    const match = /^--days=(\d+)$/.exec(arg)
+    if (match === null) return { ok: false }
+    const value = Number(match[1])
+    if (!Number.isInteger(value) || value < 1 || value > 365) return { ok: false }
+    days = value
+  }
+  return days === undefined ? { ok: true } : { ok: true, days }
+}
+
+/**
+ * 读一次可观测三数（F7）：只读、零模型、不落审计。entries 取全量（含已降级）——
+ * 重复率只看在场条目，降级条数单独报出。
+ * @param {MemoryService} service - ctx.memory。
+ * @returns {ReturnType<typeof buildStats>} 三数报告。
+ */
+function readStats(service) {
+  const auditRows = service.store.auditList(AUDIT_WINDOW)
+  return buildStats({
+    entries: /** @type {Array<{id?: string, text: string, status?: string}>} */ (service.store.allEntries()),
+    auditRows: /** @type {Array<{action?: string, outcome?: string | null, text?: string | null, ts?: number}>} */ (auditRows),
+    auditWindow: auditRows.length,
+  })
+}
+
+/** 读取 ctx.memoryAdapters（命令路径用）；缺失返回 null（headless 未挂载时响亮报缺）。 */function adapterRegistryOf(/** @type {import('@deepseek-ai/cordis').Context} */ ctx) {
   const registry = ctx.get('memoryAdapters')
   if (registry === null || typeof registry !== 'object' || typeof /** @type {{list?: unknown}} */ (registry).list !== 'function') return null
   return /** @type {MemoryAdapterRegistry} */ (registry)
@@ -2634,7 +3006,9 @@ function recallViaRetriever(service, retriever, query, limit, opts) {
     service.store.auditAppend({
       action: 'recalled',
       text: query,
-      outcome: 'ok',
+      // F7-2：零命中补一行（outcome='empty'），否则「查了没查到」不进统计，
+      // 召回命中率的分母只剩成功样本（与协议 query 路径同口径）。
+      outcome: ranked.length > 0 ? 'ok' : 'empty',
       source: /** @type {string} */ (service.sourceLabel),
       sessionId: opts.sessionId,
     })
@@ -2808,8 +3182,23 @@ export function registerWebRoutes(ctx, service, options) {
         }
       },
     }))
+    // F7 可观测三数的面板数据面：只读、零模型、不落审计。与其它路由同栅栏
+    // （connection.fetch），响应里带上渲染好的文本行，面板/外部视图直接取用。
+    routeDisposers.push(connection.fetch.register({
+      path: '/api/memento/stats',
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async () => {
+        try {
+          const stats = readStats(service)
+          return panelJson(200, { stats, lines: statsLines(stats, service.language), language: service.language })
+        } catch (error) {
+          return panelJson(500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    }))
     // F5 会话级开关：GET 读状态，POST 只切换开关（不接受任何其它字段）。
-    // 与上面三条同栅栏（connection.fetch）——不得走 webServer exact（红队①）。
+    // 与上面四条同栅栏（connection.fetch）——不得走 webServer exact（红队①）。
     // 注册表以 path 为键（同 path 只能一条），GET/POST 合并为一条路由按 method 分派。
     routeDisposers.push(connection.fetch.register({
       path: '/api/memento/session',

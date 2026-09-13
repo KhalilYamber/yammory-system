@@ -22,8 +22,10 @@ lib/constraint.mjs   表达约束生成：分领域水平 → 四档说话要求
 lib/workspace.mjs    工作区键规范化（Windows 大小写不敏感，零依赖）
 lib/extract.mjs      会话事件文本抽取（memory_recall 历史片段用，零依赖）
 lib/observe.mjs      观察通道纯函数核心（闸一授权收窄 / 闸二真人发言白名单 / 均匀采样 / 预算记账 / 观察条目组装，零依赖）
+lib/consolidate.mjs  整理机纯函数核心（热度选候选 / `merged` 跳过 / 桶分组与相似线索 / 开工线积压核算，零依赖）
+lib/stats.mjs        可观测三数纯函数（重复率 Jaccard / 召回命中率 / 注入量；成功率恒 null 不冒充，零依赖）
 lib/strings.mjs      模型可见/命令面双语词表（预热头/约束头/四档说话要求/分组标题/提案头 ＋ `COMMAND_TEXT` 命令面文案包与 `CommandTextBundle` typedef，零依赖）
-lib/store.mjs        node:sqlite Provider：条目表+审计账本+迁移（SCHEMA v1→v6，含 `session_switch` 会话开关表；零依赖）
+lib/store.mjs        node:sqlite Provider：条目表+审计账本+迁移（SCHEMA v1→v6，含 `session_switch` 会话开关表与 `entries.status` 降级写入；零依赖）
 lib/retrieval.mjs    可插拔检索 Provider seam：keyword 主路径（分词＋多词召回＋相关度排序，F2 层 A）+ substring 对照 + vector 可选后端（零 DSH 依赖）
 lib/embedding.mjs    嵌入 Provider seam：确定性伪嵌入（零 DSH 依赖，仅 node: 内置模块）
 lib/mcp.mjs          stdio MCP server 导出：只读工具面 memory_search / memory_stats（零 DSH 依赖）
@@ -82,6 +84,7 @@ npm run test:conformance  # 协议一致性套件（黄金参考；第三方 Pro
 - **模型可见 ⟺ 落盘**：注入模型的快照文本可自会话日志重建（system/message + snapshot 审计行 + 审批 reason 携带完整载荷）。
 - **会话级开关不可绕过**：`session_switch` 表的「关」状态在 `MemoryProtocolCore` 写方法内部拦截（与审批门同级、在 gate 与落盘之前），预热段/召回/观察在 `index.mjs` 各自入口拦截；开关状态**绝不进会话日志**（决策 4 的自适应门不变），审计行 `text` 恒为 `null`。
 - **审批门不可绕过**：写路径的强制点位于 `MemoryProtocolCore`（`lib/protocol.mjs`）写方法内部（`MemoryService` 继承它并注入 `ctx.approval.request` 传输），不在工具层；`writePolicy` 是 Config，模型不可见、不可改；禁用（`enabled:false`）时一切贡献整体消失，不留半残状态。
+- **整理机不越界**（F6）：语义判断（哪几条在讲同一件事）由**当前会话的模型**做，`supersede` 的强制点在同一个 `MemoryProtocolCore` 里——不新增后台模型通道、不新增定时器、不新增后台进程；`agent/turn-stopping` 只读算积压、过线只给提示（`tidy-due` 审计行 ＋ 预热段末行），**绝不自动跑整理**。降级只从 `active → superseded`（留痕、可回滚、绝不物理删），只动会话可见集，桶内不跨；降级审计行 `text` 恒为 `null`（只记 id），每批另落一行 `consolidation` 变更摘要。
 - **失败要大声**：库损坏/版本过新/非法配置在加载期抛错；子串歧义报 `AMBIGUOUS_MATCH`；绝不静默吞、绝不静默截断。（v2：写入不因容量被拒，预算只是软预警线。）
 - **本地优先**：零网络、零凭据；记忆库只写 `dbPath`（默认 `$DSH_HOME/dsh-memento/memory.db`），POSIX 权限 0600。
 - **systemPrompt 提供者必须同步**（0.1.2-rc.1 不 await）：SQLite 同步读 + WeakMap 按 Session 冻结。

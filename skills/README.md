@@ -10,9 +10,14 @@ skills/
   yammory-observe/                # 采集第二条腿：看（S4b）
     SKILL.md                      # 入口
     references/observation-facets.md  # 面手册：判据、例句、证据门槛
+  yammory-tidy/                   # 维护：整理（F6）
+    SKILL.md                      # 入口
+    references/merge-rules.md     # 合并判据细表与对照例
 ```
 
 两条腿的分工：**问卷问「你想要什么」，观察看「你实际怎么做」**。问卷覆盖 24 个非观察子板块；观察覆盖 5 个仅观察面（思维方式与思辨 / 人格特质 / 情绪模式与心理强度 / 自我认知 / 决策与行动风格）。两者都写同一套画像（`memory` 的 `facet` ＋ `tags`，能力面走 `memory_profile`），冲突时分面裁决、并存不删。
+
+第三个 skill 不是采集腿，而是**维护**：`yammory-tidy` 走 F6 整理机——把讲同一件事的条目并成一条带 `merged` 标的条目，旧条目降级为 `superseded`（留痕、不物理删、桶内不跨）。触发同样只由用户发起；预热段末行或 `/memory tidy` 提示「该整理了」时，模型最多**问**一句要不要整理。
 
 ## 安装到 DSH 用户级 skill 目录
 
@@ -27,6 +32,7 @@ DSH 的本地 skill 提供方按 rank 扫描若干根目录，其中**用户级 
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.dsh\skills" | Out-Null
 Copy-Item -Recurse -Force "D:\GitHub_place\记忆系统\skills\yammory-survey" "$env:USERPROFILE\.dsh\skills\"
 Copy-Item -Recurse -Force "D:\GitHub_place\记忆系统\skills\yammory-observe" "$env:USERPROFILE\.dsh\skills\"
+Copy-Item -Recurse -Force "D:\GitHub_place\记忆系统\skills\yammory-tidy" "$env:USERPROFILE\.dsh\skills\"
 ```
 
 ```sh
@@ -34,6 +40,7 @@ Copy-Item -Recurse -Force "D:\GitHub_place\记忆系统\skills\yammory-observe" 
 mkdir -p ~/.dsh/skills
 cp -R /path/to/yammory-system/skills/yammory-survey ~/.dsh/skills/
 cp -R /path/to/yammory-system/skills/yammory-observe ~/.dsh/skills/
+cp -R /path/to/yammory-system/skills/yammory-tidy ~/.dsh/skills/
 ```
 
 优点：干净、与仓库解耦。缺点：仓库更新后要重新复制。
@@ -47,6 +54,8 @@ New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\skills\yammory-survey" 
   -Target "D:\GitHub_place\记忆系统\skills\yammory-survey"
 New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\skills\yammory-observe" `
   -Target "D:\GitHub_place\记忆系统\skills\yammory-observe"
+New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\skills\yammory-tidy" `
+  -Target "D:\GitHub_place\记忆系统\skills\yammory-tidy"
 ```
 
 ```sh
@@ -54,6 +63,7 @@ New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\skills\yammory-observe"
 mkdir -p ~/.dsh/skills
 ln -s /path/to/yammory-system/skills/yammory-survey ~/.dsh/skills/yammory-survey
 ln -s /path/to/yammory-system/skills/yammory-observe ~/.dsh/skills/yammory-observe
+ln -s /path/to/yammory-system/skills/yammory-tidy ~/.dsh/skills/yammory-tidy
 ```
 
 优点：改仓库即改 skill，无需重装。缺点：删仓库目录会留下悬空链接。
@@ -70,7 +80,7 @@ ln -s /path/to/yammory-system/skills/yammory-observe ~/.dsh/skills/yammory-obser
    npm run verify:skill
    ```
    逐个校验 `skills/` 下每个 skill 目录：frontmatter 齐备合法、目录名与 `name` 一致、`references/` 引用不漏文件。
-3. **DSH 侧**：DSH 会 watch skills 根目录的新增条目；装好后新开（或刷新）会话，模型侧目录 `<available_skills>` 与用户面 skill 列表里应出现 `yammory-survey` 与 `yammory-observe`。让 agent 调一次 `skill({ name: 'yammory-observe' })` 能取回正文即为发现成功。
+3. **DSH 侧**：DSH 会 watch skills 根目录的新增条目；装好后新开（或刷新）会话，模型侧目录 `<available_skills>` 与用户面 skill 列表里应出现 `yammory-survey`、`yammory-observe` 与 `yammory-tidy`。让 agent 调一次 `skill({ name: 'yammory-observe' })` 能取回正文即为发现成功。
 
 ## 触发
 
@@ -78,10 +88,11 @@ ln -s /path/to/yammory-system/skills/yammory-observe ~/.dsh/skills/yammory-obser
 |---|---|---|
 | `yammory-survey` | 「做画像问卷」「更新画像」「补一下我的画像」「yammory survey」 | 在 DSH GUI 的 skill 列表里选 `yammory-survey` 加载 |
 | `yammory-observe` | 「观察一下我」「看看你对我了解到什么程度」「从最近的聊天里看看我」「yammory observe」 | 同上，选 `yammory-observe` |
+| `yammory-tidy` | 「整理一下记忆」「记忆太乱了」「把重复的合并掉」「yammory tidy」（或 `/memory tidy` 之后） | 同上，选 `yammory-tidy` |
 
-两个 skill 的纪律都写死在正文里：**只由用户主动发起**，模型不得自作主张开问卷或发起观察——问卷留下的半张脏画像、观察烧掉的上下文，都比没有更糟。
+三个 skill 的纪律都写死在正文里：**只由用户主动发起**，模型不得自作主张开问卷、发起观察或整理——问卷留下的半张脏画像、观察烧掉的上下文、整理动的一批条目，都比没有更糟。
 
-观察通道的模型面入口是 `memory_observe` 工具（`scan` 只读取历史切片，`commit` 走审批门落库）；命令面是 `/memory observe`（只读打印同一切片，推断仍由模型做）。
+观察通道的模型面入口是 `memory_observe` 工具（`scan` 只读取历史切片，`commit` 走审批门落库）；命令面是 `/memory observe`（只读打印同一切片，推断仍由模型做）。整理机的模型面入口是 `memory` 工具的 `tidy`（只读取计划）与 `supersede`（合并 ＋ 降级，走审批门）；命令面是 `/memory tidy`（只读计划）。
 
 ## 许可
 
