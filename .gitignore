@@ -5,7 +5,6 @@ _refs/
 *.log
 *.tmp
 dev-test-*.txt
-dev/.s3-demo/
-dev/s3-survey-demo.mjs
+dev/
 .DS_Store
 .dsh/
