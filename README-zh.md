@@ -35,7 +35,7 @@
 - **模型可见 ⟺ 已记录。** 注入的快照逐字进入 `system/message`；每次写都能从 `approval/asked` + `approval/decided` + 插件自有审计表重建。
 - **有界且诚实。** 每轨每层硬字符预算（默认 user 2000 / agent 4000）。写满返回结构化错误（用量 + 上限）——绝不截断、绝不自动压缩。
 
-两条轨道 × 两个层级 × 按 agent 隔离：`user` 轨（关于用户的事实）与 `agent` 轨（环境事实与约定），各自再分为 `user-global` 与 `workspace` 层，并按 `agentPreset` 隔离。快照在会话首次组装提示时冻结一次，会话中途不再变化。
+两条轨道 × 两个层级 × 按 agent 隔离：`user` 轨（关于用户的事实）与 `agent` 轨（环境事实与约定），各自再分为 `user-global` 与 `workspace` 层，并按 `agentPreset` 隔离。快照在会话首次组装提示时冻结一次，会话中途不再变化。预热块承载表达约束与常驻画像，末行是一行目录（`本工作区与 agent 轨另有 N 条记忆不在本块`），让模型知道还有东西可按需取——只报条数，正文仍留在 `memory_recall` 那一侧。
 
 ## Quick start
 
@@ -81,6 +81,11 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 | `recall.snippetCap` | `5` | `memory_recall` 每个会话的片段数 |
 | `recall.snippetChars` | `300` | `memory_recall` 片段字符数 |
 | `recall.windowDays` | `30` | `memory_recall` 近期窗口天数 |
+| `observe.days` | `14` | `memory_observe scan` 的回看天数（硬上限 90） |
+| `observe.sessions` | `8` | 单次扫描采样最近多少个会话（硬上限 20） |
+| `observe.perSession` | `12` | 每个会话采样几条发言，均匀分布，好让开场与中后段的改口都留得下（硬上限 20） |
+| `observe.messageChars` | `400` | 单条发言超过多少字符即截断加省略号（硬上限 800） |
+| `observe.totalChars` | `12000` | 整段切片的字符预算；到顶即停并报出未覆盖范围（硬上限 30000） |
 | `retrieval.vector` | `false` | 语义召回开关：`true` 且探测到嵌入 provider 时 `memory_recall` 走向量召回（伪嵌入），否则保持零依赖 keyword 检索器（中文二字分词、任一词元命中、相关度排序） |
 | `panelEntriesLimit` | `200` | Web 面板条目分页大小 |
 | `panelAuditLimit` | `20` | Web 面板默认审计行数 |
@@ -97,7 +102,9 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 | `memory_profile` | tool | 31 个子领域刻度上的分领域知识水平（`set` / `list` / `get`）；`set` 走审批门并落审计，`tier` 由 `level` 推导 |
 | `yammory-survey` | skill | 用户主动激发的画像问卷，覆盖 24 个问卷合法子板块；经 `memory` + `memory_profile` 落库。源文件：`skills/yammory-survey/` |
 | `memory_recall` | tool | 有界的记忆匹配（查询按词元切分：中文二字、英文整词；任一词元命中即召回，按相关度排序）+ 近期会话历史匹配 |
-| `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` |
+| `memory_observe` | tool | 观察通道：`scan` 只读取「用户本人」旧发言的有界切片（`cwd` 精确收窄、系统注入的伪发言过滤并计数、预算缺口如实报出）；`commit` 以一次审批、一次原子写落 1..8 条带证据的条目，`source` 固定 `observation` |
+| `yammory-observe` | skill | 用户主动发起的行为观察，把五个仅观察面（思维方式与思辨 / 人格特质 / 情绪模式与心理强度 / 自我认知 / 决策与行动风格）经 `memory_observe` 落库。源文件：`skills/yammory-observe/` |
+| `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` · `observe [--days=N]` |
 | web panel | client drawer | 只读：浏览条目、搜索、预算条、审计尾部；悬浮入口按钮可隐藏（`panel.enabled`） |
 | settings section | DSH 设置侧栏 → `yammory-system` | 免改文件编辑除 `enabled` 外的全部配置字段；即时/重载生效时机在页面内标注 |
 
@@ -195,6 +202,7 @@ Claude Desktop（`claude_desktop_config.json`）配置示例：
 - **会话事件已声明、尚未发出（rc.2）。** `memory/added|updated|removed|recalled|snapshot` 已合并声明，但 rc.2 没有仓库外事件类型的注册面；一旦 harness 构建收录这些类型即自动开启发出。
 - **`ask` 策略需要 answerer。** 未组合 UI/ACP answerer 时，写入失败关闭。
 - **无 FTS5 索引。** 子串搜索走大小写不敏感的 `instr`（对 CJK 正确）。
+- **观察面是白名单，而白名单有边界。** `memory_observe scan` 只保留 `source.kind` 为 `user` / `user-rpc` 的 `user/message` 事件；本机实测这一条会挡下全部 `user/message` 的 48%（运行时上下文、AGENTS.md、skill 目录、goal 轮次、子代理通知）。但它分不出「人打的」与「外部桥接注入、同样声明 `kind: 'user'` 的」——事件日志只带这一个信号。故单条引文只算弱证据；要下结论，须跨会话重复出现。
 
 ## What we learned from the terminal memories
 

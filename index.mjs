@@ -25,6 +25,9 @@ import {
   PROFILE_FACETS,
   KNOWLEDGE_DOMAINS,
   KNOWLEDGE_TIERS,
+  OBSERVATION_FACE_VALUES,
+  OBSERVATION_SOURCE,
+  OBSERVE_LIMITS,
 } from './lib/constants.mjs'
 import {
   MemoryError,
@@ -37,6 +40,7 @@ import {
   ProposalNotFoundError,
   AdapterNotFoundError,
   AdapterPayloadError,
+  SessionQueryUnavailableError,
 } from './lib/errors.mjs'
 import { validateBudgets, budgetReport, budgetLimits, checkBudget } from './lib/budget.mjs'
 import { buildWriteReason, isMemoryWriteRequest, applyWritePolicy, normalizeWritePolicy, resolveWritePolicy, validateWritePolicies, parseWriteReason } from './lib/gate.mjs'
@@ -47,6 +51,13 @@ import { renderSnapshot, renderWarmup, visibleEntries, visibleProposals } from '
 import { openMemoryStore, resolveDbPath } from './lib/store.mjs'
 import { workspaceKeyOf, agentKeyOf } from './lib/workspace.mjs'
 import { extractEventText } from './lib/extract.mjs'
+import {
+  buildObservationSlice,
+  formatStamp,
+  normalizeObservationEntries,
+  resolveObserveOptions,
+  sessionScope,
+} from './lib/observe.mjs'
 import { EmbeddingProviderRegistry, FakeEmbeddingProvider } from './lib/embedding.mjs'
 import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, VectorRetriever, detectVectorBackend } from './lib/retrieval.mjs'
 
@@ -101,6 +112,7 @@ import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, Vector
  * @property {number} [commandListLimit]
  * @property {number} [commandAuditLimit]
  * @property {{historyLimitDefault?: number, snippetCap?: number, snippetChars?: number, windowDays?: number}} [recall]
+ * @property {{days?: number, sessions?: number, perSession?: number, messageChars?: number, totalChars?: number}} [observe]
  * @property {{vector?: boolean}} [retrieval]
  * @property {number} [panelEntriesLimit]
  * @property {number} [panelAuditLimit]
@@ -152,6 +164,19 @@ export const DEFAULT_BUDGETS = Object.freeze({
 export const DEFAULT_SNAPSHOT_ORDER = -50
 
 /**
+ * 观察通道默认值（方案 2.2 的保守起点；S4b-0 实测：本项目工作区 14 天内真人发言
+ * 共 18 条，12k 字符是天花板而非瓶颈，真正的约束是会话数 × 每会话条数）。
+ * 硬上限在 lib/constants.mjs 的 OBSERVE_LIMITS——模型入参在 Provider 层被夹住。
+ */
+export const DEFAULT_OBSERVE = Object.freeze({
+  days: 14,
+  sessions: 8,
+  perSession: 12,
+  messageChars: 400,
+  totalChars: 12000,
+})
+
+/**
  * 插件配置（Schemastery）。Config 是 cordis 组合面（含 enabled 整体开关）；
  * SettingsSchema 是宿主设置面板的用户面（yammory-system namespace，无 enabled——
  * false 时插件整体卸载、namespace 随之消失，从设置页开不回来）。两者共享同一组
@@ -170,6 +195,8 @@ export const DEFAULT_SNAPSHOT_ORDER = -50
  * @property {number} [commandAuditLimit] /memory audit 单次渲染审计行上限（默认 10；热生效）。
  * @property {{historyLimitDefault?: number, snippetCap?: number, snippetChars?: number, windowDays?: number}} [recall]
  *   memory_recall 历史段默认值（默认 8/5/300/30；热生效）。
+ * @property {{days?: number, sessions?: number, perSession?: number, messageChars?: number, totalChars?: number}} [observe]
+ *   memory_observe scan 的默认窗口与预算（模型入参在 Provider 层夹到 OBSERVE_LIMITS；热生效）。
  * @property {{vector?: boolean}} [retrieval] 语义召回开关（默认 false：substring 主路径；变更时拆旧装新检索器，即时生效）。
  * @property {number} [panelEntriesLimit] 面板条目页上限与钳制（默认 200；热生效）。
  * @property {number} [panelAuditLimit] 面板审计默认条数（默认 20；上限 200 为协议常量；热生效）。
@@ -202,6 +229,13 @@ const SHARED_CONFIG_FIELDS = {
     snippetCap: Schema.number().default(5),
     snippetChars: Schema.number().default(300),
     windowDays: Schema.number().default(30),
+  }),
+  observe: Schema.object({
+    days: Schema.number().default(DEFAULT_OBSERVE.days),
+    sessions: Schema.number().default(DEFAULT_OBSERVE.sessions),
+    perSession: Schema.number().default(DEFAULT_OBSERVE.perSession),
+    messageChars: Schema.number().default(DEFAULT_OBSERVE.messageChars),
+    totalChars: Schema.number().default(DEFAULT_OBSERVE.totalChars),
   }),
   retrieval: Schema.object({
     vector: Schema.boolean().default(false),
@@ -335,7 +369,7 @@ const MEMORY_TOOL_DESCRIPTION = {
     'SAVE: user preferences and corrections; environment facts and project conventions; lessons learned from mistakes; summaries of completed work; anything the user explicitly asks you to remember.',
     'SKIP: trivial or re-derivable facts; encyclopedia knowledge a fresh search can answer; large data dumps or logs; one-off file paths; content already available in the current workspace.',
     '',
-    'Writes (add/replace/remove/consolidate) require approval under the configured policy and are audited; reads (query) are free. replace/remove target an entry by a UNIQUE case-insensitive substring — an ambiguous match fails with the candidate list, so use a longer substring. consolidate merges 1..20 existing entries (unique substrings) into ONE new entry with a single approval and one atomic write — use it when a layer is over budget. Each session starts with a FROZEN warm-up block: the user\u2019s per-domain knowledge level (as speaking constraints) plus the standing user-global profile. That block never changes mid-session. Workspace-scoped and agent-track memory is deliberately NOT in it — fetch those on demand with memory_recall (or query).',
+    'Writes (add/replace/remove/consolidate) require approval under the configured policy and are audited; reads (query) are free. replace/remove target an entry by a UNIQUE case-insensitive substring — an ambiguous match fails with the candidate list, so use a longer substring. consolidate merges 1..20 existing entries (unique substrings) into ONE new entry with a single approval and one atomic write — use it when a layer is over budget. Each session starts with a FROZEN warm-up block: the user\u2019s per-domain knowledge level (as speaking constraints) plus the standing user-global profile. That block never changes mid-session. Workspace-scoped and agent-track memory is deliberately NOT in it — fetch those on demand with memory_recall (or query); a closing line in the block tells you how many such entries are waiting.',
     '',
     'PROFILE COORDINATES: every entry can carry two optional coordinates. facet tags which face of the user profile the entry belongs to (one of: 躯体 | 心智 | 价值与意愿 | 能力与技能 | 行为与习惯 | 社会与处境 | 经历与轨迹). level (1..10) is the per-domain knowledge level and belongs only on entries about the user\u2019s knowledge/subject level; the structured per-domain scale itself is written with memory_profile, not with this tool. On replace, an omitted facet/level keeps the existing coordinate.',
   ].join('\n'),
@@ -349,7 +383,7 @@ const MEMORY_TOOL_DESCRIPTION = {
     '应存（SAVE）：用户偏好与纠正；环境事实与项目约定；犯错得到的教训；已完成工作总结；用户明确要求记住的内容。',
     '应跳过（SKIP）：琐碎或可再推导的事实；重新搜索即可回答的百科知识；大数据转储或日志；一次性文件路径；当前工作区已有的内容。',
     '',
-    '写（add/replace/remove/consolidate）需按配置策略审批并落审计；读（query）免费。replace/remove 用唯一大小写不敏感子串定位——歧义时报候选清单，请用更长子串。consolidate 以一次审批 + 一次原子写把 1..20 条整合为一条——层超预算时使用。每个会话启动时获得一个冻结的预热块：用户分领域知识水平（表达约束）＋ 常驻 user-global 画像。该块在会话内不变。工作区层与 agent 轨记忆刻意不入此块——需要时用 memory_recall（或 query）按需取。',
+    '写（add/replace/remove/consolidate）需按配置策略审批并落审计；读（query）免费。replace/remove 用唯一大小写不敏感子串定位——歧义时报候选清单，请用更长子串。consolidate 以一次审批 + 一次原子写把 1..20 条整合为一条——层超预算时使用。每个会话启动时获得一个冻结的预热块：用户分领域知识水平（表达约束）＋ 常驻 user-global 画像。该块在会话内不变。工作区层与 agent 轨记忆刻意不入此块——需要时用 memory_recall（或 query）按需取；该块末行会告诉你这类条目还有几条在等着。',
     '',
     '画像坐标：每条条目可带两个可选坐标。facet 标明该条目属于用户画像的哪一面（取值：躯体 | 心智 | 价值与意愿 | 能力与技能 | 行为与习惯 | 社会与处境 | 经历与轨迹）。level（1..10）是分领域知识水平，只用在「知识与学科水平」类条目上；结构化的分领域刻度本身请用 memory_profile 写，不用本工具。replace 时省略 facet/level 即保持原坐标。',
   ].join('\n'),
@@ -743,6 +777,67 @@ const MEMORY_PROFILE_TOOL_PARAMETERS = {
 }
 
 /**
+ * memory_observe 工具描述（S4b）：观察通道＝采集系统的第二条腿。
+ * en 为源文，zh 为对应译文；「宁少勿多」写进描述本身（skill 可能没被加载，工具描述永远在）。
+ */
+const MEMORY_OBSERVE_TOOL_DESCRIPTION = {
+  en: [
+    'Observe the user from his own past words (yammory_system) — the second leg of profile collection, the one that reads behaviour instead of asking questions.',
+    '',
+    'ACTION scan (read-only, free): samples the user\u2019s OWN messages from recent conversation history and returns one bounded slice for you to reason over. Only real human messages are included — system-injected pseudo messages (runtime context, AGENTS.md, skill catalogs, goal rounds, subagent notices) are filtered out and counted in the result. There is deliberately no session id parameter: you may ask for "the last N days", never for a named session. When the character budget is reached the result states exactly what was NOT covered.',
+    'ACTION commit (approval-gated): writes 1..8 observation entries in ONE atomic batch behind ONE approval. source is pinned to \u2018observation\u2019; each entry lands on user/user-global carrying a facet (one of the seven faces) plus the observation sub-face and the date in tags. If the layer is over budget the whole batch fails with current usage — consolidate or remove entries, then retry.',
+    '',
+    'WRITE LESS, NOT MORE. Every entry must quote the user\u2019s own words as evidence; without a quotable fragment the conclusion is not written. Zero entries is a legitimate outcome. At most 3 entries per observation — more than 3 means you are padding.',
+    'NEVER write personality-type labels (MBTI, enneagram, Big Five, attachment style), clinical diagnoses, or negative character judgements. NEVER extract health conditions, sexuality, religion or politics, exact finances, addresses, or identity numbers unless the user explicitly asked you to remember them.',
+    'The five faces only observation can reach: 思维方式与思辨 (how he breaks problems down), 人格特质 (stable reactions to difficulty, not a personality type), 情绪模式与心理强度 (what triggers him, how he recovers), 自我认知 (what he says about himself versus what he does), 决策与行动风格 (when he commits, when he stalls). Conclusions outside these five are written only with strong evidence, marked as a correction (face 校正) with the face it corrects.',
+  ].join('\n'),
+  zh: [
+    '从用户本人的旧发言里观察他（yammory_system）——采集系统的第二条腿，读行为而非问问题的那条。',
+    '',
+    '动作 scan（只读、免费）：从近期会话历史里采样「他本人」的发言，返回一段有界切片供你推断。只取真人发言——系统注入的伪消息（运行时上下文、AGENTS.md、skill 目录、goal 轮次、子代理通知）一律过滤并在结果里计数。刻意不提供 sessionId 入参：你只能说「最近 N 天」，不能点名某个会话。字符预算到顶时，结果会明确报出「没看到哪些」。',
+    '动作 commit（走审批门）：以一次审批、一次原子写落 1..8 条观察条目。source 锚死为 observation；每条落 user/user-global，带 facet（七面之一）＋ tags 里的观察子板块与日期。该层超预算时整批失败并给出当前用量——先整合或删除条目再重试。',
+    '',
+    '宁少勿多。每条必须附用户原话作为证据；找不到可引用的原话就不写。0 条是合法输出。一次观察最多 3 条——超过 3 条说明你在凑数。',
+    '绝不写人格类型标签（MBTI、九型、大五、依恋类型）、临床诊断或负面人格评价。绝不提取健康状况、性取向、宗教与政治立场、精确财务数字、住址与证件号——除非用户明确要求你记住。',
+    '只有观察够得着的五个面：思维方式与思辨（怎么拆问题）、人格特质（面对困难与不确定的稳定反应，不是性格类型）、情绪模式与心理强度（什么触发他、他怎么恢复）、自我认知（他怎么说自己 vs 他怎么做）、决策与行动风格（什么时候果断、什么时候拖延）。这五面之外的结论只在证据非常明确时写，标为「校正」（face=校正）并给出被校正的面。',
+  ].join('\n'),
+}
+
+/** memory_observe 工具参数描述（双语）。 */
+const MEMORY_OBSERVE_TOOL_PARAMETERS = {
+  en: {
+    action: 'scan = read a bounded slice of the user\u2019s own past messages (read-only, free); commit = write 1..8 observation entries in one approval-gated atomic batch.',
+    days: 'scan: how many days back to look (default 14, hard-capped at 90).',
+    sessions: 'scan: how many recent sessions to sample (default 8, hard-capped at 20).',
+    perSession: 'scan: max messages taken per session, sampled evenly so the opening AND the later corrections survive (default 12, hard-capped at 20).',
+    messageChars: 'scan: max characters per single message before it is truncated with an ellipsis (default 400, hard-capped at 800).',
+    totalChars: 'scan: total character budget for the whole slice; the scan stops there and reports what it could not cover (default 12000, hard-capped at 30000).',
+    entries: 'commit: 1..8 entries, each { face, text, evidence, confidence?, facet?, tags? }. face is one of the five observation faces or 校正; text is one behavioural sentence without judgement; evidence quotes the user\u2019s own words; confidence 低 entries are rejected (low confidence is dropped, not written); facet is required only for a 校正 entry and must be one of the seven faces.',
+    entryFace: 'Which observed face this conclusion belongs to: 思维方式与思辨 | 人格特质 | 情绪模式与心理强度 | 自我认知 | 决策与行动风格, or 校正 for a conclusion outside those five (strong evidence only).',
+    entryText: 'The conclusion: ONE behavioural sentence, no judgement, no personality label (e.g. "restates the constraint before acting" rather than "is a careful person").',
+    entryEvidence: 'A fragment of the user\u2019s own words that supports the conclusion, plus roughly when it was said. No quotable fragment means no entry.',
+    entryConfidence: 'How sure you are: 高 | 中. Do not send 低 — low-confidence conclusions are dropped, not written.',
+    entryFacet: 'Only for face=校正: which of the seven profile faces the observation corrects (躯体 | 心智 | 价值与意愿 | 能力与技能 | 行为与习惯 | 社会与处境 | 经历与轨迹).',
+    entryTags: 'Optional extra short labels. The face, "observation" and the date are added automatically.',
+  },
+  zh: {
+    action: 'scan = 只读取一段有界的「他本人旧发言」切片（只读、免费）；commit = 以一次审批、一次原子写落 1..8 条观察条目。',
+    days: 'scan：回看多少天（默认 14，硬上限 90）。',
+    sessions: 'scan：采样最近多少个会话（默认 8，硬上限 20）。',
+    perSession: 'scan：每个会话最多取几条发言，均匀采样，好让开场与中后段的改口都留得下（默认 12，硬上限 20）。',
+    messageChars: 'scan：单条发言超过多少字符即截断加省略号（默认 400，硬上限 800）。',
+    totalChars: 'scan：整段切片的字符预算；到顶即停并报出未覆盖范围（默认 12000，硬上限 30000）。',
+    entries: 'commit：1..8 条，每条 { face, text, evidence, confidence?, facet?, tags? }。face 取五个观察面之一或「校正」；text 是一句行为描述、不带评价；evidence 引用用户原话；confidence 标「低」的条目会被拒绝（低把握不写）；facet 只在「校正」条目上必填，且须是七面之一。',
+    entryFace: '这条结论属于哪个观察面：思维方式与思辨 | 人格特质 | 情绪模式与心理强度 | 自我认知 | 决策与行动风格；五面之外的结论填「校正」（须证据非常明确）。',
+    entryText: '结论本身：一句行为描述，不带评价、不贴人格标签（写「动手前会先复述约束」，不写「是个谨慎的人」）。',
+    entryEvidence: '支撑这条结论的用户原话片段，附大致时间。找不到可引用的原话就不写这条。',
+    entryConfidence: '把握程度：高 | 中。不要传「低」——低把握的结论直接丢弃，不写。',
+    entryFacet: '仅当 face=校正 时必填：这条观察校正的是七面中的哪一面（躯体 | 心智 | 价值与意愿 | 能力与技能 | 行为与习惯 | 社会与处境 | 经历与轨迹）。',
+    entryTags: '可选附加短标签。面、observation 与日期会自动加上。',
+  },
+}
+
+/**
  * memory_profile 工具（S3）：分领域知识水平（profile 表）的对外读写通道。
  * 写（set）在协议核心 MemoryProtocolCore.setProfile 内强制走审批门与审计（与 memory
  * 工具同一套不变量，工具层绕不过）；读（list/get）无审批。领域用 31 项清单校验，
@@ -908,13 +1003,451 @@ export function renderMemoryProfileResult(/** @type {object} */ _args, /** @type
   }
 }
 
+// ── 观察通道（S4b） ───────────────────────────────────────────────────────────
+
 /**
- * 插件挂载。enabled:false 时不注册任何东西（工具/注入/服务/审批 answerer
- * 整体消失，不留半残状态）；库损坏/迁移失败/非法配置在加载期响亮抛错（S5）。
- * 缺省字段在此显式补默认（与 Config schema 的默认值同源，DEFAULT_* 常量）。
- * @param {import('@deepseek-ai/cordis').Context} ctx - Cordis 上下文。
- * @param {object} config - 插件配置（cordis loader 已套 schema 默认值）。
+ * 观察切片的分行文案（en 源文 / zh 译文）：切片正文的语言面在 index.mjs，
+ * 预算与结构在 lib/observe.mjs（纯函数）。
  */
+const OBSERVE_SLICE_LABELS = {
+  en: {
+    header: (/** @type {{days: number, sessions: number}} */ info) => `The user's own messages, ${info.days}-day window (${info.sessions} candidate session(s)), sampled evenly within each session:`,
+    session: (/** @type {{sessionId: string, title: string | null, messages: number}} */ info) => `### ${info.sessionId}${info.title === null ? '' : ` — ${info.title}`} (${info.messages} sampled)`,
+    message: (/** @type {{at: number, text: string}} */ info) => `- [${formatStamp(info.at)}] ${info.text}`,
+  },
+  zh: {
+    header: (/** @type {{days: number, sessions: number}} */ info) => `用户本人的发言，${info.days} 天窗口（候选 ${info.sessions} 个会话），每个会话内均匀采样：`,
+    session: (/** @type {{sessionId: string, title: string | null, messages: number}} */ info) => `### ${info.sessionId}${info.title === null ? '' : ` — ${info.title}`}（采样 ${info.messages} 条）`,
+    message: (/** @type {{at: number, text: string}} */ info) => `- [${formatStamp(info.at)}] ${info.text}`,
+  },
+}
+
+/**
+ * ctx.sessionQuery 的消费面（只读；服务方是内核 session-query，插件只调这四个方法）。
+ * @typedef {object} SessionQueryLike
+ * @property {(filters: object[], signal?: AbortSignal) => Promise<Array<{header?: {id?: unknown, createdAt?: unknown}}>>} filterSessions
+ * @property {(sessionId: string) => Promise<{session?: {createdAt?: unknown}, events?: unknown[]}>} readSession
+ * @property {(ids: string[], signal?: AbortSignal) => Promise<Array<{sessionId?: unknown, status?: unknown, value?: {title?: {title?: unknown}}}>>} [readTitleSnapshots]
+ */
+
+/**
+ * 批量折出会话标题（给切片做「这是哪一场」的抬头）。
+ * 标题是装饰：任何一步失败都退化为「没有标题」，绝不阻断观察。
+ * @param {SessionQueryLike} sessionQuery - 内核 session-query 服务。
+ * @param {string[]} ids - 会话 id。
+ * @param {AbortSignal | undefined} signal - 取消信号（命令面无 signal 时为 undefined）。
+ * @returns {Promise<Map<string, string>>} id → 标题（缺失即无此键）。
+ */
+async function readObservationTitles(sessionQuery, ids, signal) {
+  /** @type {Map<string, string>} */
+  const titles = new Map()
+  if (ids.length === 0 || typeof sessionQuery.readTitleSnapshots !== 'function') return titles
+  /** @type {Array<{sessionId?: unknown, status?: unknown, value?: {title?: {title?: unknown}}}>} */
+  let results
+  try {
+    results = await sessionQuery.readTitleSnapshots(ids, signal)
+  } catch {
+    return titles // 空 catch 语义：只放弃抬头装饰，切片本身照常读
+  }
+  for (const result of results) {
+    if (result?.status !== 'fulfilled') continue
+    const title = result.value?.title?.title
+    if (typeof result.sessionId === 'string' && typeof title === 'string' && title.length > 0) titles.set(result.sessionId, title)
+  }
+  return titles
+}
+
+/**
+ * memory_observe scan 的读通道（闸一 ＋ 闸二 ＋ 预算记账）。
+ * 闸一由 sessionScope 给出过滤条件（cwd 精确相等；无 cwd 只读自己）；闸二在
+ * lib/observe.mjs 的事件过滤里；预算与截断在 buildObservationSlice 里。
+ * sessionQuery 缺失时抛 SessionQueryUnavailableError——由工具层转成响亮降级
+ * （ok:false ＋ 明确 code），绝不假装「没有历史」。
+ * @param {import('@deepseek-ai/cordis').Context} ctx - Cordis 上下文。
+ * @param {{observe: {days: number, sessions: number, perSession: number, messageChars: number, totalChars: number}, language: 'en'|'zh'}} live - 运行期可变值容器。
+ * @param {{days?: unknown, sessions?: unknown, perSession?: unknown, messageChars?: unknown, totalChars?: unknown}} args - 模型入参（未钳制）。
+ * @param {{agent?: {session?: MemorySessionLike | null} | null, signal: AbortSignal | undefined}} exec - 工具执行上下文（命令面传 {agent, signal}）。
+ * @returns {Promise<{slice: import('./lib/observe.mjs').ObservationSlice, options: {days: number, sessions: number, perSession: number, messageChars: number, totalChars: number}, clamped: Array<{key: string, requested: number, applied: number}>, selfOnly: boolean, unreadable: number}>} 切片与账单。
+ */
+async function scanObservationHistory(ctx, live, args, exec) {
+  const sessionQuery = /** @type {SessionQueryLike | null | undefined} */ (ctx.get('sessionQuery'))
+  if (sessionQuery === undefined || sessionQuery === null) throw new SessionQueryUnavailableError()
+  const session = /** @type {MemorySessionLike | null | undefined} */ (exec.agent?.session ?? null)
+  const now = Date.now()
+  const { options, clamped } = resolveObserveOptions(/** @type {{[key: string]: unknown}} */ (args), live.observe)
+  const scope = sessionScope({
+    cwd: /** @type {string | undefined} */ (session?.header?.cwd),
+    sessionId: typeof session?.id === 'string' ? session.id : undefined,
+    days: options.days,
+    now,
+  })
+  const records = await sessionQuery.filterSessions(scope.filters, exec.signal)
+  const selected = records.slice(0, options.sessions)
+  /** @type {string[]} */
+  const ids = []
+  for (const record of selected) {
+    if (typeof record?.header?.id === 'string' && record.header.id.length > 0) ids.push(record.header.id)
+  }
+  const titles = await readObservationTitles(sessionQuery, ids, exec.signal)
+  /** @type {Array<{sessionId: string, createdAt: number, title: string | null, events: unknown[]}>} */
+  const snapshots = []
+  let unreadable = 0
+  for (const record of selected) {
+    const sessionId = typeof record?.header?.id === 'string' ? record.header.id : ''
+    if (sessionId.length === 0) continue
+    /** @type {{session?: {createdAt?: unknown}, events?: unknown[]}} */
+    let snapshot
+    try {
+      snapshot = await sessionQuery.readSession(sessionId)
+    } catch {
+      unreadable += 1 // 空 catch 语义：单个会话读不动（损坏/迁移失败）不拖垮整次观察，但计数上报
+      continue
+    }
+    const headerAt = record.header?.createdAt
+    const createdAt = typeof headerAt === 'number' ? headerAt : (typeof snapshot?.session?.createdAt === 'number' ? snapshot.session.createdAt : 0)
+    snapshots.push({ sessionId, createdAt, title: titles.get(sessionId) ?? null, events: Array.isArray(snapshot?.events) ? snapshot.events : [] })
+  }
+  // 服务端已按 newest-first 返回，这里再排一次是防御：顺序变了也不会把老会话当成最近。
+  snapshots.sort((a, b) => b.createdAt - a.createdAt)
+  const slice = buildObservationSlice(snapshots, options, now, OBSERVE_SLICE_LABELS[live.language] ?? OBSERVE_SLICE_LABELS.en)
+  return { slice, options, clamped, selfOnly: scope.selfOnly, unreadable }
+}
+
+/** 工具结果里的观察条目投影（只带声明过的字段）。 */
+function publicObservationEntry(/** @type {MemoryEntry} */ entry) {
+  return {
+    id: entry.id,
+    text: entry.text,
+    tags: entry.tags,
+    ...(entry.facet === null || entry.facet === undefined ? {} : { facet: entry.facet }),
+  }
+}
+
+/**
+ * 把 scanObservationHistory 的产物投影成规范结果形状。
+ * 工具面与命令面共用同一投影，于是「覆盖 / 未覆盖」的账单在两处逐字一致。
+ * covered.from/to 为空时整键略去（output schema 是强校验的，不接受 null）。
+ * @param {{slice: import('./lib/observe.mjs').ObservationSlice, clamped: Array<{key: string, requested: number, applied: number}>, selfOnly: boolean, unreadable: number}} result - scan 产物。
+ * @returns {object} memory_observe 的 scan 规范值。
+ */
+function observationScanValue(result) {
+  return {
+    action: 'scan',
+    ok: true,
+    available: true,
+    selfOnly: result.selfOnly,
+    clamped: result.clamped,
+    window: result.slice.window,
+    budget: result.slice.budget,
+    scanned: { ...result.slice.scanned, unreadable: result.unreadable },
+    covered: {
+      sessions: result.slice.covered.sessions,
+      messages: result.slice.covered.messages,
+      chars: result.slice.covered.chars,
+      ...(result.slice.covered.from === null ? {} : { from: result.slice.covered.from }),
+      ...(result.slice.covered.to === null ? {} : { to: result.slice.covered.to }),
+    },
+    uncovered: result.slice.uncovered,
+    sessions: result.slice.picked.map((picked) => ({
+      sessionId: picked.sessionId,
+      ...(picked.title === null ? {} : { title: picked.title }),
+      at: picked.at,
+      messages: picked.messages,
+    })),
+    slice: result.slice.text,
+  }
+}
+
+/**
+ * memory_observe 工具（S4b）：观察通道的模型面入口。
+ * scan 只读（sessionQuery 缺失时响亮降级）；commit 走 service.seed——写路径的
+ * 审批门强制点在 MemoryProtocolCore 内部，工具层绕不过；source 锚死 'observation'
+ * 不由模型传（审计链要能回答「这条是谁写的」）。参数在 Provider 层钳到 OBSERVE_LIMITS。
+ * @param {MemoryService} service - ctx.memory。
+ * @param {import('@deepseek-ai/cordis').Context} ctx - Cordis 上下文（查 sessionQuery）。
+ * @param {{observe: {days: number, sessions: number, perSession: number, messageChars: number, totalChars: number}, language: 'en'|'zh'}} live - 运行期可变值容器（热生效）。
+ * @returns {object} 工具定义。
+ */
+export function makeMemoryObserveTool(service, ctx, live) {
+  const language = live.language
+  const description = MEMORY_OBSERVE_TOOL_DESCRIPTION[language] ?? MEMORY_OBSERVE_TOOL_DESCRIPTION.en
+  const parameters = MEMORY_OBSERVE_TOOL_PARAMETERS[language] ?? MEMORY_OBSERVE_TOOL_PARAMETERS.en
+  const entryShape = /** @type {const} */ ({
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      face: { type: 'string', required: true, enum: [...OBSERVATION_FACE_VALUES], description: parameters.entryFace },
+      text: { type: 'string', required: true, description: parameters.entryText },
+      evidence: { type: 'string', required: true, description: parameters.entryEvidence },
+      confidence: { type: 'string', enum: ['高', '中', '低'], description: parameters.entryConfidence },
+      facet: { type: 'string', enum: [...PROFILE_FACETS], description: parameters.entryFacet },
+      tags: { type: 'array', items: { type: 'string' }, description: parameters.entryTags },
+    },
+  })
+  return defineTool({
+    name: 'memory_observe',
+    description,
+    parameters: {
+      action: {
+        type: 'string',
+        required: true,
+        enum: ['scan', 'commit'],
+        description: parameters.action,
+      },
+      days: { type: 'integer', description: parameters.days },
+      sessions: { type: 'integer', description: parameters.sessions },
+      perSession: { type: 'integer', description: parameters.perSession },
+      messageChars: { type: 'integer', description: parameters.messageChars },
+      totalChars: { type: 'integer', description: parameters.totalChars },
+      entries: {
+        type: 'array',
+        items: entryShape,
+        description: parameters.entries,
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          action: { type: 'string', required: true, enum: ['scan', 'commit'] },
+          ok: { type: 'boolean', required: true },
+          available: { type: 'boolean' },
+          selfOnly: { type: 'boolean' },
+          clamped: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                key: { type: 'string', required: true },
+                requested: { type: 'number', required: true },
+                applied: { type: 'number', required: true },
+              },
+            },
+          },
+          window: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              from: { type: 'integer', required: true },
+              to: { type: 'integer', required: true },
+            },
+          },
+          budget: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              limit: { type: 'integer', required: true },
+              used: { type: 'integer', required: true },
+              truncated: { type: 'boolean', required: true },
+            },
+          },
+          scanned: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              sessions: { type: 'integer', required: true },
+              read: { type: 'integer', required: true },
+              messages: { type: 'integer', required: true },
+              injected: { type: 'integer', required: true },
+              unreadable: { type: 'integer', required: true },
+            },
+          },
+          covered: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              sessions: { type: 'integer', required: true },
+              messages: { type: 'integer', required: true },
+              chars: { type: 'integer', required: true },
+              from: { type: 'integer' },
+              to: { type: 'integer' },
+            },
+          },
+          uncovered: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              sessions: { type: 'integer', required: true },
+              messages: { type: 'integer', required: true },
+              days: { type: 'integer', required: true },
+            },
+          },
+          sessions: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                sessionId: { type: 'string', required: true },
+                title: { type: 'string' },
+                at: { type: 'integer', required: true },
+                messages: { type: 'integer', required: true },
+              },
+            },
+          },
+          slice: { type: 'string' },
+          added: { type: 'integer' },
+          entries: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                id: { type: 'string', required: true },
+                text: { type: 'string', required: true },
+                tags: { type: 'array', items: { type: 'string' }, required: true },
+                facet: { type: 'string' },
+              },
+            },
+          },
+          usage: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              track: { type: 'string', required: true },
+              scope: { type: 'string', required: true },
+              used: { type: 'integer', required: true },
+              limit: { type: 'integer', required: true },
+            },
+          },
+          error: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              code: { type: 'string', required: true },
+              message: { type: 'string', required: true },
+              outcome: { type: 'string' },
+              usage: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  track: { type: 'string', required: true },
+                  scope: { type: 'string', required: true },
+                  used: { type: 'integer', required: true },
+                  limit: { type: 'integer', required: true },
+                },
+              },
+              candidates: { type: 'integer' },
+              sample: { type: 'array', items: { type: 'string' } },
+            },
+          },
+        },
+      },
+      render: (/** @type {object} */ args, /** @type {object} */ value) => renderMemoryObserveResult(args, value, live.language),
+    },
+    execute: /** @type {(args: any, exec: any) => Promise<any>} */ (async (args, exec) => {
+      exec.signal.throwIfAborted()
+      const write = {
+        agent: exec.agent,
+        ...(exec.callId === undefined ? {} : { callId: exec.callId }),
+        signal: exec.signal,
+      }
+      try {
+        if (args.action === 'scan') {
+          const result = await scanObservationHistory(ctx, live, args, exec)
+          const session = exec.agent?.session
+          if (typeof session?.id === 'string') {
+            // 观察过的窗口留审计行：下次该从更早的窗口接着看（方案 3.2 的增量纪律）。
+            service.store.auditAppend({
+              action: 'observed',
+              track: null,
+              scope: null,
+              entryId: null,
+              text: `scan days=${result.options.days} window=${new Date(result.slice.window.from).toISOString()}..${new Date(result.slice.window.to).toISOString()} covered=${result.slice.covered.sessions}/${result.slice.scanned.sessions} session(s), ${result.slice.covered.messages} message(s), ${result.slice.budget.used}/${result.slice.budget.limit} chars${result.slice.budget.truncated ? ' (truncated)' : ''}`,
+              outcome: 'ok',
+              source: OBSERVATION_SOURCE,
+              sessionId: session.id,
+            })
+          }
+          return observationScanValue(result)
+        }
+        if (args.action === 'commit') {
+          // 落库口径的唯一入口：facet/tags/source 在这里定死，模型只能给面、结论与证据。
+          const entries = normalizeObservationEntries(args.entries, Date.now(), live.language)
+          const result = await service.seed(entries, write)
+          const used = service.budgets().find((row) => row.track === 'user' && row.scope === 'user-global')
+          return {
+            action: 'commit',
+            ok: true,
+            added: result.added,
+            entries: result.entries.map(publicObservationEntry),
+            ...(used === undefined ? {} : { usage: used }),
+          }
+        }
+        throw new InvalidInputError(`unknown memory_observe action ${JSON.stringify(args.action)}`)
+      } catch (error) {
+        if (error instanceof MemoryError) {
+          return {
+            action: args.action,
+            ok: false,
+            ...(error instanceof SessionQueryUnavailableError ? { available: false } : {}),
+            error: toToolError(error),
+          }
+        }
+        throw error
+      }
+    }),
+  })
+}
+
+/**
+ * memory_observe 结果渲染（纯函数；language 选文案）。
+ * 到顶必报「未覆盖」——本通道唯一的持续成本是切片进上下文，账必须让人看见。
+ * @param {object} _args - 调用参数（未用）。
+ * @param {object} value - 规范 JSON 结果。
+ * @param {string} [language] - 'en' | 'zh'。
+ * @returns {Array<{type: 'text', text: string}>} 模型可见文本。
+ */
+export function renderMemoryObserveResult(/** @type {object} */ _args, /** @type {any} */ value, language = 'en') {
+  const zh = language === 'zh'
+  if (!value.ok) {
+    if (value.available === false) {
+      return [{ type: 'text', text: zh
+        ? `memory_observe ${value.action} 不可用：本 profile 未提供 session-query 服务，未读取任何历史。`
+        : `memory_observe ${value.action} unavailable: this profile provides no session-query service; no history was read.` }]
+    }
+    return [{ type: 'text', text: `memory_observe ${value.action} failed: ${value.error.message}` }]
+  }
+  if (value.action === 'commit') {
+    const rows = value.entries.map((/** @type {{text: string, tags: string[], facet?: string}} */ entry) => `- ${entry.text}`)
+    const usage = value.usage === undefined ? '' : (zh
+      ? `\n该层用量：${value.usage.track}/${value.usage.scope} ${value.usage.used}/${value.usage.limit}`
+      : `\nlayer usage: ${value.usage.track}/${value.usage.scope} ${value.usage.used}/${value.usage.limit}`)
+    return [{ type: 'text', text: `${zh
+      ? `已写入 ${value.added} 条观察条目（source=observation；单次审批 ＋ 一次原子写）`
+      : `wrote ${value.added} observation entr${value.added === 1 ? 'y' : 'ies'} (source=observation; one approval, one atomic write)`}\n${rows.join('\n')}${usage}` }]
+  }
+  const days = Math.round((value.window.to - value.window.from) / 86400000)
+  const lines = [zh
+    ? `观察切片（只读）：窗口 ${days} 天｜候选 ${value.scanned.sessions} 会话｜读到 ${value.scanned.messages} 条真人发言（挡下 ${value.scanned.injected} 条系统注入${value.scanned.unreadable > 0 ? `，${value.scanned.unreadable} 个会话读不动` : ''}）`
+    : `observation slice (read-only): ${days}-day window | ${value.scanned.sessions} candidate session(s) | ${value.scanned.messages} real user message(s) (${value.scanned.injected} injected pseudo message(s) filtered${value.scanned.unreadable > 0 ? `, ${value.scanned.unreadable} session(s) unreadable` : ''})`]
+  lines.push(zh
+    ? `覆盖：${value.covered.sessions} 会话 / ${value.covered.messages} 条 / ${value.budget.used} 字符（预算 ${value.budget.limit}${value.budget.truncated ? '，已到顶' : '，未到顶'}）`
+    : `covered: ${value.covered.sessions} session(s) / ${value.covered.messages} message(s) / ${value.budget.used} of ${value.budget.limit} chars${value.budget.truncated ? ' (budget reached)' : ''}`)
+  if (value.uncovered.sessions > 0 || value.uncovered.days > 0) {
+    lines.push(zh
+      ? `未覆盖：${value.uncovered.sessions} 个会话 / ${value.uncovered.days} 天 / ${value.uncovered.messages} 条（这就是没看到的部分）`
+      : `NOT covered: ${value.uncovered.sessions} session(s) / ${value.uncovered.days} day(s) / ${value.uncovered.messages} message(s) (that is what you did not see)`)
+  }
+  if (value.covered.messages === 0) {
+    lines.push(zh
+      ? '切片里没有可用证据：窗口内的发言要么是系统注入的伪发言，要么为空。'
+      : 'the slice carries no usable evidence: everything in this window was an injected pseudo message, or empty.')
+  }
+  if (value.selfOnly === true) {
+    lines.push(zh ? '本会话没有 cwd：只读当前会话自己，不跨会话。' : 'this session has no cwd: only the current session was read, never another.')
+  }
+  if (value.clamped.length > 0) {
+    lines.push(zh
+      ? `已钳制入参：${value.clamped.map((/** @type {{key: string, requested: number, applied: number}} */ c) => `${c.key} ${c.requested} → ${c.applied}`).join('、')}`
+      : `arguments clamped: ${value.clamped.map((/** @type {{key: string, requested: number, applied: number}} */ c) => `${c.key} ${c.requested} → ${c.applied}`).join(', ')}`)
+  }
+  lines.push('', value.slice)
+  return [{ type: 'text', text: lines.join('\n') }]
+}
+
 /**
  * 补默认后的运行时配置（组合层与 settings 解析层同形）。
  * @typedef {object} MemoryRuntimeValues
@@ -929,6 +1462,7 @@ export function renderMemoryProfileResult(/** @type {object} */ _args, /** @type
  * @property {number} commandListLimit
  * @property {number} commandAuditLimit
  * @property {{historyLimitDefault: number, snippetCap: number, snippetChars: number, windowDays: number}} recall
+ * @property {{days: number, sessions: number, perSession: number, messageChars: number, totalChars: number}} observe
  * @property {{vector: boolean}} retrieval
  * @property {number} panelEntriesLimit
  * @property {number} panelAuditLimit
@@ -968,6 +1502,13 @@ function resolveComposed(config) {
       snippetCap: config.recall?.snippetCap ?? 5,
       snippetChars: config.recall?.snippetChars ?? 300,
       windowDays: config.recall?.windowDays ?? 30,
+    },
+    observe: {
+      days: config.observe?.days ?? DEFAULT_OBSERVE.days,
+      sessions: config.observe?.sessions ?? DEFAULT_OBSERVE.sessions,
+      perSession: config.observe?.perSession ?? DEFAULT_OBSERVE.perSession,
+      messageChars: config.observe?.messageChars ?? DEFAULT_OBSERVE.messageChars,
+      totalChars: config.observe?.totalChars ?? DEFAULT_OBSERVE.totalChars,
     },
     retrieval: {
       vector: config.retrieval?.vector ?? false,
@@ -1013,6 +1554,15 @@ function validateMemoryConfig(values) {
   for (const [key, value] of Object.entries(values.recall)) {
     if (!Number.isInteger(value) || value <= 0) {
       throw new InvalidInputError(`yammory_system config: recall.${key} must be a positive integer`)
+    }
+  }
+  for (const [key, value] of Object.entries(values.observe)) {
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new InvalidInputError(`yammory_system config: observe.${key} must be a positive integer`)
+    }
+    const ceiling = /** @type {Record<string, number>} */ (OBSERVE_LIMITS)[key]
+    if (value > ceiling) {
+      throw new InvalidInputError(`yammory_system config: observe.${key} must not exceed the hard limit ${ceiling} (got ${value})`)
     }
   }
   if (!Number.isInteger(values.panelEntriesLimit) || values.panelEntriesLimit <= 0) {
@@ -1240,6 +1790,7 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
 
   ctx.tools.register(/** @type {import('@deepseek-ai/dsh-tools').ToolDefinition} */ (makeMemoryTool(service, resolved.language)))
   ctx.tools.register(/** @type {import('@deepseek-ai/dsh-tools').ToolDefinition} */ (makeMemoryProfileTool(service, resolved.language)))
+  ctx.tools.register(/** @type {import('@deepseek-ai/dsh-tools').ToolDefinition} */ (makeMemoryObserveTool(service, ctx, live)))
 
   // 预热段注入（分路注入的「普遍相关」半边）：会话首个 assemble 时同步读库渲染，
   // WeakMap 按 Session 冻结——冻结机制与 memento 原语义一致，变的只是内容构成：
@@ -1304,7 +1855,7 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
 
   // V2 观察面：/memory 命令（用户触发）、memory_recall 工具、面板 JSON 路由。
   // commands/webServer 为可选服务，缺失（headless）自动跳过。
-  registerCommands(ctx, service)
+  registerCommands(ctx, service, live)
   ctx.tools.register(/** @type {import('@deepseek-ai/dsh-tools').ToolDefinition} */ (makeMemoryRecallTool(service, ctx, live)))
   registerWebRoutes(ctx, service, live)
 
@@ -1481,12 +2032,16 @@ function makeCommandGate(ctx, write) {
  * @property {(id: string) => string} adapterUnknown
  * @property {(id: string, message: string) => string} adapterPayload
  * @property {(n: number, id: string) => string} adapterImported
+ * @property {string} observeUsage
+ * @property {string} observeUnavailable
+ * @property {string} observeHint
+ * @property {(message: string) => string} observeFailed
  * @property {(verb: string) => string} unknownVerb
  * @property {(message: string) => string} commandFailed
  */
 const COMMAND_TEXT = /** @type {{en: CommandTextBundle, zh: CommandTextBundle}} */ ({
   en: {
-    usage: 'Usage: /memory list | query <word> | add <text> | remove <substring> | consolidate <substring...> => <new text> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path>',
+    usage: 'Usage: /memory list | query <word> | add <text> | remove <substring> | consolidate <substring...> => <new text> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path> | observe [--days=N]',
     memoryEmpty: 'Memory is empty.',
     entries: (total, shown) => `Memory entries (${total} total, showing first ${shown}):`,
     entriesFull: (total) => `Memory entries (${total}):`,
@@ -1529,11 +2084,15 @@ const COMMAND_TEXT = /** @type {{en: CommandTextBundle, zh: CommandTextBundle}} 
     adapterUnknown: (id) => `no memory adapter "${id}" is registered; run /memory adapters`,
     adapterPayload: (id, message) => `adapter ${id} rejected the payload: ${message}`,
     adapterImported: (n, id) => `Imported ${n} entries via adapter ${id} (single approval; budgets re-checked). Entries get fresh ids and timestamps.`,
-    unknownVerb: (verb) => `Unknown subcommand "${verb}". Usage: /memory list | query <word> | add <text> | remove <substring> | consolidate <substring...> => <new text> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path>`,
+    observeUsage: 'observe usage: /memory observe [--days=N] [--sessions=N] [--per-session=N] [--chars=N] [--budget=N] — read-only scan of your own past messages (no approval, no writes). Parameters are clamped to the hard limits; the output states what was NOT covered. To have the model infer from it, just say "observe me".',
+    observeUnavailable: 'observe: this profile provides no session-query service, so conversation history cannot be read.',
+    observeHint: 'Hand this slice to the model for inference: say "observe me" (the yammory-observe skill drives memory_observe commit through the approval gate). This command itself only reads — nothing was written.',
+    observeFailed: (message) => `observe scan failed: ${message}`,
+    unknownVerb: (verb) => `Unknown subcommand "${verb}". Usage: /memory list | query <word> | add <text> | remove <substring> | consolidate <substring...> => <new text> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path> | observe [--days=N]`,
     commandFailed: (message) => `memory command failed: ${message}`,
   },
   zh: {
-    usage: '用法：/memory list | query <词> | add <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径>',
+    usage: '用法：/memory list | query <词> | add <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径> | observe [--days=N]',
     memoryEmpty: '记忆为空。',
     entries: (total, shown) => `记忆条目（共 ${total} 条，显示前 ${shown} 条）：`,
     entriesFull: (total) => `记忆条目（${total} 条）：`,
@@ -1576,7 +2135,11 @@ const COMMAND_TEXT = /** @type {{en: CommandTextBundle, zh: CommandTextBundle}} 
     adapterUnknown: (id) => `没有注册记忆适配器「${id}」；请运行 /memory adapters`,
     adapterPayload: (id, message) => `适配器 ${id} 拒绝了载荷：${message}`,
     adapterImported: (n, id) => `已通过适配器 ${id} 导入 ${n} 条记忆（单次审批；预算已复检）。条目获得新 id 与新时间戳。`,
-    unknownVerb: (verb) => `未知子命令「${verb}」。用法：/memory list | query <词> | add <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径>`,
+    observeUsage: 'observe 用法：/memory observe [--days=N] [--sessions=N] [--per-session=N] [--chars=N] [--budget=N]——只读扫描你自己的旧发言（无审批、不写入）。参数会被夹到硬上限；输出会写明「没看到哪些」。想让模型据此推断，直接说「观察一下我」。',
+    observeUnavailable: 'observe：本 profile 未提供 session-query 服务，读不到会话历史。',
+    observeHint: '把这段交给模型推断：说「观察一下我」（yammory-observe skill 会引导 memory_observe commit 走审批门落库）。本命令自身只读，没有写入任何东西。',
+    observeFailed: (message) => `observe 扫描失败：${message}`,
+    unknownVerb: (verb) => `未知子命令「${verb}」。用法：/memory list | query <词> | add <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径> | observe [--days=N]`,
     commandFailed: (message) => `memory 命令失败：${message}`,
   },
 })
@@ -1584,12 +2147,12 @@ const COMMAND_TEXT = /** @type {{en: CommandTextBundle, zh: CommandTextBundle}} 
 /** 命令注册描述与输入提示（双语）。 */
 const COMMAND_DESCRIPTION = /** @type {{en: {description: string, hint: string}, zh: {description: string, hint: string}}} */ ({
   en: {
-    description: 'View/manage yammory_system memory: list | query <word> | add [--track=user|agent] [--scope=user-global|workspace] <text> | remove <substring> | consolidate <substring...> => <new text> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path>',
-    hint: 'list | query <word> | add <text> | remove <substring> | consolidate <substring...> => <new text> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path>',
+    description: 'View/manage yammory_system memory: list | query <word> | add [--track=user|agent] [--scope=user-global|workspace] <text> | remove <substring> | consolidate <substring...> => <new text> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path> | observe [--days=N]',
+    hint: 'list | query <word> | add <text> | remove <substring> | consolidate <substring...> => <new text> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path> | observe [--days=N]',
   },
   zh: {
-    description: '查看/管理 yammory_system 记忆：list | query <词> | add [--track=user|agent] [--scope=user-global|workspace] <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径>',
-    hint: 'list | query <词> | add <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径>',
+    description: '查看/管理 yammory_system 记忆：list | query <词> | add [--track=user|agent] [--scope=user-global|workspace] <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径> | observe [--days=N]',
+    hint: 'list | query <词> | add <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径> | observe [--days=N]',
   },
 })
 
@@ -1599,8 +2162,9 @@ const COMMAND_DESCRIPTION = /** @type {{en: {description: string, hint: string},
  * profile（headless）自动跳过。
  * @param {import('@deepseek-ai/cordis').Context} ctx - Cordis 上下文。
  * @param {MemoryService} service - ctx.memory。
+ * @param {{observe: {days: number, sessions: number, perSession: number, messageChars: number, totalChars: number}, language: 'en'|'zh'}} [live] - 运行期可变值容器（observe 子命令读热值）。
  */
-export function registerCommands(ctx, service) {
+export function registerCommands(ctx, service, live) {
   withService(ctx, 'commands', (/** @type {{register?: (def: object) => unknown} | null | undefined} */ commands) => {
     if (typeof commands?.register !== 'function') return
     const meta = COMMAND_DESCRIPTION[service.language] ?? COMMAND_DESCRIPTION.en
@@ -1608,7 +2172,7 @@ export function registerCommands(ctx, service) {
       name: 'memory',
       description: meta.description,
       input: { hint: meta.hint },
-      handler: async (/** @type {{rawInput?: unknown, agent?: unknown, signal?: AbortSignal}} */ invocation) => handleMemoryCommand(ctx, service, invocation),
+      handler: async (/** @type {{rawInput?: unknown, agent?: unknown, signal?: AbortSignal}} */ invocation) => handleMemoryCommand(ctx, service, invocation, live),
     })
   })
 }
@@ -1618,11 +2182,12 @@ export function registerCommands(ctx, service) {
  * @param {import('@deepseek-ai/cordis').Context} ctx - Cordis 上下文。
  * @param {MemoryService} service - ctx.memory。
  * @param {object} invocation - {rawInput, agent, signal}。
+ * @param {{observe: {days: number, sessions: number, perSession: number, messageChars: number, totalChars: number}, language: 'en'|'zh'}} [live] - 运行期可变值容器（observe 子命令读热值；缺省回退默认值）。
  * @returns {Promise<{kind: 'success'|'error', text: string}>}。
  */
-export async function handleMemoryCommand(ctx, service, /** @type {{rawInput?: unknown, agent?: {session?: MemorySessionLike | null} | null, signal?: AbortSignal}} */ invocation) {
+export async function handleMemoryCommand(ctx, service, /** @type {{rawInput?: unknown, agent?: {session?: MemorySessionLike | null} | null, signal?: AbortSignal}} */ invocation, live) {
   try {
-    return await runMemoryCommand(ctx, service, invocation)
+    return await runMemoryCommand(ctx, service, invocation, live)
   } catch (error) {
     const text = COMMAND_TEXT[service.language] ?? COMMAND_TEXT.en
     if (error instanceof MemoryError) return { kind: 'error', text: `memory ${String(error.code)}: ${error.message}` }
@@ -1636,9 +2201,10 @@ export async function handleMemoryCommand(ctx, service, /** @type {{rawInput?: u
  * @param {import('@deepseek-ai/cordis').Context} ctx - Cordis 上下文。
  * @param {MemoryService} service - ctx.memory。
  * @param {{rawInput?: unknown, agent?: {session?: MemorySessionLike | null} | null, signal?: AbortSignal}} invocation - {rawInput, agent, signal}。
+ * @param {{observe: {days: number, sessions: number, perSession: number, messageChars: number, totalChars: number}, language: 'en'|'zh'}} [live] - 运行期可变值容器。
  * @returns {Promise<{kind: 'success' | 'error', text: string}>}。
  */
-async function runMemoryCommand(ctx, service, invocation) {
+async function runMemoryCommand(ctx, service, invocation, live) {
   const text = COMMAND_TEXT[service.language] ?? COMMAND_TEXT.en
   const raw = String(invocation?.rawInput ?? '').trim()
   const [verb, ...rest] = raw.split(/\s+/)
@@ -1844,9 +2410,63 @@ async function runMemoryCommand(ctx, service, invocation) {
       )
       return { kind: 'success', text: text.consolidated(track, scope, result.removed.length, result.entry.text, result.usage.used, result.usage.limit) }
     }
+    case 'observe': {
+      // 观察通道的命令面：只读扫描 ＋ 打印切片与账单。推断由模型做（本命令不叫模型、
+      // 不写库）；参数与工具面同一套钳制，故模型/用户都无法放大预算。
+      const parsed = parseObserveFlags(rest)
+      if (parsed === null) return { kind: 'error', text: text.observeUsage }
+      const sessionQuery = ctx.get('sessionQuery')
+      if (sessionQuery === undefined || sessionQuery === null) return { kind: 'error', text: text.observeUnavailable }
+      const runtime = live ?? { observe: DEFAULT_OBSERVE, language: service.language }
+      /** @type {Awaited<ReturnType<typeof scanObservationHistory>>} */
+      let scanned
+      try {
+        scanned = await scanObservationHistory(ctx, runtime, parsed, {
+          agent: invocation?.agent ?? null,
+          signal: invocation?.signal,
+        })
+      } catch (error) {
+        if (error instanceof MemoryError) return { kind: 'error', text: text.observeFailed(error.message) }
+        throw error
+      }
+      const value = observationScanValue(scanned)
+      const rendered = renderMemoryObserveResult({}, value, runtime.language)[0].text
+      const session = invocation?.agent?.session
+      if (typeof session?.id === 'string') {
+        service.store.auditAppend({
+          action: 'observed',
+          track: null,
+          scope: null,
+          entryId: null,
+          text: `command observe days=${scanned.options.days} covered=${scanned.slice.covered.sessions}/${scanned.slice.scanned.sessions} session(s), ${scanned.slice.covered.messages} message(s), ${scanned.slice.budget.used}/${scanned.slice.budget.limit} chars${scanned.slice.budget.truncated ? ' (truncated)' : ''}`,
+          outcome: 'ok',
+          source: OBSERVATION_SOURCE,
+          sessionId: session.id,
+        })
+      }
+      return { kind: 'success', text: `${rendered}\n\n${text.observeHint}` }
+    }
     default:
       return { kind: 'error', text: text.unknownVerb(verb) }
   }
+}
+
+/**
+ * 解析 /memory observe 的 `--key=value` 标志（未知键或非数值即报用法；空数组合法 = 全默认）。
+ * 只认观察通道的五个参数键，与工具面的键一一对应。
+ * @param {string[]} args - 命令参数。
+ * @returns {{days?: number, sessions?: number, perSession?: number, messageChars?: number, totalChars?: number} | null} 参数对象；非法返回 null。
+ */
+function parseObserveFlags(args) {
+  /** @type {{days?: number, sessions?: number, perSession?: number, messageChars?: number, totalChars?: number}} */
+  const flags = {}
+  for (const arg of args) {
+    const match = /^--(days|sessions|per-session|chars|budget)=(\d+)$/.exec(arg)
+    if (match === null) return null
+    const key = match[1] === 'per-session' ? 'perSession' : match[1] === 'chars' ? 'messageChars' : match[1] === 'budget' ? 'totalChars' : match[1]
+    flags[/** @type {keyof typeof flags} */ (key)] = Number(match[2])
+  }
+  return flags
 }
 
 /** 读取 ctx.memoryAdapters（命令路径用）；缺失返回 null（headless 未挂载时响亮报缺）。 */

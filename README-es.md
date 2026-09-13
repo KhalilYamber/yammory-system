@@ -35,7 +35,7 @@
 - **Visible para el modelo ⟺ registrado.** La instantánea inyectada llega textualmente a `system/message`; cada escritura es reconstruible a partir de `approval/asked` + `approval/decided` + la propia tabla de auditoría del plugin.
 - **Acotada y honesta.** Presupuestos estrictos de caracteres por pista y por capa (por defecto usuario 2000 / agente 4000). Un almacén lleno falla con un error estructurado (uso + límite): nunca se trunca, nunca se compacta automáticamente.
 
-Dos pistas × dos capas × clave por agente: una pista `user` (hechos sobre el usuario) y una pista `agent` (hechos de entorno y convenciones), cada una dividida en capas `user-global` y `workspace`, aisladas por `agentPreset`. La instantánea se congela una vez por sesión en el primer ensamblado del prompt y nunca cambia a mitad de sesión.
+Dos pistas × dos capas × clave por agente: una pista `user` (hechos sobre el usuario) y una pista `agent` (hechos de entorno y convenciones), cada una dividida en capas `user-global` y `workspace`, aisladas por `agentPreset`. La instantánea se congela una vez por sesión en el primer ensamblado del prompt y nunca cambia a mitad de sesión. El bloque de precalentamiento lleva las restricciones de expresión y el perfil permanente, y cierra con un directorio de una línea (`N more workspace / agent-track entries stay out of this block`) para que el modelo sepa que hay algo que traer con `memory_recall`: solo el recuento, el contenido sigue a demanda.
 
 ## Quick start
 
@@ -81,6 +81,11 @@ Todos los parámetros son campos Schemastery `Config` (modificables desde cordis
 | `recall.snippetCap` | `5` | Fragmentos por sesión en `memory_recall` |
 | `recall.snippetChars` | `300` | Caracteres de fragmento en `memory_recall` |
 | `recall.windowDays` | `30` | Ventana de antigüedad en días de `memory_recall` |
+| `observe.days` | `14` | Ventana en días de `memory_observe scan` (tope duro 90) |
+| `observe.sessions` | `8` | Sesiones recientes muestreadas por escaneo (tope duro 20) |
+| `observe.perSession` | `12` | Mensajes muestreados por sesión, repartidos de forma uniforme para conservar tanto la apertura como las correcciones posteriores (tope duro 20) |
+| `observe.messageChars` | `400` | Tope de caracteres por mensaje antes de truncar con puntos suspensivos (tope duro 800) |
+| `observe.totalChars` | `12000` | Presupuesto de caracteres de todo el fragmento; el escaneo se detiene ahí e informa lo que no pudo cubrir (tope duro 30000) |
 | `retrieval.vector` | `false` | Interruptor de recuperación semántica: `true` activa la recuperación vectorial de `memory_recall` (incrustación hash falsa) cuando hay un proveedor de incrustación; en caso contrario se mantiene el recuperador keyword sin dependencias (tokenización CJK en bigramas, coincidencia por cualquier token, orden por relevancia) |
 | `panelEntriesLimit` | `200` | Tamaño de página de entradas del panel web |
 | `panelAuditLimit` | `20` | Filas de auditoría del panel web por defecto |
@@ -97,7 +102,9 @@ Todos los parámetros son campos Schemastery `Config` (modificables desde cordis
 | `memory_profile` | tool | Nivel de conocimiento por dominio sobre la escala de 31 subdominios (`set` / `list` / `get`); `set` pasa por la puerta de aprobación y queda auditado, `tier` se deriva de `level` |
 | `yammory-survey` | skill | Cuestionario de perfil iniciado por el usuario que cubre los 24 subbloques aptos para cuestionario; escribe mediante `memory` + `memory_profile`. Código fuente: `skills/yammory-survey/` |
 | `memory_recall` | tool | Coincidencias acotadas de memoria (consulta tokenizada: bigramas CJK, palabras latinas tal cual; cualquier token recupera, ordenado por relevancia) más coincidencias recientes del historial de sesión |
-| `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` |
+| `memory_observe` | tool | Canal de observación: `scan` lee un fragmento acotado de los mensajes pasados del propio usuario (solo lectura, acotado por `cwd`, los pseudomensajes inyectados por el sistema se filtran y se cuentan, y el déficit de presupuesto se informa); `commit` escribe 1..8 entradas con evidencia en un lote atómico con una sola aprobación y `source: observation` |
+| `yammory-observe` | skill | Observación conductual iniciada por el usuario que escribe las cinco facetas solo observables (estilo de pensamiento, carácter ante la dificultad, patrones emocionales, autoimagen, estilo de decisión) mediante `memory_observe`. Código fuente: `skills/yammory-observe/` |
+| `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` · `observe [--days=N]` |
 | web panel | client drawer | Solo lectura: explorar entradas, buscar, barras de presupuesto, cola de auditoría; el botón flotante puede ocultarse (`panel.enabled`) |
 | settings section | Barra lateral de ajustes de DSH → `yammory-system` | Edita todos los campos de configuración (salvo `enabled`) sin tocar archivos; el momento de aplicación (en vivo o tras recarga) se indica en la página |
 
@@ -195,6 +202,7 @@ El nombre es **`yammory_system`** (publicado en npm y GitHub). No `dsh-recall` (
 - **Los eventos de sesión están declarados, aún no emitidos (rc.2).** `memory/added|updated|removed|recalled|snapshot` están declarados por fusión, pero rc.2 no tiene superficie de registro para tipos de evento fuera del repo; la emisión se activa cuando una build del harness los registre.
 - **La política `ask` necesita un answerer.** Sin un answerer UI/ACP compuesto, las escrituras fallan cerradas.
 - **Sin indexado FTS5.** La búsqueda por subcadena usa `instr` insensible a mayúsculas (correcto para CJK).
+- **La observación es una lista blanca, y la lista blanca tiene un borde.** `memory_observe scan` solo conserva eventos `user/message` cuyo `source.kind` es `user` o `user-rpc`; medido en esta máquina, eso descarta el 48% de todos los eventos `user/message` (contexto de ejecución, AGENTS.md, catálogos de skills, rondas de objetivo, avisos de subagentes). No puede, sin embargo, separar un mensaje escrito por una persona de uno inyectado por un puente externo que también declara `kind: 'user'`: el log solo lleva esa señal. Trata una cita aislada como evidencia débil; exige repetición entre sesiones.
 
 ## What we learned from the terminal memories
 

@@ -34,7 +34,7 @@
 - **Model-visible ⟺ logged.** The injected snapshot lands verbatim in `system/message`; every write is reconstructable from `approval/asked` + `approval/decided` + the plugin's own audit table.
 - **Bounded and honest.** Hard per-track/per-layer character budgets (default user 2000 / agent 4000). A full store fails with a structured error (usage + limit) — never truncated, never auto-compacted.
 
-Two tracks × two layers × per-agent key: a `user` track (facts about the user) and an `agent` track (environment facts and conventions), each split into `user-global` and `workspace` layers, isolated per `agentPreset`. The snapshot is frozen once per session at first prompt assembly and never changes mid-session.
+Two tracks × two layers × per-agent key: a `user` track (facts about the user) and an `agent` track (environment facts and conventions), each split into `user-global` and `workspace` layers, isolated per `agentPreset`. The snapshot is frozen once per session at first prompt assembly and never changes mid-session. The warm-up block carries the speaking constraints and the standing profile, and closes with a one-line directory (`N more workspace / agent-track entries stay out of this block`) so the model knows there is something to fetch with `memory_recall` — the count is one line, the content stays on demand.
 
 ## Quick start
 
@@ -78,6 +78,11 @@ All tunables are Schemastery `Config` fields (changeable from cordis.yml). Inval
 | `recall.snippetCap` | `5` | `memory_recall` snippets per session |
 | `recall.snippetChars` | `300` | `memory_recall` snippet characters |
 | `recall.windowDays` | `30` | `memory_recall` recency window in days |
+| `observe.days` | `14` | `memory_observe scan` window in days (hard-capped at 90) |
+| `observe.sessions` | `8` | Recent sessions sampled per scan (hard-capped at 20) |
+| `observe.perSession` | `12` | Messages sampled per session, spread evenly so the opening and the later corrections both survive (hard-capped at 20) |
+| `observe.messageChars` | `400` | Per-message character cap before truncation with an ellipsis (hard-capped at 800) |
+| `observe.totalChars` | `12000` | Character budget for the whole slice; the scan stops there and reports what it could not cover (hard-capped at 30000) |
 | `retrieval.vector` | `false` | Semantic recall switch: `true` enables `memory_recall` vector recall (fake hash embedding) when an embedding provider is available; otherwise the zero-dependency keyword retriever (CJK bigram tokenizing, any-token match, relevance ranking) stays in place |
 | `panelEntriesLimit` | `200` | Web panel entries page size |
 | `panelAuditLimit` | `20` | Web panel audit rows by default |
@@ -94,7 +99,9 @@ All tunables are Schemastery `Config` fields (changeable from cordis.yml). Inval
 | `memory_profile` | tool | Per-domain knowledge level over the 31-subdomain scale (`set` / `list` / `get`); `set` is approval-gated and audited, `tier` derives from `level` |
 | `yammory-survey` | skill | User-initiated profile questionnaire covering the 24 questionnaire-legal sub-blocks; writes through `memory` + `memory_profile`. Source: `skills/yammory-survey/` |
 | `memory_recall` | tool | Bounded memory matches (query tokenized: CJK bigrams, Latin words as-is; any token recalls, ranked by relevance) plus recent session-history matches |
-| `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` |
+| `memory_observe` | tool | Observation channel: `scan` reads a bounded slice of the user's OWN past messages (read-only, `cwd`-scoped, system-injected pseudo messages filtered out and counted, budget shortfall reported); `commit` writes 1..8 evidence-backed entries in one approval-gated atomic batch with `source: observation` |
+| `yammory-observe` | skill | User-initiated behavioural observation writing the five observation-only faces (thinking style, character under difficulty, emotional patterns, self-image, decision style) through `memory_observe`. Source: `skills/yammory-observe/` |
+| `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` · `observe [--days=N]` |
 | web panel | client drawer | Read-only: browse entries, search, budget bars, audit tail; the floating entry button can be hidden (`panel.enabled`) |
 | settings section | DSH settings sidebar → `yammory-system` | Edit every config field (except `enabled`) without touching files; live vs reload-required timing is marked on the page |
 
@@ -192,6 +199,7 @@ The name is **`yammory_system`** (published on npm and GitHub). Not `dsh-recall`
 - **Session events are declared, not yet emitted (rc.2).** `memory/added|updated|removed|recalled|snapshot` are merge-declared, but rc.2 has no registration surface for out-of-repo event types; emission turns on once a harness build registers them.
 - **`ask` policy needs an answerer.** With no UI/ACP answerer composed, writes fail closed.
 - **No FTS5 indexing.** Substring search runs on case-insensitive `instr` (correct for CJK).
+- **Observation is a whitelist, and the whitelist has an edge.** `memory_observe scan` keeps only `user/message` events whose `source.kind` is `user` or `user-rpc`; measured on this machine, that drops 48% of all `user/message` events (runtime context, AGENTS.md, skill catalogs, goal rounds, subagent notices). It cannot, however, separate a human-typed message from an externally bridged one that also declares `kind: 'user'` — the kind is the only signal the log carries. Treat a single quoted line as weak evidence; require repetition across sessions.
 
 ## What we learned from the terminal memories
 

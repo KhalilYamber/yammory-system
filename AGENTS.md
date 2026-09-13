@@ -21,6 +21,7 @@ lib/snapshot.mjs     预热段 + 冻结快照渲染（纯函数，零依赖）
 lib/constraint.mjs   表达约束生成：分领域水平 → 四档说话要求（纯函数，零依赖）
 lib/workspace.mjs    工作区键规范化（Windows 大小写不敏感，零依赖）
 lib/extract.mjs      会话事件文本抽取（memory_recall 历史片段用，零依赖）
+lib/observe.mjs      观察通道纯函数核心（闸一授权收窄 / 闸二真人发言白名单 / 均匀采样 / 预算记账 / 观察条目组装，零依赖）
 lib/strings.mjs      模型可见/命令面双语词表（预热头/约束头/四档说话要求/分组标题/提案头，零依赖）
 lib/store.mjs        node:sqlite Provider：条目表+审计账本+迁移（零依赖）
 lib/retrieval.mjs    可插拔检索 Provider seam：substring 主路径 + vector 可选后端（零 DSH 依赖）

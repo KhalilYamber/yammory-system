@@ -1,5 +1,6 @@
 // test/snapshot.test.mjs — 冻结快照渲染单测：分组/排序/用量头/空态/可见性；
-// S2 追加预热段（表达约束 + 常驻画像）与常驻半边过滤的断言。
+// S2 追加预热段（表达约束 + 常驻画像）与常驻半边过滤的断言；
+// S4b-6 追加末行「一行目录」（按需条目只报条数）。
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -156,6 +157,25 @@ test('S2：待审批提案块保留在预热段（自动采集 → 模型可见 
   const text = renderWarmup([], [], BUDGETS, 'zh', proposals)
   assert.ok(text.includes('待审批记忆提案'))
   assert.ok(text.includes('[p1] agent/workspace: 跨会话建议'))
+})
+
+test('S4b-6：末行「一行目录」只报按需条目的条数，正文一律不进预热', () => {
+  const entries = [
+    entry({ id: 'u1', track: 'user', scope: 'user-global', text: '全局偏好' }),
+    entry({ id: 'a1', track: 'agent', scope: 'workspace', text: '项目A约定', workspaceKey: '/w' }),
+    entry({ id: 'a2', track: 'agent', scope: 'user-global', text: '环境事实' }),
+  ]
+  const text = renderWarmup(entries, [], BUDGETS, 'zh')
+  assert.ok(text.includes('另有 2 条记忆不在本块'), '只报条数')
+  assert.ok(text.includes('memory_recall'), '指向按需取的入口')
+  assert.ok(!text.includes('项目A约定'), 'agent/workspace 正文不进预热')
+  assert.ok(!text.includes('环境事实'), 'agent/user-global 正文也不进预热')
+  const only = renderWarmup([entry({ id: 'a1', track: 'agent', scope: 'workspace', text: '项目A约定', workspaceKey: '/w' })], [], BUDGETS, 'zh')
+  assert.ok(only.includes('另有 1 条记忆不在本块'), '只有按需条目时也留一行（否则模型完全不知道有东西）')
+  assert.equal(renderWarmup([], [], BUDGETS, 'zh'), '', '真空库仍是空串（零 token）')
+  const en = renderWarmup(entries, [], BUDGETS)
+  assert.ok(en.includes('2 more workspace / agent-track entries stay out of this block'))
+  assert.ok(renderWarmup([entry({ id: 'a1', track: 'agent', scope: 'workspace', text: 'x', workspaceKey: '/w' })], [], BUDGETS).includes('1 more workspace / agent-track entry stays'))
 })
 
 test('S2：同一份输入两次渲染逐字一致（预热段可冻结、可进前缀缓存）', () => {

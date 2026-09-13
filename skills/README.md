@@ -4,16 +4,21 @@
 
 ```
 skills/
-  yammory-survey/
-    SKILL.md                    # 入口（frontmatter: name / description / whenToUse）
-    references/question-bank.md # 题库：24 个问卷合法子板块
+  yammory-survey/                 # 采集第一条腿：问
+    SKILL.md                      # 入口（frontmatter: name / description / whenToUse）
+    references/question-bank.md   # 题库：24 个问卷合法子板块
+  yammory-observe/                # 采集第二条腿：看（S4b）
+    SKILL.md                      # 入口
+    references/observation-facets.md  # 面手册：判据、例句、证据门槛
 ```
+
+两条腿的分工：**问卷问「你想要什么」，观察看「你实际怎么做」**。问卷覆盖 24 个非观察子板块；观察覆盖 5 个仅观察面（思维方式与思辨 / 人格特质 / 情绪模式与心理强度 / 自我认知 / 决策与行动风格）。两者都写同一套画像（`memory` 的 `facet` ＋ `tags`，能力面走 `memory_profile`），冲突时分面裁决、并存不删。
 
 ## 安装到 DSH 用户级 skill 目录
 
-DSH 的本地 skill 提供方按 rank 扫描若干根目录，其中**用户级 DSH 目录**是 `<dshHome>/skills`（默认 `~/.dsh/skills`，`DSH_HOME` 环境变量可覆盖）。把 `yammory-survey/` 整个目录放进该根目录即可——本地提供方接受目录包形式 `<name>/SKILL.md`。
+DSH 的本地 skill 提供方按 rank 扫描若干根目录，其中**用户级 DSH 目录**是 `<dshHome>/skills`（默认 `~/.dsh/skills`，`DSH_HOME` 环境变量可覆盖）。把 skill 目录整个放进该根目录即可——本地提供方接受目录包形式 `<name>/SKILL.md`。
 
-> 注意：**不支持嵌套递归发现**（`**/SKILL.md` 不会被扫到）。目录必须**直接**位于 skills 根下，即 `~/.dsh/skills/yammory-survey/SKILL.md`。
+> 注意：**不支持嵌套递归发现**（`**/SKILL.md` 不会被扫到）。目录必须**直接**位于 skills 根下，即 `~/.dsh/skills/yammory-observe/SKILL.md`。
 
 ### 方式 A：复制（一次性快照）
 
@@ -21,12 +26,14 @@ DSH 的本地 skill 提供方按 rank 扫描若干根目录，其中**用户级 
 # Windows PowerShell
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.dsh\skills" | Out-Null
 Copy-Item -Recurse -Force "D:\GitHub_place\记忆系统\skills\yammory-survey" "$env:USERPROFILE\.dsh\skills\"
+Copy-Item -Recurse -Force "D:\GitHub_place\记忆系统\skills\yammory-observe" "$env:USERPROFILE\.dsh\skills\"
 ```
 
 ```sh
 # POSIX
 mkdir -p ~/.dsh/skills
 cp -R /path/to/yammory-system/skills/yammory-survey ~/.dsh/skills/
+cp -R /path/to/yammory-system/skills/yammory-observe ~/.dsh/skills/
 ```
 
 优点：干净、与仓库解耦。缺点：仓库更新后要重新复制。
@@ -38,36 +45,43 @@ cp -R /path/to/yammory-system/skills/yammory-survey ~/.dsh/skills/
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.dsh\skills" | Out-Null
 New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\skills\yammory-survey" `
   -Target "D:\GitHub_place\记忆系统\skills\yammory-survey"
+New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\skills\yammory-observe" `
+  -Target "D:\GitHub_place\记忆系统\skills\yammory-observe"
 ```
 
 ```sh
 # POSIX
 mkdir -p ~/.dsh/skills
 ln -s /path/to/yammory-system/skills/yammory-survey ~/.dsh/skills/yammory-survey
+ln -s /path/to/yammory-system/skills/yammory-observe ~/.dsh/skills/yammory-observe
 ```
 
 优点：改仓库即改 skill，无需重装。缺点：删仓库目录会留下悬空链接。
+
+**项目级安装**（不改用户目录）：把同样的联接建在 `<repo>/.dsh/skills/` 下。DSH 会话的 cwd 落在该仓库内时，项目级 skill 根同样被扫描；`.dsh/` 已在 `.gitignore` 里，属本地工程面。
 
 若 `DSH_HOME` 指向别处，把上面路径里的 `~/.dsh` 换成 `$DSH_HOME`。
 
 ## 验证 DSH 能发现它
 
-1. **文件就位**：`<dshHome>/skills/yammory-survey/SKILL.md` 存在，且 frontmatter 的 `name` 是 kebab-case、与目录名一致。
+1. **文件就位**：`<dshHome>/skills/<skill-name>/SKILL.md` 存在，且 frontmatter 的 `name` 是 kebab-case、与目录名一致。
 2. **机械门**（仓库内，不依赖 DSH 运行）：
    ```sh
    npm run verify:skill
    ```
-   校验 frontmatter 齐备合法、目录名与 `name` 一致、`references/` 引用不漏文件。
-3. **DSH 侧**：DSH 会 watch skills 根目录的新增条目；装好后新开（或刷新）会话，模型侧目录 `<available_skills>` 与用户面 skill 列表里应出现 `yammory-survey`。让 agent 调一次 `skill({ name: 'yammory-survey' })` 能取回正文即为发现成功。
+   逐个校验 `skills/` 下每个 skill 目录：frontmatter 齐备合法、目录名与 `name` 一致、`references/` 引用不漏文件。
+3. **DSH 侧**：DSH 会 watch skills 根目录的新增条目；装好后新开（或刷新）会话，模型侧目录 `<available_skills>` 与用户面 skill 列表里应出现 `yammory-survey` 与 `yammory-observe`。让 agent 调一次 `skill({ name: 'yammory-observe' })` 能取回正文即为发现成功。
 
 ## 触发
 
-| 触发方式 | 例子 |
-|---|---|
-| 用户口头 | 「做画像问卷」「更新画像」「补一下我的画像」「yammory survey」 |
-| 用户面 skill 列表 | 在 DSH GUI 的 skill 列表里选 `yammory-survey` 加载 |
+| skill | 用户口头触发 | 用户面 skill 列表 |
+|---|---|---|
+| `yammory-survey` | 「做画像问卷」「更新画像」「补一下我的画像」「yammory survey」 | 在 DSH GUI 的 skill 列表里选 `yammory-survey` 加载 |
+| `yammory-observe` | 「观察一下我」「看看你对我了解到什么程度」「从最近的聊天里看看我」「yammory observe」 | 同上，选 `yammory-observe` |
 
-skill 的纪律写死在正文里：**只由用户主动发起**，模型不得自作主张开问卷。
+两个 skill 的纪律都写死在正文里：**只由用户主动发起**，模型不得自作主张开问卷或发起观察——问卷留下的半张脏画像、观察烧掉的上下文，都比没有更糟。
+
+观察通道的模型面入口是 `memory_observe` 工具（`scan` 只读取历史切片，`commit` 走审批门落库）；命令面是 `/memory observe`（只读打印同一切片，推断仍由模型做）。
 
 ## 许可
 
