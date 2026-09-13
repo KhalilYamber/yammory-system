@@ -26,6 +26,7 @@
     "bin",
     "lib",
     "client",
+    "skills",
     "cordis.patch.yml",
     "README.md",
     "README-zh.md",
