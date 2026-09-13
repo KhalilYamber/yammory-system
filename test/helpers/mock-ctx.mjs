@@ -1,6 +1,6 @@
 // test/helpers/mock-ctx.mjs — 极简 Cordis 模拟（集成测试用）。
 //
-// 只实现 dsh-memento 用到的面：on/effect/inject/provide/get/tools.register/
+// 只实现 yammory_system 用到的面：on/effect/inject/provide/get/tools.register/
 // systemPrompt.section/waterfall/approval。语义对齐真 Cordis 的关键点：
 // - effect 回调返回清理函数，卸载时逆序执行；
 // - provide 的 disposer 与 effect 一样随卸载生效（近似 fiber 自动回收）；

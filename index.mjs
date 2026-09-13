@@ -1,4 +1,4 @@
-// index.mjs — dsh-memento 插件入口（唯一 host 面文件）。
+// index.mjs — yammory_system 插件入口（唯一 host 面文件）。
 //
 // 三角色 seam：
 // - Service Definition：ctx.memory（add/replace/remove/query/seed + budgets），
@@ -123,7 +123,7 @@ import { RetrievalProviderRegistry, SubstringRetriever, VectorRetriever, detectV
  * @property {(body: string) => unknown} end
  */
 
-export const name = 'memento'
+export const name = 'yammory_system'
 
 export const inject = ['tools', 'systemPrompt', 'approval']
 
@@ -138,7 +138,7 @@ export const DEFAULT_SNAPSHOT_ORDER = -50
 
 /**
  * 插件配置（Schemastery）。Config 是 cordis 组合面（含 enabled 整体开关）；
- * SettingsSchema 是宿主设置面板的用户面（dsh-memento namespace，无 enabled——
+ * SettingsSchema 是宿主设置面板的用户面（yammory-system namespace，无 enabled——
  * false 时插件整体卸载、namespace 随之消失，从设置页开不回来）。两者共享同一组
  * 字段 schema（SHARED_CONFIG_FIELDS），面板改的是 settings.yaml 用户层。
  * @typedef {object} Config
@@ -207,7 +207,7 @@ export const Config = Schema.object({
 })
 
 /** 宿主设置弹窗一级项（client 端 settings.section 注册以本 namespace 为 id/页面来源）。 */
-export const SETTINGS_NAMESPACE = 'dsh-memento'
+export const SETTINGS_NAMESPACE = 'yammory-system'
 
 /** 设置面板用户面 schema：共享字段 + 悬浮窗开关；无 enabled（见 Config typedef）。 */
 export const SettingsSchema = Schema.object({
@@ -311,7 +311,7 @@ function toToolError(/** @type {unknown} */ error) {
 /** 记忆工具描述：内嵌 Save/Skip 行为指引（学 Hermes 官方 memory.md 清单）。en 为源文，zh 为对应译文。 */
 const MEMORY_TOOL_DESCRIPTION = {
   en: [
-    'Read and write the bounded, layered, approval-gated cross-session memory store (dsh-memento).',
+    'Read and write the bounded, layered, approval-gated cross-session memory store (yammory_system).',
     '',
     'Tracks: "user" holds facts about the user (preferences, communication style, landmines, corrections); "agent" holds environment facts, project conventions, lessons learned, and completed-work summaries. Layers: "user-global" applies to every workspace; "workspace" applies only to the current working directory.',
     '',
@@ -323,7 +323,7 @@ const MEMORY_TOOL_DESCRIPTION = {
     'Writes (add/replace/remove/consolidate) require approval under the configured policy and are audited; reads (query) are free. replace/remove target an entry by a UNIQUE case-insensitive substring — an ambiguous match fails with the candidate list, so use a longer substring. consolidate merges 1..20 existing entries (unique substrings) into ONE new entry with a single approval and one atomic write — use it when a layer is over budget. Each session starts with a FROZEN warm-up block: the user\u2019s per-domain knowledge level (as speaking constraints) plus the standing user-global profile. That block never changes mid-session. Workspace-scoped and agent-track memory is deliberately NOT in it — fetch those on demand with memory_recall (or query).',
   ].join('\n'),
   zh: [
-    '读写有界、分层、带审批门、可审计的跨会话记忆库（dsh-memento）。',
+    '读写有界、分层、带审批门、可审计的跨会话记忆库（yammory_system）。',
     '',
     '轨道："user" 存用户相关事实（偏好、沟通风格、雷区、纠正）；"agent" 存环境事实、项目约定、教训与已完成工作总结。层："user-global" 对所有工作区生效；"workspace" 只对当前工作目录生效。',
     '',
@@ -739,53 +739,53 @@ function resolveComposed(config) {
  */
 function validateMemoryConfig(values) {
   const budgetCheck = validateBudgets(values.budgets)
-  if (!budgetCheck.ok) throw new InvalidInputError(`dsh-memento config: ${/** @type {{message: string}} */ (budgetCheck).message}`)
+  if (!budgetCheck.ok) throw new InvalidInputError(`yammory_system config: ${/** @type {{message: string}} */ (budgetCheck).message}`)
   normalizeWritePolicy(values.writePolicy)
   validateWritePolicies(values.writePolicies)
   if (values.language !== 'en' && values.language !== 'zh') {
-    throw new InvalidInputError(`dsh-memento config: language must be 'en' or 'zh' (got ${JSON.stringify(values.language)})`)
+    throw new InvalidInputError(`yammory_system config: language must be 'en' or 'zh' (got ${JSON.stringify(values.language)})`)
   }
   if (!Number.isFinite(values.snapshotOrder)) {
-    throw new InvalidInputError('dsh-memento config: snapshotOrder must be a finite number')
+    throw new InvalidInputError('yammory_system config: snapshotOrder must be a finite number')
   }
   if (!Number.isInteger(values.maxEntriesPerQuery) || values.maxEntriesPerQuery <= 0) {
-    throw new InvalidInputError('dsh-memento config: maxEntriesPerQuery must be a positive integer')
+    throw new InvalidInputError('yammory_system config: maxEntriesPerQuery must be a positive integer')
   }
   if (!Number.isInteger(values.commandListLimit) || values.commandListLimit <= 0) {
-    throw new InvalidInputError('dsh-memento config: commandListLimit must be a positive integer')
+    throw new InvalidInputError('yammory_system config: commandListLimit must be a positive integer')
   }
   if (!Number.isInteger(values.commandAuditLimit) || values.commandAuditLimit <= 0) {
-    throw new InvalidInputError('dsh-memento config: commandAuditLimit must be a positive integer')
+    throw new InvalidInputError('yammory_system config: commandAuditLimit must be a positive integer')
   }
   for (const [key, value] of Object.entries(values.recall)) {
     if (!Number.isInteger(value) || value <= 0) {
-      throw new InvalidInputError(`dsh-memento config: recall.${key} must be a positive integer`)
+      throw new InvalidInputError(`yammory_system config: recall.${key} must be a positive integer`)
     }
   }
   if (!Number.isInteger(values.panelEntriesLimit) || values.panelEntriesLimit <= 0) {
-    throw new InvalidInputError('dsh-memento config: panelEntriesLimit must be a positive integer')
+    throw new InvalidInputError('yammory_system config: panelEntriesLimit must be a positive integer')
   }
   if (!Number.isInteger(values.panelAuditLimit) || values.panelAuditLimit <= 0) {
-    throw new InvalidInputError('dsh-memento config: panelAuditLimit must be a positive integer')
+    throw new InvalidInputError('yammory_system config: panelAuditLimit must be a positive integer')
   }
   if (!Number.isInteger(values.auditRetentionDays) || values.auditRetentionDays < 0) {
-    throw new InvalidInputError('dsh-memento config: auditRetentionDays must be a non-negative integer')
+    throw new InvalidInputError('yammory_system config: auditRetentionDays must be a non-negative integer')
   }
   if (!Number.isInteger(values.proposals.maxChars) || values.proposals.maxChars <= 0) {
-    throw new InvalidInputError('dsh-memento config: proposals.maxChars must be a positive integer')
+    throw new InvalidInputError('yammory_system config: proposals.maxChars must be a positive integer')
   }
   if (!Number.isInteger(values.proposals.maxPending) || values.proposals.maxPending <= 0) {
-    throw new InvalidInputError('dsh-memento config: proposals.maxPending must be a positive integer')
+    throw new InvalidInputError('yammory_system config: proposals.maxPending must be a positive integer')
   }
   if (values.panel !== undefined && typeof values.panel.enabled !== 'boolean') {
-    throw new InvalidInputError('dsh-memento config: panel.enabled must be a boolean')
+    throw new InvalidInputError('yammory_system config: panel.enabled must be a boolean')
   }
 }
 
 /**
  * 插件挂载。enabled:false 时不注册任何东西（工具/注入/服务/审批 answerer
  * 整体消失，不留半残状态）；库损坏/迁移失败/非法配置在加载期响亮抛错（S5）。
- * settings 服务可用时注册 dsh-memento namespace：启动早于首会话的常态下，
+ * settings 服务可用时注册 yammory-system namespace：启动早于首会话的常态下，
  * 启动期字段（dbPath/snapshotOrder/auditRetentionDays/retrieval.vector）在
  * store 打开前就吃到用户层；热字段（writePolicy(s)/language/budgets/proposals/
  * 各 limit/panel）随 onChange 即时生效。服务缺失（headless）时行为与组合配置
@@ -864,7 +864,7 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
         if (next.retrieval.vector === true) {
           const retriever = buildVectorRetriever(embeddings)
           if (retriever !== null) {
-            vectorDisposer = ctx.effect(() => retrievers.register(retriever), 'dsh-memento.retrieval.vector')
+            vectorDisposer = ctx.effect(() => retrievers.register(retriever), 'yammory_system.retrieval.vector')
             live.retriever = retriever
           }
         }
@@ -937,7 +937,7 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
   })
 
   ctx.provide('memory', service)
-  ctx.effect(() => () => store.close(), 'dsh-memento.store.close')
+  ctx.effect(() => () => store.close(), 'yammory_system.store.close')
 
   // 协议 v1 适配器注册表（ctx.memoryAdapters）：第三方记忆插件可 register() 自己的
   // 适配器把外部 store 接进协议。注册可逆（register 返回 disposer，经 ctx.effect 随
@@ -945,7 +945,7 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
   const adapters = new MemoryAdapterRegistry()
   ctx.provide('memoryAdapters', adapters)
   for (const adapter of REFERENCE_ADAPTERS) {
-    ctx.effect(() => adapters.register(adapter), `dsh-memento.adapter.${adapter.id}`)
+    ctx.effect(() => adapters.register(adapter), `yammory_system.adapter.${adapter.id}`)
   }
 
   // embedding Provider seam（ctx.memoryEmbedding）：注册表 + 默认确定性伪嵌入
@@ -953,7 +953,7 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
   // 经 ctx.effect 随插件生命周期自动回收。
   const embeddings = new EmbeddingProviderRegistry()
   ctx.provide('memoryEmbedding', embeddings)
-  ctx.effect(() => embeddings.register(new FakeEmbeddingProvider()), 'dsh-memento.embedding.fake-hash')
+  ctx.effect(() => embeddings.register(new FakeEmbeddingProvider()), 'yammory_system.embedding.fake-hash')
 
   // retrieval Provider seam（ctx.memoryRetrieval）：内置 substring 检索器（零依赖
   // 主路径）+ 可选 vector 检索器。vector 仅当 Config.retrieval.vector=true 且探测到
@@ -961,11 +961,11 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
   // 装配走 buildVectorRetriever + 调用方注册：settings 回调可在运行期拆旧装新。
   const retrievers = new RetrievalProviderRegistry()
   ctx.provide('memoryRetrieval', retrievers)
-  ctx.effect(() => retrievers.register(new SubstringRetriever()), 'dsh-memento.retrieval.substring')
+  ctx.effect(() => retrievers.register(new SubstringRetriever()), 'yammory_system.retrieval.substring')
   if (live.retrieval.vector === true) {
     const initialRetriever = buildVectorRetriever(embeddings)
     if (initialRetriever !== null) {
-      vectorDisposer = ctx.effect(() => retrievers.register(initialRetriever), 'dsh-memento.retrieval.vector')
+      vectorDisposer = ctx.effect(() => retrievers.register(initialRetriever), 'yammory_system.retrieval.vector')
       live.retriever = initialRetriever
     }
   }
@@ -992,7 +992,7 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
   // 渲染文本同时进入 request/header（system 字段）→ 可自会话日志重建（S2）。
   const snapshots = new WeakMap()
   ctx.systemPrompt.section({
-    name: 'dsh-memento:memory',
+    name: 'yammory_system:memory',
     order: live.snapshotOrder,
     text: (assemble) => {
       // rc.6 实测路径：assemble 携带 agent（AssembleContext 声明面未含该字段），收窄处理。
@@ -1327,11 +1327,11 @@ const COMMAND_TEXT = /** @type {{en: CommandTextBundle, zh: CommandTextBundle}} 
 /** 命令注册描述与输入提示（双语）。 */
 const COMMAND_DESCRIPTION = /** @type {{en: {description: string, hint: string}, zh: {description: string, hint: string}}} */ ({
   en: {
-    description: 'View/manage dsh-memento memory: list | query <word> | add [--track=user|agent] [--scope=user-global|workspace] <text> | remove <substring> | consolidate <substring...> => <new text> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path>',
+    description: 'View/manage yammory_system memory: list | query <word> | add [--track=user|agent] [--scope=user-global|workspace] <text> | remove <substring> | consolidate <substring...> => <new text> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path>',
     hint: 'list | query <word> | add <text> | remove <substring> | consolidate <substring...> => <new text> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path>',
   },
   zh: {
-    description: '查看/管理 dsh-memento 记忆：list | query <词> | add [--track=user|agent] [--scope=user-global|workspace] <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径>',
+    description: '查看/管理 yammory_system 记忆：list | query <词> | add [--track=user|agent] [--scope=user-global|workspace] <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径>',
     hint: 'list | query <词> | add <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径>',
   },
 })
@@ -1711,12 +1711,12 @@ export function makeMemoryRecallTool(service, ctx, live) {
   const language = live.language
   const description = language === 'zh'
     ? [
-      '对记忆与会话历史的两段式召回：返回 (1) dsh-memento 库中与查询匹配的有界记忆条目，以及 (2) 经 session-query 服务的近期会话历史匹配。',
+      '对记忆与会话历史的两段式召回：返回 (1) yammory_system 库中与查询匹配的有界记忆条目，以及 (2) 经 session-query 服务的近期会话历史匹配。',
       '当仅凭记忆查询有歧义、或答案可能在更早的对话而非记忆中时使用。普通记忆查询请优先用 memory 工具的 action=query。',
       '查询对记忆条目是大小写不敏感子串（与 memory 工具一致），对会话历史是大小写不敏感语义文本扫描。',
     ].join('\n')
     : [
-      'Two-part recall over memory and session history: returns (1) bounded memory entries matching the query from the dsh-memento store, and (2) recent session-history matches via the session-query service.',
+      'Two-part recall over memory and session history: returns (1) bounded memory entries matching the query from the yammory_system store, and (2) recent session-history matches via the session-query service.',
       'Use when a memory query alone is ambiguous or when the answer may live in an earlier conversation rather than in memory. For plain memory lookup prefer the memory tool with action=query.',
       'The query is a case-insensitive substring for memory entries (same as the memory tool) and a case-insensitive semantic-text scan for session history.',
     ].join('\n')

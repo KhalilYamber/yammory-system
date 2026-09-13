@@ -27,7 +27,7 @@ function makeBusApproval(ctx) {
 }
 
 function mount(opts = {}) {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-prop-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-prop-'))
   const dbPath = path.join(dir, 'memory.db')
   const mock = createMockCtx()
   const approval = makeBusApproval(mock.ctx)
@@ -123,7 +123,7 @@ test('快照包含 pending 提案块（模型可见 ⟺ 随快照文本进入 re
   t.after(() => teardown(mounted))
   const { mock } = mounted
   emitCompaction(mock.ctx, makeSession({ id: 's-src' }), '跨会话建议')
-  const section = mock.sections.find((s) => s.name === 'dsh-memento:memory')
+  const section = mock.sections.find((s) => s.name === 'yammory_system:memory')
   const text = section.text({ agent: { session: makeSession({ id: 's-view' }) } })
   assert.ok(text.includes('待审批记忆提案'), '提案块进入冻结快照')
   assert.ok(text.includes('跨会话建议'))

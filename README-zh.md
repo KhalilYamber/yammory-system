@@ -1,6 +1,6 @@
 <div align="center">
 
-# dsh-memento
+# yammory_system
 - **1024 商店渠道**：先 `npm i -g dsh1024`，再 `dsh1024 plugin --profile web add dsh-memento`（计入 [deepseek1024.com](https://deepseek1024.com) 安装排行）。
 
 **给 DeepSeek Harness 补上有界、分层、带审批门、可审计的跨会话记忆。**
@@ -34,7 +34,7 @@
 
 ## What you get
 
-`dsh-memento` 是能力接缝，不是又一个仓库：一个类型安全的 `ctx.memory` 服务、一个本地 SQLite 提供方（`node:sqlite`，WAL，`0600`，位于 `$DSH_HOME/dsh-memento/memory.db`），以及它的消费方——`memory` 工具与注入系统提示的冻结快照。
+`yammory_system` 是能力接缝，不是又一个仓库：一个类型安全的 `ctx.memory` 服务、一个本地 SQLite 提供方（`node:sqlite`，WAL，`0600`，位于 `$DSH_HOME/dsh-memento/memory.db`），以及它的消费方——`memory` 工具与注入系统提示的冻结快照。
 
 - **审批门不可绕过。** 每条写路径（`add` / `replace` / `remove` / `seed`）都被强制经过服务内部的审批 waterfall，而非工具层。`writePolicy: ask | auto | off` 是模型看不见的配置；`replace` / `remove` / `consolidate` 的审批载荷携带将被改动条目的全文，被拒的写同样落一条 `*-denied` 审计行。
 - **模型可见 ⟺ 已记录。** 注入的快照逐字进入 `system/message`；每次写都能从 `approval/asked` + `approval/decided` + 插件自有审计表重建。
@@ -52,21 +52,21 @@ dsh plugin --profile web add "github:PerryLink/dsh-memento#main"
 dsh plugin --profile web add dsh-memento
 
 # 2. restart and verify the row
-dsh --profile web --dump-config | grep -A3 'id: memento'
+dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 ```
 
 ## Install & uninstall
 
 - **git channel**（最新 `main`）：`dsh plugin --profile web add git+https://github.com/PerryLink/dsh-memento.git`。
 - **npm channel**（发布版本）：`dsh plugin --profile web add dsh-memento`。
-- **tarball channel**：在本仓库执行 `npm pack`，然后 `dsh plugin --profile web add ./dsh-memento-<version>.tgz`。
+- **tarball channel**：在本仓库执行 `npm pack`，然后 `dsh plugin --profile web add ./yammory_system-<version>.tgz`。
 - **uninstall**：`dsh plugin --profile web remove dsh-memento`（记忆库与会话日志保留）。
 
 ## Configuration
 
-所有可调项均为 Schemastery `Config` 字段（可在 cordis.yml 中修改）。非法值在加载期响亮失败。在 `memento` 行下覆盖。
+所有可调项均为 Schemastery `Config` 字段（可在 cordis.yml 中修改）。非法值在加载期响亮失败。在 `yammory_system` 行下覆盖。
 
-**设置面板。** DSH 设置服务挂载时，下表除 `enabled` 外的全部字段可在 DSH 设置侧栏的插件一级项 **`dsh-memento`**（与通用设置、插件等并列）中编辑；修改写入设置用户层（`settings.yaml`），无需改文件。几乎全部即时生效（写策略、语言、预算、各上限、提案、面板；`dbPath` / `auditRetentionDays` 经重开 store 生效；`retrieval.vector` 经重装检索器生效）——只有 `snapshotOrder` 需要 DSH 重载。设置服务缺失时一切回退组合配置，与从前完全一致。悬浮窗按钮可在同一页面隐藏（`panel.enabled`）。
+**设置面板。** DSH 设置服务挂载时，下表除 `enabled` 外的全部字段可在 DSH 设置侧栏的插件一级项 **`yammory-system`**（与通用设置、插件等并列）中编辑；修改写入设置用户层（`settings.yaml`），无需改文件。几乎全部即时生效（写策略、语言、预算、各上限、提案、面板；`dbPath` / `auditRetentionDays` 经重开 store 生效；`retrieval.vector` 经重装检索器生效）——只有 `snapshotOrder` 需要 DSH 重载。设置服务缺失时一切回退组合配置，与从前完全一致。悬浮窗按钮可在同一页面隐藏（`panel.enabled`）。
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -104,11 +104,11 @@ dsh --profile web --dump-config | grep -A3 'id: memento'
 | `memory_recall` | tool | 有界的记忆匹配 + 近期会话历史匹配 |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` |
 | web panel | client drawer | 只读：浏览条目、搜索、预算条、审计尾部；悬浮入口按钮可隐藏（`panel.enabled`） |
-| settings section | DSH 设置侧栏 → `dsh-memento` | 免改文件编辑除 `enabled` 外的全部配置字段；即时/重载生效时机在页面内标注 |
+| settings section | DSH 设置侧栏 → `yammory-system` | 免改文件编辑除 `enabled` 外的全部配置字段；即时/重载生效时机在页面内标注 |
 
 ## MCP server
 
-`dsh-memento` 附带一个只读 stdio **MCP 服务器**（`dsh-memento-mcp`），让外部 MCP 客户端（Claude、Codex 等）无需 harness 即可检索记忆库。它通过 newline-delimited JSON（NDJSON）承载 JSON-RPC 2.0——每行一个 JSON 对象，不支持 `Content-Length` 分帧。
+`yammory_system` 附带一个只读 stdio **MCP 服务器**（`yammory_system-mcp`），让外部 MCP 客户端（Claude、Codex 等）无需 harness 即可检索记忆库。它通过 newline-delimited JSON（NDJSON）承载 JSON-RPC 2.0——每行一个 JSON 对象，不支持 `Content-Length` 分帧。
 
 **只读。** 数据库以 `node:sqlite` 的 `readOnly: true` 打开（不跑迁移、不写 WAL、不 bump recall-count）；库文件不存在时返回空结果而非崩溃。
 
@@ -121,7 +121,7 @@ dsh --profile web --dump-config | grep -A3 'id: memento'
 
 ```sh
 node bin/mcp-server.mjs
-# 或 npm 安装后：npx dsh-memento-mcp
+# 或 npm 安装后：npx yammory_system-mcp
 ```
 
 数据库路径取自 `$DSH_MEMENTO_DB_PATH`（绝对路径，或相对 `$DSH_HOME`）；默认为 `$DSH_HOME/dsh-memento/memory.db`。
@@ -131,9 +131,9 @@ Claude Desktop（`claude_desktop_config.json`）配置示例：
 ```json
 {
   "mcpServers": {
-    "dsh-memento": {
+    "yammory_system": {
       "command": "npx",
-      "args": ["-y", "dsh-memento-mcp"],
+      "args": ["-y", "yammory_system-mcp"],
       "env": {
         "DSH_MEMENTO_DB_PATH": "/home/you/.dsh/dsh-memento/memory.db"
       }
@@ -146,7 +146,7 @@ Claude Desktop（`claude_desktop_config.json`）配置示例：
 
 ## How it's different
 
-| Plugin | 是什么 | dsh-memento 的差异 |
+| Plugin | 是什么 | yammory_system 的差异 |
 |---|---|---|
 | dsh-memory-evolve | 记忆仓库 / 进化循环 | 类型化服务接缝、审批门与会话日志审计；无仓库野心 |
 | dsh-mnemon | 记忆存储助手 | 协议 + 门 + 审计，而非又一个 store |
@@ -156,11 +156,11 @@ Claude Desktop（`claude_desktop_config.json`）配置示例：
 | dsh-external/Recall | 外部 agent 记忆 | 本地优先、零网络、走 DSH 自有审批接缝 |
 | Official MCP memory examples | DSH 宣称的"memory = 外部 MCP"立场 | **原生第一方**补充：同目标、无外部服务器；两者共存 |
 
-名称是 **`dsh-memento`**（已发布到 npm 与 GitHub）。不是 `dsh-recall`（易与 dsh-external/Recall 混淆），也不是已删除的旧名 `dsh-memory`。
+名称是 **`yammory_system`**（已发布到 npm 与 GitHub）。不是 `dsh-recall`（易与 dsh-external/Recall 混淆），也不是已删除的旧名 `dsh-memory`。
 
 ## dsh-memory-protocol v1
 
-`dsh-memento` 是 DSH 记忆协议的社区预演——官方 `ctx.memory` 接缝的一个候选形态。该协议把本插件的接缝规范化为跨插件契约：
+`yammory_system` 是 DSH 记忆协议的社区预演——官方 `ctx.memory` 接缝的一个候选形态。该协议把本插件的接缝规范化为跨插件契约：
 
 - **Entry spec** — 两条轨道 × 两个层级 × 按 agent 隔离，外加短 `tags`（≤16 × ≤32 字符）与每次 `replace` 递增的每条目 `version`。
 - **Write semantics** — 幂等的唯一子串条件写；批准即所见载荷（`replace` / `remove` / `consolidate` 携带将被改动的全文）。
@@ -203,9 +203,9 @@ Claude Desktop（`claude_desktop_config.json`）配置示例：
 
 ## What we learned from the terminal memories
 
-`dsh-memento` 不是 Claude Code、Codex 或 Hermes 的移植——但其设计刻意吸收了它们各自做对的部分，并拒绝有害的部分：
+`yammory_system` 不是 Claude Code、Codex 或 Hermes 的移植——但其设计刻意吸收了它们各自做对的部分，并拒绝有害的部分：
 
-| Terminal memory | 做对了什么 | dsh-memento 采纳了什么 |
+| Terminal memory | 做对了什么 | yammory_system 采纳了什么 |
 |---|---|---|
 | **Claude Code** — `CLAUDE.md` | 分层纯文本记忆文件（用户级 → 项目级），人类可读、可编辑，自动合并进每个会话 | 纯文本条目；`user-global` / `workspace` 层按会话合并；可浏览、`export`、审计的 store——透明即特性 |
 | **Codex** — `AGENTS.md` | 按目录作用域自动发现并注入的指令，零模型摩擦 | 按会话 cwd 隔离的 `workspace` 层（Windows 大小写不敏感）；会话开始时自动注入冻结快照 |

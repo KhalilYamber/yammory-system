@@ -41,7 +41,7 @@ protocol error code on the error's `code` field (`INVALID_INPUT`, `WRITE_REQUIRE
 ## Run
 
 ```sh
-# against the golden reference (dsh-memento's own provider)
+# against the golden reference (yammory_system's own provider)
 node test/protocol-conformance/run.mjs
 
 # against your provider

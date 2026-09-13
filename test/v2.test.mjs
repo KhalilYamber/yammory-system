@@ -31,7 +31,7 @@ function makeBusApproval(ctx) {
 }
 
 function mount(opts = {}) {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-v2-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-v2-'))
   const dbPath = path.join(dir, 'memory.db')
   const mock = createMockCtx()
   const approval = opts.approval ?? makeBusApproval(mock.ctx)
@@ -395,8 +395,8 @@ test('F10 语言面：language=en 命令输出英文（默认），zh 输出中�
   // 未知语言回退 en
   assert.deepEqual(renderMemoryRecallResult({}, value, 'fr'), enRendered)
   // 命令注册的 description/hint 也随语言
-  assert.ok(en.commands[0].description.includes('View/manage dsh-memento memory'))
-  assert.ok(zh.commands[0].description.includes('查看/管理 dsh-memento 记忆'))
+  assert.ok(en.commands[0].description.includes('View/manage yammory_system memory'))
+  assert.ok(zh.commands[0].description.includes('查看/管理 yammory_system 记忆'))
   assert.ok(zh.commands[0].input.hint.includes('export'))
 })
 

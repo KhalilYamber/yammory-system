@@ -1,6 +1,6 @@
 // scripts/verify-artifacts.mjs — JS 形态产物门：断言发布文件齐全、语法检查
 // host 面与 lib/ 全部模块、在纯 Node 下 import index.mjs 并核对插件面
-// （name === 'memento'、apply 是函数）。防发布包缺文件或混入不可执行语法。
+// （name === 'yammory_system'、apply 是函数）。防发布包缺文件或混入不可执行语法。
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
 import path from 'node:path'
@@ -28,9 +28,9 @@ for (const rel of ['index.mjs', ...libFiles.map((name) => `lib/${name}`)]) {
 }
 
 // 3. host 面必须在纯 Node 下可 import（无 tsx、无 checkout paths），且导出
-//    唯一 host 面契约：name === 'memento'、apply 为函数。
+//    唯一 host 面契约：name === 'yammory_system'、apply 为函数。
 const index = await import(pathToFileURL(path.join(root, 'index.mjs')).href)
-if (index.name !== 'memento' || typeof index.apply !== 'function') {
+if (index.name !== 'yammory_system' || typeof index.apply !== 'function') {
   throw new Error('index.mjs exports an unexpected plugin face')
 }
 

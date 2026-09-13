@@ -12,7 +12,7 @@ import { StoreError, InvalidInputError, EntryNotFoundError, AmbiguousMatchError,
 
 /** 每次测试独立的临时库。 */
 function tempStore() {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-'))
   const store = openMemoryStore(path.join(dir, 'memory.db'))
   return { dir, store }
 }
@@ -173,7 +173,7 @@ test('queryEntries 显式 limit 被硬钳到 MAX_QUERY_LIMIT（1000）', (t) => 
 })
 
 test('auditRetentionDays：>0 裁剪过期审计行，0 保留全部', (t) => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const dbPath = path.join(dir, 'memory.db')
   const first = openMemoryStore(dbPath)
@@ -246,7 +246,7 @@ test('召回排序：query 命中计数 +1，结果按 recall_count DESC, update
 })
 
 test('库损坏（非 SQLite 文件）在打开点响亮失败', (t) => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const badPath = path.join(dir, 'memory.db')
   writeFileSync(badPath, 'this is not sqlite', 'utf8')
@@ -257,7 +257,7 @@ test('库损坏（非 SQLite 文件）在打开点响亮失败', (t) => {
 })
 
 test('schema 版本高于本插件 → 响亮拒绝（防降级读坏数据）', (t) => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const dbPath = path.join(dir, 'memory.db')
   const first = openMemoryStore(dbPath)
@@ -270,7 +270,7 @@ test('schema 版本高于本插件 → 响亮拒绝（防降级读坏数据）',
 })
 
 test('v1 库逐级迁移到 v2：条目/审计数据完好，proposals 表就绪', (t) => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const dbPath = path.join(dir, 'memory.db')
   // 合成 v1 库（历史 schema 快照，纯合成数据；迁移 fixture 模式的第一块样本）。
@@ -446,7 +446,7 @@ test('profile 非法 domain/level/tier 响亮拒绝', (t) => {
 })
 
 test('v4 库平滑升级到 v5：facet/level/status 列与 profile 表就绪，旧数据保留', (t) => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const dbPath = path.join(dir, 'memory.db')
   // 合成 v4 库（历史 schema 快照，纯合成数据；迁移 fixture 模式的第二块样本）。

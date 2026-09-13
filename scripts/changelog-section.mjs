@@ -6,7 +6,7 @@
  *
  * Usage: node scripts/changelog-section.mjs <version>
  *
- * @module dsh-memento/scripts/changelog-section
+ * @module yammory_system/scripts/changelog-section
  */
 
 import { readFileSync } from 'node:fs'

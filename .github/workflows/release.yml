@@ -30,9 +30,9 @@ jobs:
         shell: bash
         run: |
           VERSION="$(node -p "require('./package.json').version")"
-          if npm view "dsh-memento@${VERSION}" version >/dev/null 2>&1; then
+          if npm view "yammory_system@${VERSION}" version >/dev/null 2>&1; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "dsh-memento@${VERSION} 已在 npm 上，跳过发布"
+            echo "yammory_system@${VERSION} 已在 npm 上，跳过发布"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi

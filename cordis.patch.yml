@@ -1,4 +1,4 @@
-# dsh-memento bundle patch: mount the memory capability seam plugin.
+# yammory_system bundle patch: mount the memory capability seam plugin.
 - insert:
-    - id: memento
-      name: dsh-memento
+    - id: yammory_system
+      name: yammory_system

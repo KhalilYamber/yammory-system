@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a bug in dsh-memento
+description: Report a bug in yammory_system
 title: "bug: "
 labels: ["bug"]
 body:
@@ -12,8 +12,8 @@ body:
   - type: input
     id: plugin-version
     attributes:
-      label: dsh-memento version
-      description: The plugin package version (e.g. `0.3.1`; check the profile's package.json or `npm ls dsh-memento`).
+      label: yammory_system version
+      description: The plugin package version (e.g. `0.3.1`; check the profile's package.json or `npm ls yammory_system`).
       placeholder: "0.3.1"
     validations:
       required: true
@@ -39,7 +39,7 @@ body:
       label: Steps to reproduce
       description: Minimal, ordered steps that reliably trigger the bug.
       placeholder: |
-        1. Install dsh-memento into the profile
+        1. Install yammory_system into the profile
         2. Run ...
         3. Observe ...
     validations:

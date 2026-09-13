@@ -5,18 +5,18 @@ import assert from 'node:assert/strict'
 import { isMemoryWriteRequest, buildWriteReason, parseWriteReason, applyWritePolicy, normalizeWritePolicy, resolveWritePolicy, validateWritePolicies } from '../lib/gate.mjs'
 import { InvalidInputError } from '../lib/errors.mjs'
 
-test('isMemoryWriteRequest 只认领 toolName=memory 且带 [dsh-memento] 前缀的请求', () => {
-  const ours = { toolName: 'memory', reason: '[dsh-memento] add user/workspace\nhello' }
+test('isMemoryWriteRequest 只认领 toolName=memory 且带 [yammory_system] 前缀的请求', () => {
+  const ours = { toolName: 'memory', reason: '[yammory_system] add user/workspace\nhello' }
   assert.equal(isMemoryWriteRequest(ours), true)
   assert.equal(isMemoryWriteRequest({ toolName: 'memory', reason: 'generic tool ask' }), false)
-  assert.equal(isMemoryWriteRequest({ toolName: 'bash', reason: '[dsh-memento] add user/workspace\nhello' }), false)
+  assert.equal(isMemoryWriteRequest({ toolName: 'bash', reason: '[yammory_system] add user/workspace\nhello' }), false)
   assert.equal(isMemoryWriteRequest({ toolName: 'memory' }), false)
   assert.equal(isMemoryWriteRequest(null), false)
 })
 
 test('buildWriteReason 首行人类可读摘要，正文携带完整载荷；parse 可无损往返', () => {
   const reason = buildWriteReason({ action: 'add', track: 'user', scope: 'workspace', text: '偏好中文回复\n第二行' })
-  assert.ok(reason.startsWith('[dsh-memento] add user/workspace\n'))
+  assert.ok(reason.startsWith('[yammory_system] add user/workspace\n'))
   assert.deepEqual(parseWriteReason(reason), { action: 'add', track: 'user', scope: 'workspace', text: '偏好中文回复\n第二行' })
   const seeded = buildWriteReason({ action: 'seed', track: 'batch', scope: 'batch', text: 'a\nb', count: 2 })
   assert.deepEqual(parseWriteReason(seeded), { action: 'seed', count: 2, track: 'batch', scope: 'batch', text: 'a\nb' })

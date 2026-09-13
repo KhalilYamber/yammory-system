@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// dsh-memento stdio MCP server launcher. Reads the memory database read-only
+// yammory_system stdio MCP server launcher. Reads the memory database read-only
 // and serves memory_search / memory_stats over newline-delimited JSON-RPC 2.0
 // on stdio. No harness, no network, no write path — the database is opened
 // with node:sqlite readOnly:true and a missing file yields empty results.

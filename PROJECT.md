@@ -1,4 +1,4 @@
-# dsh-user-memory（暂名）
+# yammory_system
 
 给 DeepSeek Harness 的**用户画像记忆插件**。
 

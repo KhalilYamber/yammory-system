@@ -38,7 +38,7 @@ function makeBusApproval(ctx) {
 
 /** 临时目录 + 显式 dbPath 挂载（不依赖 $DSH_HOME）。 */
 function mount(opts = {}) {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-it-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-it-'))
   const dbPath = path.join(dir, 'memory.db')
   const mock = createMockCtx()
   const approval = makeBusApproval(mock.ctx)
@@ -87,7 +87,7 @@ test('F1/F5/F6 注册面：ctx.memory 服务、memory 工具、快照段、审�
   const { mock } = mounted
   assert.ok(mock.services.get('memory') instanceof MemoryService)
   assert.ok(mock.tools.some((tool) => tool.name === 'memory'))
-  const section = mock.sections.find((s) => s.name === 'dsh-memento:memory')
+  const section = mock.sections.find((s) => s.name === 'yammory_system:memory')
   assert.ok(section)
   assert.equal(section.order, -50)
   const answerers = mock.listeners.get('approval/request') ?? []
@@ -110,17 +110,17 @@ test('F1/F5/F6 语言面：language 控制工具描述与快照文案；apply �
   // 快照文案随语言（S2：快照段内容构成 = 表达约束 + 常驻画像）
   const zhService = zh.mock.services.get('memory')
   zhService.store.insertEntry({ track: 'user', scope: 'user-global', text: '偏好中文' })
-  const zhSection = zh.mock.sections.find((s) => s.name === 'dsh-memento:memory')
+  const zhSection = zh.mock.sections.find((s) => s.name === 'yammory_system:memory')
   const zhText = zhSection.text({ agent: { session: makeSession() } })
   assert.ok(zhText.includes('预热块'), 'zh 预热头')
   assert.ok(zhText.includes('【表达约束】'), 'zh 表达约束段')
   assert.ok(zhText.includes('常驻画像（跨工作区的偏好'), 'zh 常驻画像标题')
   assert.ok(zhText.includes('已用字符'), 'zh 用量后缀')
   assert.ok(zhText.includes('- 偏好中文'))
-  const enSection = en.mock.sections.find((s) => s.name === 'dsh-memento:memory')
+  const enSection = en.mock.sections.find((s) => s.name === 'yammory_system:memory')
   assert.equal(enSection.text({ agent: { session: makeSession() } }), '', '空库 en 预热段为空')
   // apply 直调非法 language 响亮失败（不经 cordis schema 的路径）
-  const dir2 = mkdtempSync(path.join(tmpdir(), 'dsh-memento-lang-'))
+  const dir2 = mkdtempSync(path.join(tmpdir(), 'yammory_system-lang-'))
   const bad = createMockCtx()
   assert.throws(
     () => apply(bad.ctx, { dbPath: path.join(dir2, 'memory.db'), language: 'fr' }),
@@ -142,7 +142,7 @@ test('S3：直接调 ctx.memory 服务（不经工具）仍被审批门拦截—
   assert.equal(service.query({}).total, 0, '拒绝后条目必须不存在')
   assert.equal(mounted.approval.asked.length, 1, '审批门被咨询过（服务层强制）')
   assert.equal(mounted.approval.asked[0].toolName, 'memory')
-  assert.ok(mounted.approval.asked[0].reason.startsWith('[dsh-memento]'))
+  assert.ok(mounted.approval.asked[0].reason.startsWith('[yammory_system]'))
   // 被拒写零条目落盘，但落 denied 审计行（拒绝证据链：turn 内另有 approval/decided 审计对）
   const audit = mounted.mock.services.get('memory').store.auditList()
   assert.equal(audit.length, 1, '被拒写落 denied 审计行')
@@ -404,7 +404,7 @@ test('F6+S2：冻结预热段——会话内变更不更新注入；注入文本
   t.after(() => teardown(mounted))
   const { mock } = mounted
   const service = mock.services.get('memory')
-  const section = mock.sections.find((s) => s.name === 'dsh-memento:memory')
+  const section = mock.sections.find((s) => s.name === 'yammory_system:memory')
 
   const sessionA = makeSession({ id: 'session-a' })
   await service.add({ track: 'user', scope: 'user-global', text: '偏好中文回复' }, { agent: makeAgent(sessionA) })
@@ -450,7 +450,7 @@ test('S2：预热段只取 user-global；工作区层与 agent 轨不进预热�
   t.after(() => teardown(mounted))
   const { mock } = mounted
   const service = mock.services.get('memory')
-  const section = mock.sections.find((s) => s.name === 'dsh-memento:memory')
+  const section = mock.sections.find((s) => s.name === 'yammory_system:memory')
 
   const ws1 = makeSession({ id: 'ws1', cwd: 'C:\\work\\proj-a' })
   const ws2 = makeSession({ id: 'ws2', cwd: 'C:\\work\\proj-b' })
@@ -479,7 +479,7 @@ test('S3：enabled:false 时工具、注入、服务、answerer 整体消失且�
   const { mock, dbPath } = mounted
   assert.equal(mock.services.get('memory'), undefined)
   assert.equal(mock.tools.some((tool) => tool.name === 'memory'), false)
-  assert.equal(mock.sections.some((s) => s.name === 'dsh-memento:memory'), false)
+  assert.equal(mock.sections.some((s) => s.name === 'yammory_system:memory'), false)
   assert.equal(mock.listeners.has('approval/request'), false)
   assert.equal(existsSync(dbPath), false, '禁用时不触碰数据库')
 })
@@ -636,7 +636,7 @@ test('P2-7：writePolicies 粒度裁决——track/scope 键与 source 键优先
 })
 
 test('P2-7：非法 writePolicies 键/值在加载期响亮失败', (t) => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-it-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-it-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const mk = () => createMockCtx({ approval: makeBusApproval(null) })
   assert.throws(() => apply(mk().ctx, { dbPath: path.join(dir, 'm.db'), writePolicies: { 'bad/key': 'ask' } }), InvalidInputError)
@@ -663,7 +663,7 @@ test('P2-5：agentKey 按会话 agentPreset 隔离，缺失时落共享层', asy
   await service.add({ track: 'user', scope: 'user-global', text: 'reviewer 专属偏好' }, { agent: makeAgent(makeSession({ id: 'sb', agentPreset: 'reviewer' })) })
   await service.add({ track: 'user', scope: 'user-global', text: '共享条目' }, { agent: makeAgent(makeSession({ id: 'sc' })) })
 
-  const section = mock.sections.find((s) => s.name === 'dsh-memento:memory')
+  const section = mock.sections.find((s) => s.name === 'yammory_system:memory')
   const viewA = section.text({ agent: { session: makeSession({ id: 'va', agentPreset: 'coder' }) } })
   assert.ok(viewA.includes('coder 专属偏好'), '专属层对同 preset 可见')
   assert.ok(viewA.includes('共享条目'), '共享层对一切 preset 可见')
@@ -686,7 +686,7 @@ test('S5：无 agent 的服务直写失败封闭（不产生任何写/审计）'
 })
 
 test('S5：非法配置在加载期响亮失败（不注册半残状态）', (t) => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-it-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-it-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const mk = () => createMockCtx({ approval: makeBusApproval(null) })
   assert.throws(
@@ -737,7 +737,7 @@ test('rc.6 安全线：memory/* 未被 harness 收录时不向会话日志 appen
   const service = mounted.mock.services.get('memory')
   const session = makeSession({ id: 's-events' })
   await service.add({ track: 'user', scope: 'user-global', text: 'x' }, { agent: makeAgent(session) })
-  const section = mounted.mock.sections.find((s) => s.name === 'dsh-memento:memory')
+  const section = mounted.mock.sections.find((s) => s.name === 'yammory_system:memory')
   section.text({ agent: { session } })
   const types = session.events.map((event) => event.type)
   assert.equal(types.some((type) => type.startsWith('memory/')), false, '未注册类型绝不 append（否则会话下次加载被持久化层拒绝）')

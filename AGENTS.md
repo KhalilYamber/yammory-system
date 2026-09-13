@@ -1,6 +1,6 @@
 # AGENTS.md
 
-`dsh-memento` 是 DeepSeek Harness 的能力接缝插件：为 DSH 补上有界、分层、带审批门、可审计的跨会话记忆。别的记忆插件卖仓库，本插件卖 `ctx.memory` 服务、写入审批门与会话日志可重建的审计。DSH 哲学是 **everything is a plugin**——本仓库只做插件，不碰引擎。改代码前先读 `README.md`（对外契约）、`ARCHITECTURE.md`（设计决策）与 `test/`（现有行为）。
+`yammory_system` 是 DeepSeek Harness 的能力接缝插件：为 DSH 补上有界、分层、带审批门、可审计的跨会话记忆。别的记忆插件卖仓库，本插件卖 `ctx.memory` 服务、写入审批门与会话日志可重建的审计。DSH 哲学是 **everything is a plugin**——本仓库只做插件，不碰引擎。改代码前先读 `README.md`（对外契约）、`ARCHITECTURE.md`（设计决策）与 `test/`（现有行为）。
 
 ## 仓库布局：发布面 / 本地工程面
 
@@ -25,7 +25,7 @@ lib/strings.mjs      模型可见/命令面双语词表（预热头/约束头/�
 lib/store.mjs        node:sqlite Provider：条目表+审计账本+迁移（零依赖）
 client/client.js     Web 面板（零构建 vanilla，只读；en/zh 随 language 配置；经 dsh.client 注入）
 scripts/             机械门：verify-readmes.mjs（五语一致性）、check-coverage.mjs（覆盖率）、verify-self-contained.mjs（拒绝仓库外依赖）、verify-artifacts.mjs（制品齐全+语法+导入）、loader-runner.mjs（真实 Loader composition）
-cordis.patch.yml     bundle 声明（insert memento）
+cordis.patch.yml     bundle 声明（insert yammory_system）
 package.json         npm 元数据；files 白名单 = 发布内容（含 docs/ 协议三件套与一致性套件）
 package-lock.json    锁文件（CI 用，不进 npm 包）
 tsconfig.check.json  tsc --checkJs 类型检查门

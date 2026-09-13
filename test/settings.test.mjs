@@ -1,4 +1,4 @@
-// test/settings.test.mjs — 宿主设置面板接线：dsh-memento namespace 注册、
+// test/settings.test.mjs — 宿主设置面板接线：yammory-system namespace 注册、
 // 启动期字段合成、热字段 watch 生效、非法值防御、面板 panel 开关透出。
 
 import test from 'node:test'
@@ -82,7 +82,7 @@ function composedOptions(dir, overrides = {}) {
  * @param {object} [opts] - {userLayer, composed, withSettings}。
  */
 function mount(opts = {}) {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-settings-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-settings-'))
   const mock = createMockCtx()
   // 审批 answerer 在 waterfall 上（同 v2 集成测试）：auto/off 在 answerer 短路。
   mock.ctx.approval = {
@@ -130,12 +130,12 @@ test('settings 缺失（headless）：行为与组合配置一致，panel 默认
   }
 })
 
-test('settings 先挂载：installSection 以 dsh-memento 注册，启动期字段采用用户层', () => {
+test('settings 先挂载：installSection 以 yammory-system 注册，启动期字段采用用户层', () => {
   const mounted = mount({ userLayer: { language: 'en', snapshotOrder: -70 } })
   try {
     const { mock, fake } = mounted
     assert.equal(fake.installs.length, 1)
-    assert.equal(fake.installs[0].ns, 'dsh-memento')
+    assert.equal(fake.installs[0].ns, 'yammory-system')
     // 启动期字段（snapshotOrder 用户层 -70）在 section 注册前合成
     assert.equal(mock.sections.length, 1)
     assert.equal(mock.sections[0].order, -70)
@@ -147,7 +147,7 @@ test('settings 先挂载：installSection 以 dsh-memento 注册，启动期字�
 })
 
 test('settings 后到：热字段即时生效，启动期字段留痕并要求重载', () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-settings-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-settings-'))
   const mock = createMockCtx()
   try {
     const fake = makeFakeSettings({ language: 'en', dbPath: path.join(dir, 'moved.db') })
@@ -196,7 +196,7 @@ test('panel 开关：publish 关闭后 entries 路由透出 panel.enabled=false'
 })
 
 test('非法用户层值：register 时响亮拒绝（apply 抛错）', () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-settings-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-settings-'))
   const mock = createMockCtx()
   try {
     const fake = makeFakeSettings({ language: 'fr' })

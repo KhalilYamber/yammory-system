@@ -1,6 +1,6 @@
 <div align="center">
 
-# dsh-memento
+# yammory_system
 - **1024 स्टोर चैनल**: एक बार `npm i -g dsh1024`, फिर `dsh1024 plugin --profile web add dsh-memento` ([deepseek1024.com](https://deepseek1024.com) इंस्टॉल रैंकिंग में गिना जाता है)।
 
 **DeepSeek Harness के लिए परिबद्ध, स्तरित, अनुमोदन-द्वारी, लेखा-परीक्षण-योग्य क्रॉस-सेशन मेमोरी।**
@@ -34,7 +34,7 @@
 
 ## What you get
 
-`dsh-memento` एक क्षमता-सीम है, कोई दूसरा भंडार नहीं: एक टाइप्ड `ctx.memory` सेवा, एक स्थानीय SQLite प्रदाता (`node:sqlite`, WAL, `0600`, `$DSH_HOME/dsh-memento/memory.db` पर) और उसके उपभोक्ता — `memory` टूल और सिस्टम प्रॉम्प्ट में इंजेक्ट किया गया फ़्रोज़न स्नैपशॉट।
+`yammory_system` एक क्षमता-सीम है, कोई दूसरा भंडार नहीं: एक टाइप्ड `ctx.memory` सेवा, एक स्थानीय SQLite प्रदाता (`node:sqlite`, WAL, `0600`, `$DSH_HOME/dsh-memento/memory.db` पर) और उसके उपभोक्ता — `memory` टूल और सिस्टम प्रॉम्प्ट में इंजेक्ट किया गया फ़्रोज़न स्नैपशॉट।
 
 - **अनुमोदन द्वार को टाला नहीं जा सकता।** हर लेखन पथ (`add` / `replace` / `remove` / `seed`) सेवा के भीतर अनुमोदन वॉटरफ़ॉल से होकर गुज़रता है, टूल परत से नहीं। `writePolicy: ask | auto | off` मॉडल के लिए अदृश्य विन्यास है; `replace` / `remove` / `consolidate` अनुमोदन पेलोड में बदली जाने वाली प्रविष्टियों का पूरा पाठ ले जाते हैं, और अस्वीकृत लेखन भी एक `*-denied` ऑडिट पंक्ति छोड़ता है।
 - **मॉडल-दृश्य ⟺ लॉग किया गया।** इंजेक्ट किया गया स्नैपशॉट `system/message` में शब्दशः पहुँचता है; हर लेखन `approval/asked` + `approval/decided` + प्लगइन की अपनी ऑडिट तालिका से पुनर्निर्माण-योग्य है।
@@ -52,21 +52,21 @@ dsh plugin --profile web add "github:PerryLink/dsh-memento#main"
 dsh plugin --profile web add dsh-memento
 
 # 2. restart and verify the row
-dsh --profile web --dump-config | grep -A3 'id: memento'
+dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 ```
 
 ## Install & uninstall
 
 - **git चैनल** (नवीनतम `main`): `dsh plugin --profile web add git+https://github.com/PerryLink/dsh-memento.git`.
 - **npm चैनल** (प्रकाशित रिलीज़): `dsh plugin --profile web add dsh-memento`.
-- **tarball चैनल**: इस रेपो में `npm pack`, फिर `dsh plugin --profile web add ./dsh-memento-<version>.tgz`.
+- **tarball चैनल**: इस रेपो में `npm pack`, फिर `dsh plugin --profile web add ./yammory_system-<version>.tgz`.
 - **uninstall**: `dsh plugin --profile web remove dsh-memento` (मेमोरी डेटाबेस और सत्र लॉग रखे जाते हैं)।
 
 ## Configuration
 
-सभी ट्यूनेबल Schemastery `Config` फ़ील्ड हैं (cordis.yml से बदले जा सकते हैं)। अमान्य मान लोड पर ज़ोर से विफल होते हैं। `memento` पंक्ति के अंतर्गत ओवरराइड करें।
+सभी ट्यूनेबल Schemastery `Config` फ़ील्ड हैं (cordis.yml से बदले जा सकते हैं)। अमान्य मान लोड पर ज़ोर से विफल होते हैं। `yammory_system` पंक्ति के अंतर्गत ओवरराइड करें।
 
-**सेटिंग्स पैनल।** DSH सेटिंग्स सेवा माउंट होने पर नीचे के सभी फ़ील्ड (`enabled` को छोड़कर) DSH सेटिंग्स साइडबार की प्लगइन **`dsh-memento` प्रविष्टि** से संपादित होते हैं (General या Plugins जैसा एक शीर्ष-स्तरीय खंड); बदलाव सेटिंग्स यूज़र लेयर (`settings.yaml`) में जाते हैं, फ़ाइल छूने की ज़रूरत नहीं। लगभग सब लाइव लागू होते हैं (राइट पॉलिसी, भाषा, बजट, सीमाएँ, प्रस्ताव, पैनल; `dbPath` / `auditRetentionDays` स्टोर पुनः खोलकर; `retrieval.vector` रिट्रीवर बदलकर) — केवल `snapshotOrder` को DSH रीलोड चाहिए। सेटिंग्स सेवा के अभाव में सब कुछ संयुक्त cordis कॉन्फ़िग पर लौटता है, पहले जैसा। फ़्लोटिंग पैनल बटन उसी पृष्ठ से छिपाया जा सकता है (`panel.enabled`)।
+**सेटिंग्स पैनल।** DSH सेटिंग्स सेवा माउंट होने पर नीचे के सभी फ़ील्ड (`enabled` को छोड़कर) DSH सेटिंग्स साइडबार की प्लगइन **`yammory-system` प्रविष्टि** से संपादित होते हैं (General या Plugins जैसा एक शीर्ष-स्तरीय खंड); बदलाव सेटिंग्स यूज़र लेयर (`settings.yaml`) में जाते हैं, फ़ाइल छूने की ज़रूरत नहीं। लगभग सब लाइव लागू होते हैं (राइट पॉलिसी, भाषा, बजट, सीमाएँ, प्रस्ताव, पैनल; `dbPath` / `auditRetentionDays` स्टोर पुनः खोलकर; `retrieval.vector` रिट्रीवर बदलकर) — केवल `snapshotOrder` को DSH रीलोड चाहिए। सेटिंग्स सेवा के अभाव में सब कुछ संयुक्त cordis कॉन्फ़िग पर लौटता है, पहले जैसा। फ़्लोटिंग पैनल बटन उसी पृष्ठ से छिपाया जा सकता है (`panel.enabled`)।
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -104,11 +104,11 @@ dsh --profile web --dump-config | grep -A3 'id: memento'
 | `memory_recall` | tool | परिबद्ध मेमोरी मिलान + हाल के सत्र-इतिहास मिलान |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` |
 | web panel | client drawer | केवल-पठन: प्रविष्टियाँ ब्राउज़ करें, खोजें, बजट बार, ऑडिट पूँछ; फ़्लोटिंग बटन छिपाया जा सकता है (`panel.enabled`) |
-| settings section | DSH सेटिंग्स साइडबार → `dsh-memento` | फ़ाइल छुए सभी कॉन्फ़िग फ़ील्ड संपादित करें (`enabled` को छोड़कर); लाइव/रीलोड समय पृष्ठ पर अंकित |
+| settings section | DSH सेटिंग्स साइडबार → `yammory-system` | फ़ाइल छुए सभी कॉन्फ़िग फ़ील्ड संपादित करें (`enabled` को छोड़कर); लाइव/रीलोड समय पृष्ठ पर अंकित |
 
 ## MCP server
 
-`dsh-memento` एक केवल-पठन stdio **MCP सर्वर** (`dsh-memento-mcp`) भी देता है ताकि बाहरी MCP क्लाइंट (Claude, Codex, …) बिना harness के मेमोरी स्टोर खोज सकें। यह newline-delimited JSON (NDJSON) पर JSON-RPC 2.0 बोलता है — प्रति पंक्ति एक JSON ऑब्जेक्ट, कोई `Content-Length` फ़्रेमिंग नहीं।
+`yammory_system` एक केवल-पठन stdio **MCP सर्वर** (`yammory_system-mcp`) भी देता है ताकि बाहरी MCP क्लाइंट (Claude, Codex, …) बिना harness के मेमोरी स्टोर खोज सकें। यह newline-delimited JSON (NDJSON) पर JSON-RPC 2.0 बोलता है — प्रति पंक्ति एक JSON ऑब्जेक्ट, कोई `Content-Length` फ़्रेमिंग नहीं।
 
 **केवल-पठन।** डेटाबेस `node:sqlite` के `readOnly: true` से खुलता है (कोई माइग्रेशन नहीं, कोई WAL लेखन नहीं, recall-count में वृद्धि नहीं); अगर फ़ाइल मौजूद नहीं है तो क्रैश के बजाय खाली परिणाम मिलते हैं।
 
@@ -121,7 +121,7 @@ dsh --profile web --dump-config | grep -A3 'id: memento'
 
 ```sh
 node bin/mcp-server.mjs
-# या, npm install के बाद: npx dsh-memento-mcp
+# या, npm install के बाद: npx yammory_system-mcp
 ```
 
 डेटाबेस पथ `$DSH_MEMENTO_DB_PATH` है (निरपेक्ष, या `$DSH_HOME` के सापेक्ष); डिफ़ॉल्ट `$DSH_HOME/dsh-memento/memory.db`।
@@ -131,9 +131,9 @@ Claude Desktop (`claude_desktop_config.json`) उदाहरण:
 ```json
 {
   "mcpServers": {
-    "dsh-memento": {
+    "yammory_system": {
       "command": "npx",
-      "args": ["-y", "dsh-memento-mcp"],
+      "args": ["-y", "yammory_system-mcp"],
       "env": {
         "DSH_MEMENTO_DB_PATH": "/home/you/.dsh/dsh-memento/memory.db"
       }
@@ -146,7 +146,7 @@ Claude Desktop (`claude_desktop_config.json`) उदाहरण:
 
 ## How it's different
 
-| Plugin | यह क्या है | dsh-memento का अंतर |
+| Plugin | यह क्या है | yammory_system का अंतर |
 |---|---|---|
 | dsh-memory-evolve | मेमोरी वेयरहाउस / इवोल्यूशन लूप | टाइप्ड सेवा सीम, अनुमोदन द्वार और सत्र-लॉग ऑडिट; कोई वेयरहाउस महत्वाकांक्षा नहीं |
 | dsh-mnemon | मेमोरी स्टोर सहायक | प्रोटोकॉल + द्वार + ऑडिट, कोई दूसरा स्टोर नहीं |
@@ -156,11 +156,11 @@ Claude Desktop (`claude_desktop_config.json`) उदाहरण:
 | dsh-external/Recall | बाहरी एजेंट मेमोरी | स्थानीय-प्रथम, शून्य-नेटवर्क, DSH की अपनी अनुमोदन सीम पर चलता है |
 | Official MCP memory examples | DSH की घोषित "मेमोरी = बाहरी MCP" स्थिति | **नेटिव फर्स्ट-पार्टी** पूरक: समान लक्ष्य, कोई बाहरी सर्वर नहीं; दोनों सह-अस्तित्व |
 
-नाम **`dsh-memento`** है (npm और GitHub पर प्रकाशित)। `dsh-recall` नहीं (dsh-external/Recall से भ्रमित होने वाला), न ही हटाया गया विरासत नाम `dsh-memory`।
+नाम **`yammory_system`** है (npm और GitHub पर प्रकाशित)। `dsh-recall` नहीं (dsh-external/Recall से भ्रमित होने वाला), न ही हटाया गया विरासत नाम `dsh-memory`।
 
 ## dsh-memory-protocol v1
 
-`dsh-memento` DSH मेमोरी प्रोटोकॉल का सामुदायिक पूर्वाभ्यास है — एक आधिकारिक `ctx.memory` सीम के लिए उम्मीदवार आकार। यह प्रोटोकॉल इस प्लगइन की सीम को एक क्रॉस-प्लगइन अनुबंध में सामान्य करता है:
+`yammory_system` DSH मेमोरी प्रोटोकॉल का सामुदायिक पूर्वाभ्यास है — एक आधिकारिक `ctx.memory` सीम के लिए उम्मीदवार आकार। यह प्रोटोकॉल इस प्लगइन की सीम को एक क्रॉस-प्लगइन अनुबंध में सामान्य करता है:
 
 - **Entry spec** — दो ट्रैक × दो परतें × प्रति-एजेंट कुंजी, साथ ही छोटे `tags` (≤16 × ≤32 अक्षर) और प्रति-प्रविष्टि `version` जो हर `replace` पर बढ़ता है।
 - **Write semantics** — इडेम्पोटेंट अद्वितीय-सबस्ट्रिंग सशर्त लेखन; जो-दिखे-वही-स्वीकृत पेलोड (`replace` / `remove` / `consolidate` बदले जाने वाला पूरा पाठ ले जाते हैं)।
@@ -203,9 +203,9 @@ Claude Desktop (`claude_desktop_config.json`) उदाहरण:
 
 ## What we learned from the terminal memories
 
-`dsh-memento` Claude Code, Codex या Hermes का पोर्ट नहीं है — लेकिन इसके डिज़ाइन ने जान-बूझकर वह अपनाया जो प्रत्येक ने सही किया, और वह अस्वीकार किया जो नुकसान करता था:
+`yammory_system` Claude Code, Codex या Hermes का पोर्ट नहीं है — लेकिन इसके डिज़ाइन ने जान-बूझकर वह अपनाया जो प्रत्येक ने सही किया, और वह अस्वीकार किया जो नुकसान करता था:
 
-| Terminal memory | क्या सही किया | dsh-memento ने क्या अपनाया |
+| Terminal memory | क्या सही किया | yammory_system ने क्या अपनाया |
 |---|---|---|
 | **Claude Code** — `CLAUDE.md` | पदानुक्रमित सादा-पाठ मेमोरी फ़ाइलें (उपयोगकर्ता-स्तर → परियोजना-स्तर), मानव-पठनीय और संपादन-योग्य, हर सत्र में स्वतः मर्ज | सादा-पाठ प्रविष्टियाँ; `user-global` / `workspace` परतें प्रति-सत्र मर्ज; एक भंडार जिसे आप ब्राउज़, `export` और ऑडिट कर सकते हैं — पारदर्शिता एक विशेषता के रूप में |
 | **Codex** — `AGENTS.md` | प्रति-निर्देशिका स्कोप्ड निर्देश स्वतः खोजे और शून्य मॉडल घर्षण से इंजेक्ट | सत्र cwd से अनुक्रमित `workspace` परत (Windows केस-असंवेदी); सत्र आरंभ पर स्वतः इंजेक्ट फ़्रोज़न स्नैपशॉट |

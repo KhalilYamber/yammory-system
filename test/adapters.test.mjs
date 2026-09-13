@@ -184,7 +184,7 @@ test('markdown 导出：按 track/scope 分组；hermes 适配器可读回', () 
 // ── 命令动词集成（mount 样式同 v2.test.mjs）────────────────────────────────────
 
 function mount(opts = {}) {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-adapters-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-adapters-'))
   const dbPath = path.join(dir, 'memory.db')
   const mock = createMockCtx()
   mock.ctx.approval = {

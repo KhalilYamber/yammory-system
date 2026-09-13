@@ -35,7 +35,7 @@ test('快照含冻结说明、每组用量头与条目文本', () => {
     entry({ id: 'a1', track: 'agent', scope: 'workspace', text: '测试先于实现', workspaceKey: '/w' }),
   ]
   const text = renderSnapshot(entries, BUDGETS)
-  assert.ok(text.startsWith('[dsh-memento: frozen memory snapshot'), '应带冻结说明头')
+  assert.ok(text.startsWith('[yammory_system: frozen memory snapshot'), '应带冻结说明头')
   assert.ok(text.includes('User profile (global preferences, communication style, landmines) — 6/2000 chars used'), 'user-global 组应带用量头 6/2000')
   assert.ok(text.includes('Workspace facts, conventions, and lessons — 6/4000 chars used'), 'agent/workspace 组应带用量头 6/4000')
   assert.ok(text.includes('- 偏好中文回复'))
@@ -57,7 +57,7 @@ test('language=zh 渲染中文冻结头、分组标题与用量后缀；未知�
     entry({ id: 'a1', track: 'agent', scope: 'workspace', text: '测试先于实现', workspaceKey: '/w' }),
   ]
   const zh = renderSnapshot(entries, BUDGETS, [], 'zh')
-  assert.ok(zh.startsWith('[dsh-memento：冻结记忆快照'), 'zh 冻结头')
+  assert.ok(zh.startsWith('[yammory_system：冻结记忆快照'), 'zh 冻结头')
   assert.ok(zh.includes('用户画像（全局偏好、沟通风格、雷区） — 6/2000 已用字符'), 'zh 分组标题 + 用量后缀')
   assert.ok(zh.includes('- 偏好中文回复'))
   const fallback = renderSnapshot(entries, BUDGETS, [], 'fr')
@@ -113,7 +113,7 @@ test('S2：预热段 = 表达约束（必在场）+ 常驻画像（带用量头�
     entry({ id: 'a1', track: 'agent', scope: 'workspace', text: '项目A约定', workspaceKey: '/w' }),
   ]
   const text = renderWarmup(entries, [{ domain: '计算机与编程', level: 8 }, { domain: '生物与医学', level: 3 }], BUDGETS, 'zh')
-  assert.ok(text.startsWith('[dsh-memento：预热块'), '预热段头')
+  assert.ok(text.startsWith('[yammory_system：预热块'), '预热段头')
   assert.ok(text.includes('【表达约束】'), '表达约束段在场')
   assert.ok(text.includes('计算机与编程 8/10（硕士）'))
   assert.ok(text.includes('生物与医学 3/10（科普）'))
@@ -143,7 +143,7 @@ test('S2：有常驻条目但没有 profile 时也出约束段（默认档兜底
 test('S2：language=en 出英文预热头与约束头；非法语言回退 en', () => {
   const rows = [{ domain: '数学', level: 5 }]
   const en = renderWarmup([], rows, BUDGETS)
-  assert.ok(en.startsWith('[dsh-memento: warm-up block'))
+  assert.ok(en.startsWith('[yammory_system: warm-up block'))
   assert.ok(en.includes('[Speaking constraints]'))
   assert.ok(!en.includes('Standing profile'), '无条目则不渲染常驻画像小节')
   assert.equal(renderWarmup([], rows, BUDGETS, 'fr'), en, '未知语言回退 en')

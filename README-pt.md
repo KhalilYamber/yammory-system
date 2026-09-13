@@ -1,6 +1,6 @@
 <div align="center">
 
-# dsh-memento
+# yammory_system
 - **Canal 1024 store**: `npm i -g dsh1024` uma vez, depois `dsh1024 plugin --profile web add dsh-memento` (conta para o ranking de instalações do [deepseek1024.com](https://deepseek1024.com)).
 
 **Memória entre sessões limitada, em camadas, com porta de aprovação e auditável para o DeepSeek Harness.**
@@ -34,7 +34,7 @@
 
 ## What you get
 
-O `dsh-memento` é uma costura de capacidade, não outro armazém: um serviço tipado `ctx.memory`, um provedor SQLite local (`node:sqlite`, WAL, `0600`, em `$DSH_HOME/dsh-memento/memory.db`) e seus consumidores — a ferramenta `memory` e um snapshot congelado injetado no prompt do sistema.
+O `yammory_system` é uma costura de capacidade, não outro armazém: um serviço tipado `ctx.memory`, um provedor SQLite local (`node:sqlite`, WAL, `0600`, em `$DSH_HOME/dsh-memento/memory.db`) e seus consumidores — a ferramenta `memory` e um snapshot congelado injetado no prompt do sistema.
 
 - **A porta não pode ser contornada.** Todo caminho de escrita (`add` / `replace` / `remove` / `seed`) passa pela cascata de aprovação dentro do serviço, não na camada de ferramentas. `writePolicy: ask | auto | off` é configuração invisível para o modelo; `replace` / `remove` / `consolidate` carregam o texto completo das entradas que alteram no payload de aprovação, e uma escrita negada ainda gera uma linha de auditoria `*-denied`.
 - **Visível para o modelo ⟺ registrado.** O snapshot injetado chega textualmente a `system/message`; toda escrita é reconstruível a partir de `approval/asked` + `approval/decided` + a própria tabela de auditoria do plugin.
@@ -52,21 +52,21 @@ dsh plugin --profile web add "github:PerryLink/dsh-memento#main"
 dsh plugin --profile web add dsh-memento
 
 # 2. restart and verify the row
-dsh --profile web --dump-config | grep -A3 'id: memento'
+dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 ```
 
 ## Install & uninstall
 
 - **canal git** (último `main`): `dsh plugin --profile web add git+https://github.com/PerryLink/dsh-memento.git`.
 - **canal npm** (versões publicadas): `dsh plugin --profile web add dsh-memento`.
-- **canal tarball**: `npm pack` neste repo, depois `dsh plugin --profile web add ./dsh-memento-<version>.tgz`.
+- **canal tarball**: `npm pack` neste repo, depois `dsh plugin --profile web add ./yammory_system-<version>.tgz`.
 - **desinstalar**: `dsh plugin --profile web remove dsh-memento` (o banco de memória e os logs de sessão são mantidos).
 
 ## Configuration
 
-Todos os parâmetros são campos Schemastery `Config` (alteráveis pelo cordis.yml). Valores inválidos falham ruidosamente ao carregar. Sobrescreva na linha `memento`.
+Todos os parâmetros são campos Schemastery `Config` (alteráveis pelo cordis.yml). Valores inválidos falham ruidosamente ao carregar. Sobrescreva na linha `yammory_system`.
 
-**Painel de configurações.** Com o serviço de configurações do DSH montado, todos os campos abaixo (exceto `enabled`) são editáveis na **entrada `dsh-memento` na barra lateral de configurações do DSH** (uma seção de primeiro nível, como General ou Plugins); as alterações vão para a camada de usuário das configurações (`settings.yaml`) sem editar arquivos. Quase tudo se aplica ao vivo (políticas de escrita, idioma, orçamentos, limites, propostas, painel; `dbPath` / `auditRetentionDays` reabrindo o armazém; `retrieval.vector` trocando o recuperador) — só `snapshotOrder` exige recarregar o DSH. Sem o serviço de configurações, tudo volta à configuração composta, exatamente como antes. O botão flutuante do painel pode ser ocultado na mesma página (`panel.enabled`).
+**Painel de configurações.** Com o serviço de configurações do DSH montado, todos os campos abaixo (exceto `enabled`) são editáveis na **entrada `yammory-system` na barra lateral de configurações do DSH** (uma seção de primeiro nível, como General ou Plugins); as alterações vão para a camada de usuário das configurações (`settings.yaml`) sem editar arquivos. Quase tudo se aplica ao vivo (políticas de escrita, idioma, orçamentos, limites, propostas, painel; `dbPath` / `auditRetentionDays` reabrindo o armazém; `retrieval.vector` trocando o recuperador) — só `snapshotOrder` exige recarregar o DSH. Sem o serviço de configurações, tudo volta à configuração composta, exatamente como antes. O botão flutuante do painel pode ser ocultado na mesma página (`panel.enabled`).
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -104,11 +104,11 @@ Todos os parâmetros são campos Schemastery `Config` (alteráveis pelo cordis.y
 | `memory_recall` | tool | Correspondências limitadas de memória mais correspondências recentes do histórico de sessão |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` |
 | web panel | client drawer | Somente leitura: navegar entradas, buscar, barras de orçamento, cauda de auditoria; o botão flutuante pode ser ocultado (`panel.enabled`) |
-| settings section | Barra lateral de configurações do DSH → `dsh-memento` | Edita todos os campos de configuração (exceto `enabled`) sem tocar em arquivos; o momento de aplicação (ao vivo ou após recarga) é indicado na página |
+| settings section | Barra lateral de configurações do DSH → `yammory-system` | Edita todos os campos de configuração (exceto `enabled`) sem tocar em arquivos; o momento de aplicação (ao vivo ou após recarga) é indicado na página |
 
 ## MCP server
 
-O `dsh-memento` inclui um **servidor MCP** stdio somente-leitura (`dsh-memento-mcp`) para que clientes MCP externos (Claude, Codex, …) pesquisem o armazenamento de memória sem o harness. Ele fala JSON-RPC 2.0 sobre JSON delimitado por novas linhas (NDJSON): um objeto JSON por linha, sem enquadramento `Content-Length`.
+O `yammory_system` inclui um **servidor MCP** stdio somente-leitura (`yammory_system-mcp`) para que clientes MCP externos (Claude, Codex, …) pesquisem o armazenamento de memória sem o harness. Ele fala JSON-RPC 2.0 sobre JSON delimitado por novas linhas (NDJSON): um objeto JSON por linha, sem enquadramento `Content-Length`.
 
 **Somente leitura.** O banco é aberto com `readOnly: true` do `node:sqlite` (sem migrações, sem gravações WAL, sem incremento do contador de recall); um banco ausente retorna resultados vazios em vez de falhar.
 
@@ -121,7 +121,7 @@ Execução direta:
 
 ```sh
 node bin/mcp-server.mjs
-# ou, após npm install: npx dsh-memento-mcp
+# ou, após npm install: npx yammory_system-mcp
 ```
 
 O caminho do banco é `$DSH_MEMENTO_DB_PATH` (absoluto, ou relativo a `$DSH_HOME`); padrão `$DSH_HOME/dsh-memento/memory.db`.
@@ -131,9 +131,9 @@ Exemplo para o Claude Desktop (`claude_desktop_config.json`):
 ```json
 {
   "mcpServers": {
-    "dsh-memento": {
+    "yammory_system": {
       "command": "npx",
-      "args": ["-y", "dsh-memento-mcp"],
+      "args": ["-y", "yammory_system-mcp"],
       "env": {
         "DSH_MEMENTO_DB_PATH": "/home/you/.dsh/dsh-memento/memory.db"
       }
@@ -146,7 +146,7 @@ O servidor é somente-leitura: sem rede, sem gravações, sem porta de aprovaç�
 
 ## How it's different
 
-| Plugin | O que é | A diferença do dsh-memento |
+| Plugin | O que é | A diferença do yammory_system |
 |---|---|---|
 | dsh-memory-evolve | armazém de memória / laços de evolução | costura de serviço tipada, porta de aprovação e auditoria de log de sessão; sem ambição de armazém |
 | dsh-mnemon | auxiliar de armazenamento de memória | protocolo + porta + auditoria, não outro armazém |
@@ -156,11 +156,11 @@ O servidor é somente-leitura: sem rede, sem gravações, sem porta de aprovaç�
 | dsh-external/Recall | memória de agente externa | local primeiro, zero rede, usa a própria costura de aprovação do DSH |
 | Official MCP memory examples | a posição declarada do DSH de "memória = MCP externo" | o complemento **nativo de primeira parte**: mesmo objetivo, sem servidor externo; ambos coexistem |
 
-O nome é **`dsh-memento`** (publicado no npm e no GitHub). Não `dsh-recall` (confundível com dsh-external/Recall), não o nome legado excluído `dsh-memory`.
+O nome é **`yammory_system`** (publicado no npm e no GitHub). Não `dsh-recall` (confundível com dsh-external/Recall), não o nome legado excluído `dsh-memory`.
 
 ## dsh-memory-protocol v1
 
-O `dsh-memento` é o ensaio comunitário do protocolo de memória DSH — uma forma candidata para uma costura oficial `ctx.memory`. O protocolo normaliza a costura deste plugin em um contrato entre plugins:
+O `yammory_system` é o ensaio comunitário do protocolo de memória DSH — uma forma candidata para uma costura oficial `ctx.memory`. O protocolo normaliza a costura deste plugin em um contrato entre plugins:
 
 - **Entry spec** — duas trilhas × duas camadas × chave por agente, mais `tags` curtos (≤16 × ≤32 caracteres) e um `version` por entrada que incrementa a cada `replace`.
 - **Write semantics** — escritas condicionais idempotentes por substring única; payloads de aprovar-o-que-se-vê (`replace` / `remove` / `consolidate` carregam o texto completo que alteram).
@@ -203,9 +203,9 @@ O `dsh-memento` é o ensaio comunitário do protocolo de memória DSH — uma fo
 
 ## What we learned from the terminal memories
 
-O `dsh-memento` não é um port do Claude Code, Codex ou Hermes — mas seu design absorveu deliberadamente as partes que cada um acertou, e recusou as que causavam dano:
+O `yammory_system` não é um port do Claude Code, Codex ou Hermes — mas seu design absorveu deliberadamente as partes que cada um acertou, e recusou as que causavam dano:
 
-| Terminal memory | O que acertou | O que o dsh-memento adotou |
+| Terminal memory | O que acertou | O que o yammory_system adotou |
 |---|---|---|
 | **Claude Code** — `CLAUDE.md` | arquivos de memória em texto puro hierárquicos (nível usuário → nível projeto), legíveis e editáveis por humanos, mesclados automaticamente em toda sessão | entradas em texto puro; camadas `user-global` / `workspace` mescladas por sessão; um armazém que você pode navegar, `export` e auditar — transparência como característica |
 | **Codex** — `AGENTS.md` | instruções com escopo por diretório auto-descobertas e injetadas com atrito zero para o modelo | a camada `workspace` indexada pelo cwd da sessão (insensível a maiúsculas no Windows); o snapshot congelado injetado automaticamente no início da sessão |

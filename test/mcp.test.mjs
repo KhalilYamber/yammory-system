@@ -19,7 +19,7 @@ import {
 
 /** 建临时库并写入若干记忆，返回临时目录（关闭清理交给调用方单一 t.after）。 */
 function seedDb() {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-mcp-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-mcp-'))
   const dbPath = path.join(dir, 'memory.db')
   const store = openMemoryStore(dbPath)
   store.insertEntry({ track: 'user', scope: 'workspace', text: '用户偏好：回复用中文', source: 'claude' })
@@ -142,7 +142,7 @@ test('只读打开：库不存在返回空结果而非崩溃，也不 bump recal
 })
 
 test('只读打开：空文件（无 entries 表）按空库处理', (t) => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-mcp-empty-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-mcp-empty-'))
   const dbPath = path.join(dir, 'empty.db')
   writeFileSync(dbPath, '')
   const store = new ReadOnlyMemoryStore(dbPath)
@@ -159,7 +159,7 @@ test('只读打开：空文件（无 entries 表）按空库处理', (t) => {
 })
 
 test('只读打开：损坏库返回 isError 结果而非崩溃', (t) => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-mcp-corrupt-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-mcp-corrupt-'))
   const dbPath = path.join(dir, 'memory.db')
   writeFileSync(dbPath, 'this is not a sqlite database file')
   const store = new ReadOnlyMemoryStore(dbPath)

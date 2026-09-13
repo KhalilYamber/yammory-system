@@ -1,4 +1,4 @@
-<!-- Thanks for contributing to dsh-memento! Tick every box that applies. -->
+<!-- Thanks for contributing to yammory_system! Tick every box that applies. -->
 
 ## Checklist
 

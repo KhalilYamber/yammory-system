@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// client/client.js — dsh-memento 浏览器半侧（零构建 vanilla，单模块）。
+// client/client.js — yammory_system 浏览器半侧（零构建 vanilla，单模块）。
 //
 // host 端 dsh.client 扫描把本文件作为 classic script 注入 __DSH_BOOT__ 图，
 // 执行时经 window.__ModuleLoader__.load 注册唯一 factory（id = 插件名，与
@@ -17,13 +17,13 @@
   'use strict'
   if (typeof window === 'undefined' || !window.__ModuleLoader__ || !window.__ModuleLoader__.load) return
   window.__ModuleLoader__.load({
-    id: 'dsh-memento',
+    id: 'yammory_system',
     factory: function (require) {
       const react = require('react')
       /** createElement 简写（宿主平台内置 react，无需构建期 JSX 编译）。 */
       const jsx = react.createElement
 
-const PANEL_ID = 'dsh-memento-panel'
+const PANEL_ID = 'yammory_system-panel'
 
 /** 本页已渲染的悬浮入口按钮引用（设置页 panel.enabled 开关即时切换用）。 */
 let panelOpenButton = null
@@ -42,7 +42,7 @@ function setPanelButtonVisible(visible) {
 const STRINGS = {
   en: {
     open: '🧠 Memory',
-    title: 'dsh-memento memory',
+    title: 'yammory_system memory',
     refresh: 'Refresh',
     close: 'Close',
     filter: 'Filter entries by text…',
@@ -55,11 +55,11 @@ const STRINGS = {
     auditEmpty: 'Audit is empty',
     proposals: 'Pending proposals',
     proposalsEmpty: 'No pending proposals (generated after session compaction; decide via /memory proposals approve|dismiss)',
-    loadFailed: (message) => `Load failed: ${message} (panel is read-only; make sure the Web profile has dsh-memento loaded)`,
+    loadFailed: (message) => `Load failed: ${message} (panel is read-only; make sure the Web profile has yammory_system loaded)`,
   },
   zh: {
     open: '🧠 记忆',
-    title: 'dsh-memento 记忆',
+    title: 'yammory_system 记忆',
     refresh: '刷新',
     close: '关闭',
     filter: '按文本过滤条目…',
@@ -72,7 +72,7 @@ const STRINGS = {
     auditEmpty: '审计为空',
     proposals: '待审批提案',
     proposalsEmpty: '暂无待审批提案（会话压缩后自动生成；用 /memory proposals approve|dismiss 处理）',
-    loadFailed: (message) => `加载失败：${message}（面板只读；请确认 Web profile 已装载 dsh-memento）`,
+    loadFailed: (message) => `加载失败：${message}（面板只读；请确认 Web profile 已装载 yammory_system）`,
   },
 }
 
@@ -108,7 +108,7 @@ function installPanel(state) {
 
   const style = document.createElement('style')
   style.textContent = `
-#dsh-memento-panel { position: fixed; z-index: 2147483000; font: 13px/1.5 system-ui, "Segoe UI", sans-serif; }
+#yammory_system-panel { position: fixed; z-index: 2147483000; font: 13px/1.5 system-ui, "Segoe UI", sans-serif; }
 #mem-open { position: fixed; right: 16px; bottom: 56px; z-index: 2147483000; padding: 8px 14px; border: 1px solid #3f6fae;
   border-radius: 999px; background: #0d1526; color: #7db4ff; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
 #mem-open:hover { background: #16233c; }
@@ -280,11 +280,11 @@ function escapeHtml(value) {
   return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
 }
 
-// ── 宿主设置页（settings.section 一级项，id = dsh-memento）──────────────
+// ── 宿主设置页（settings.section 一级项，id = yammory-system）──────────────
       /** 卡片文案（en 源文 / zh 译文；语言跟随 namespace value.language，保存后即时切换）。 */
       const CARD_STRINGS = {
         en: {
-          title: 'dsh-memento memory',
+          title: 'yammory_system memory',
           description: 'Approval-gated cross-session memory. Writes, snapshot wording and the floating panel follow these values.',
           sectionPermissions: 'Write approval policy',
           sectionPanel: 'Floating panel',
@@ -336,7 +336,7 @@ function escapeHtml(value) {
           invalidPolicy: 'Must be ask, auto or off.',
         },
         zh: {
-          title: 'dsh-memento 记忆',
+          title: 'yammory_system 记忆',
           description: '带审批门的跨会话记忆。写入策略、快照文案与悬浮窗跟随这些值。',
           sectionPermissions: '写审批策略',
           sectionPanel: '悬浮窗',
@@ -707,9 +707,9 @@ function escapeHtml(value) {
         )
       }
 
-      /** 设置页组件（settings.section 渲染入口；hooks share: mementoCard → useMementoCard）。 */
-      function MementoSection(props) {
-        const state = props.useMementoCard((snapshot) => snapshot)
+      /** 设置页组件（settings.section 渲染入口；hooks share: yammoryCard → useYammoryCard）。 */
+      function YammorySection(props) {
+        const state = props.useYammoryCard((snapshot) => snapshot)
         const language = state.language === 'zh' ? 'zh' : 'en'
         const t = (key) => CARD_STRINGS[language][key] ?? key
         const blocked = !state.dirty || state.saving || state.invalid
@@ -745,7 +745,7 @@ function escapeHtml(value) {
       }
 
       /** 控制器：scope → 暂存表单 → 设置页快照。保存落盘后同步本页悬浮按钮显隐。 */
-      class MementoCardController {
+      class YammoryCardController {
         constructor(scope) {
           this.scope = scope
           this.form = new CardForm(scope, (tops) => {
@@ -766,7 +766,7 @@ function escapeHtml(value) {
 
         inject() {
           return {
-            hooks: { mementoCard: this.store },
+            hooks: { yammoryCard: this.store },
             edit: (path, text) => this.form.stage(path, text),
             discard: () => this.form.discard(),
             save: () => { void this.form.save() },
@@ -779,22 +779,22 @@ function escapeHtml(value) {
         if (!styleInstalled && typeof document !== 'undefined') {
           styleInstalled = true
           const tag = document.createElement('style')
-          tag.dataset.plugin = 'dsh-memento'
+          tag.dataset.plugin = 'yammory_system'
           tag.textContent = CARD_CSS
           document.head.appendChild(tag)
         }
-        const controller = new MementoCardController(ctx.settingsScope.bind({ namespace: 'dsh-memento' }))
+        const controller = new YammoryCardController(ctx.settingsScope.bind({ namespace: 'yammory-system' }))
         ctx.effect(() => ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
-          id: 'dsh-memento',
+          id: 'yammory-system',
           order: 16,
-          label: 'dsh-memento',
+          label: 'yammory-system',
           inject: () => controller.inject(),
-        }, MementoSection)), 'dsh-memento: settings section')
+        }, YammorySection)), 'yammory-system: settings section')
       }
 
       return {
-        name: 'memento-client',
+        name: 'yammory_system-client',
         inject: ['slots', 'settingsScope'],
         apply,
       }

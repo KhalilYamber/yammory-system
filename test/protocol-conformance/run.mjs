@@ -26,7 +26,7 @@ export async function runConformance(makeProvider, options = {}) {
   /** @type {string[]} */
   const tempDirs = []
   const factory = (/** @type {object} */ providerOptions = {}) => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-conformance-'))
+    const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-conformance-'))
     tempDirs.push(dir)
     return makeProvider({ dbPath: path.join(dir, 'memory.db'), ...providerOptions })
   }

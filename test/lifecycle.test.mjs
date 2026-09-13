@@ -4,7 +4,7 @@
 // fiber，释放后重查权威注册表，断言 ctx.memory / ctx.memoryAdapters 服务消失、
 // memory / memory_recall 工具消失、systemPrompt 快照段消失。
 // C2：模块命名空间无 default 导出，且 Loader.unwrapExports 往返返回同一命名空间。
-// @module dsh-memento/test/lifecycle.test
+// @module yammory_system/test/lifecycle.test
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -19,7 +19,7 @@ import * as plugin from '../index.mjs'
 
 /** 组装真实 Cordis 上下文（真实 systemPrompt/tools 注册表 + mock approval）。 */
 async function mountHarness(config = {}) {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'dsh-memento-lifecycle-')), 'memory.db')
+  const dbPath = join(mkdtempSync(join(tmpdir(), 'yammory_system-lifecycle-')), 'memory.db')
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   ctx.provide('approval', { request: async () => 'allowed-once', overrideOf: () => undefined, config: { policy: 'ask' } })
@@ -37,7 +37,7 @@ test('module carries no default export and Loader unwrap round-trips the namespa
   const loader = Object.create(Loader.prototype)
   const unwrapped = loader.unwrapExports(plugin)
   assert.equal(unwrapped, plugin)
-  assert.equal(unwrapped.name, 'memento')
+  assert.equal(unwrapped.name, 'yammory_system')
   assert.deepEqual(unwrapped.inject, ['tools', 'systemPrompt', 'approval'])
   assert.ok(unwrapped.Config !== undefined)
   assert.equal(typeof unwrapped.apply, 'function')
@@ -71,7 +71,7 @@ test('disposing the contributing fiber removes the memory seam and tools', async
 // ---------------------------------------------------------------------------
 
 test('disposing the contributing fiber removes the panel routes and remount re-registers cleanly', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'dsh-memento-lifecycle-')), 'memory.db')
+  const dbPath = join(mkdtempSync(join(tmpdir(), 'yammory_system-lifecycle-')), 'memory.db')
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   ctx.provide('approval', { request: async () => 'allowed-once', overrideOf: () => undefined, config: { policy: 'ask' } })

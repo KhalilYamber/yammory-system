@@ -2,7 +2,7 @@
 // 独立进程挂载 Loader + Include builtin，读 cordis.yml（真实 service 行 + 插件行 +
 // config），证明模块解包、inject 解析、config 应用与注册表贡献。同时携带两类负例：
 // 非法 config 按预期原因响亮失败（U4），default 导出以 missing-inject 失败（C2）。
-// @module dsh-memento/test/composition.test
+// @module yammory_system/test/composition.test
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -41,7 +41,7 @@ function runRunner(configPath, expected) {
   return { status: result.status, stdout: result.stdout, stderr: result.stderr }
 }
 
-const temporaryRoot = mkdtempSync(join(tmpdir(), 'dsh-memento-loader-'))
+const temporaryRoot = mkdtempSync(join(tmpdir(), 'yammory_system-loader-'))
 const dbDir = join(temporaryRoot, 'db')
 mkdirSync(dbDir, { recursive: true })
 
@@ -86,7 +86,7 @@ test('Loader hot-reload: a language config edit restarts the fiber and keeps the
     "  name: '@deepseek-ai/dsh-user-approval'",
     "- id: mock-webserver",
     `  name: ${JSON.stringify(pathToFileURL(fixture).href)}`,
-    "- id: memento",
+    "- id: yammory_system",
     `  name: ${JSON.stringify(pathToFileURL(entry).href)}`,
     '  config:',
     `    dbPath: ${JSON.stringify(join(dbDir, 'reload.db'))}`,

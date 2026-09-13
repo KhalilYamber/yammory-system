@@ -1,4 +1,4 @@
-// types.d.ts — dsh-memento 类型契约（声明合并）。
+// types.d.ts — yammory_system 类型契约（声明合并）。
 //
 // 本插件入口是纯 ESM JavaScript；类型契约集中在本文件：
 // - `declare module '@deepseek-ai/cordis'`：ctx.memory 服务（F1，三角色 seam 的
@@ -280,7 +280,7 @@ export interface MemoryRetrievalService {
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    /** dsh-memento 记忆服务（本插件提供；其它插件可读写同一 store）。 */
+    /** yammory_system 记忆服务（本插件提供；其它插件可读写同一 store）。 */
     memory: MemoryService
     /** dsh-memory-protocol v1 适配器注册表（本插件提供；第三方记忆插件注册自己的适配器）。 */
     memoryAdapters: MemoryAdaptersService

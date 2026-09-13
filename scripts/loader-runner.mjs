@@ -128,7 +128,7 @@ try {
     inject: /** @type {() => void} */ (() => undefined),
   })
   const result = await ctx.tools.execute({
-    callId: CallId('dsh-memento-loader-runner'),
+    callId: CallId('yammory_system-loader-runner'),
     name: 'memory',
     arguments: { action: 'query', text: 'preferences' },
     agent,

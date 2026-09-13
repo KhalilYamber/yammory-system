@@ -1,4 +1,4 @@
-// test/protocol-conformance/golden.mjs — 黄金参考 Provider（dsh-memento 自己的实现）。
+// test/protocol-conformance/golden.mjs — 黄金参考 Provider（yammory_system 自己的实现）。
 //
 // 一致性套件的黄金参考：lib/store.mjs（SQLite Provider）+ lib/protocol.mjs
 // （MemoryProtocolCore，写语义参考实现）+ 注入式审批传输。本仓库 CI 以它全绿

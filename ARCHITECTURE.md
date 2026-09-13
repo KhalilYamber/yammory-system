@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-`dsh-memento` 的架构文档：三角色 seam、数据流、以及每个关键设计决策的理由。面向对象：插件维护者与想接入 `ctx.memory` 的其它插件作者（如 dsh-claude-move 的 seed 集成）。
+`yammory_system` 的架构文档：三角色 seam、数据流、以及每个关键设计决策的理由。面向对象：插件维护者与想接入 `ctx.memory` 的其它插件作者（如 dsh-claude-move 的 seed 集成）。
 
 ## 三角色 seam
 
@@ -42,7 +42,7 @@
 ```
 memory 工具(add)
   → MemoryService.add（预算预检：store.usage + checkBudget）
-  → ctx.approval.request（toolName:'memory'，reason 携带完整载荷 [dsh-memento] 前缀）
+  → ctx.approval.request（toolName:'memory'，reason 携带完整载荷 [yammory_system] 前缀）
       ├─ 审批服务先裁决会话级 policy（never 不可绕过）
       └─ waterfall：本插件 answerer（prepend）按 writePolicy 裁决
            ask → 委托 UI answerer（人类批准/拒绝）
@@ -74,7 +74,7 @@ memory 工具(add)
 2. **审批门做在 Service 写方法内部，不在工具层**（对应 Hermes issue #48181 教训）。
    - 任何路径（memory 工具、其它插件、未来 /memory 命令）只要调 `ctx.memory.add/replace/remove/seed` 就必然经过 `ctx.approval.request`；
    - `writePolicy` 是 Config（ask/auto/off，默认 ask），模型不可见、不可改；
-   - 本插件在 `approval/request` 上注册 prepend answerer：只认领 toolName='memory' 且 reason 带 `[dsh-memento]` 前缀的请求；ask 委托续链（人类 answerer），auto/off 直接裁决；
+   - 本插件在 `approval/request` 上注册 prepend answerer：只认领 toolName='memory' 且 reason 带 `[yammory_system]` 前缀的请求；ask 委托续链（人类 answerer），auto/off 直接裁决；
    - 会话级 `approval/never` 由审批服务在 answerer 之前裁决，任何 answerer（含 prepend）都无法绕过——本插件遵从该硬不变量。
    - **审批载荷完整化（approve-what-you-see）**：add/seed 载荷 = 新文本全文；replace 载荷 = `from:\n<旧条目全文>\n\nto:\n<新文本>`；remove 载荷 = 被删条目全文（不再是裸子串）；consolidate 载荷 = 每个目标的定位原文（单条 >300 字截断标注）+ 新文本。人批准的是具体变更而非抽象动作，approval/asked 的 reason 因此携带可重建变更的完整信息。
    - **被拒写也留痕**：`rejected/cancelled/unavailable` 一律在抛出 WriteDeniedError 前落 `<action>-denied` 审计行（outcome 标注真实裁决来源）。turn 内路径另有 approval/asked+decided 审计对；turn 外 gate 路径（/memory 命令）没有审计对可落，denied 行是拒绝的唯一证据链。
@@ -147,8 +147,8 @@ memory 工具(add)
 
 全部字段可 cordis.yml 覆盖，schema 见 `index.mjs` 的 `Config`；完整字段表（`enabled` / `dbPath` / `budgets` / `writePolicy` / `writePolicies` / `language` / `snapshotOrder` / `maxEntriesPerQuery` / `commandListLimit` / `commandAuditLimit` / `recall.*` / `panelEntriesLimit` / `panelAuditLimit` / `auditRetentionDays` / `proposals.*`）以 README 配置表为准，本文件不再逐项复制以免漂移。非法值加载期响亮失败。
 - **harness 主目录回退（0.3.1）**：`dbPath` 为空或相对路径时，基准目录取 `$DSH_HOME`；`dsh web` 启动不会把官方 `resolveDshHome()` 解析出的主目录写回 `process.env.DSH_HOME`，因此未导出时回退 `~/.dsh`（与官方回退同语义）——否则默认 Windows 配置会在真实 boot 时整体崩溃（issue #1）。`lib/` 零 DSH 依赖的红线不允许 import `@deepseek-ai/dsh-home-paths`，用 `os.homedir()` 复刻同一回退。
-- **宿主设置面板接入（settings namespace）**：settings 服务挂载时经 `installSection` 注册 `dsh-memento` namespace（`SettingsSchema` = `Config` 去 `enabled` 加 `panel`，base = 组合配置，validate 复用同一业务校验）。真 cordis 下 `ctx.inject` 回调恒为异步 fiber——apply 同步段先按组合值开库，回调（启动早期或运行期变更）再应用差异：热字段（writePolicy(s)/language/budgets/各 limit/proposals/panel）即时生效（answerer 与命令门每次读 live 容器，service 实例属性同步更新）；`dbPath`/`auditRetentionDays` 差异重开 store 并关旧库；`retrieval.vector` 差异拆旧装新检索器（`live.retriever` 供 recall 工具按调用读取）；`snapshotOrder` 因 section 注册期固定无法热改，响亮写 `settings-startup-fields` 审计并要求重载。`enabled` 不进 namespace：false 时插件整体卸载、卡片随 namespace 消失，从 UI 上无法恢复。settings 缺失（headless）时 live 保持组合值，行为与未接入前一致。
-- **设置一级项（零构建）**：`client/client.js` 同时注册第二个客户端模块 `dsh-memento/settings-section`（factory 经宿主模块系统 require 平台内置 react，无构建步骤），向 `settings.section` slot 注册 id 为 `dsh-memento` 的一级设置项（宿主设置弹窗左侧菜单即该 slot 账本渲染，无白名单；`label` 即插件名，`order` 用普通值不抢内置位置）。页面内容走统一暂存—保存/放弃/单字段重置语义（对齐宿主 CardForm）；保存落盘后若涉及 `panel.enabled` 则同帧切换本页悬浮按钮显隐（无需刷新）；界面语言跟随所选（含草稿）语言。写入按顶层字段聚合（`scope.set(top, 合并值)`），不依赖点路径写入面。悬浮窗开关经 `/api/memento/entries` 响应的 `panel` 字段贯通到面板启动探测——host 与面板同源，不依赖浏览器读 settings。
+- **宿主设置面板接入（settings namespace）**：settings 服务挂载时经 `installSection` 注册 `yammory-system` namespace（`SettingsSchema` = `Config` 去 `enabled` 加 `panel`，base = 组合配置，validate 复用同一业务校验）。真 cordis 下 `ctx.inject` 回调恒为异步 fiber——apply 同步段先按组合值开库，回调（启动早期或运行期变更）再应用差异：热字段（writePolicy(s)/language/budgets/各 limit/proposals/panel）即时生效（answerer 与命令门每次读 live 容器，service 实例属性同步更新）；`dbPath`/`auditRetentionDays` 差异重开 store 并关旧库；`retrieval.vector` 差异拆旧装新检索器（`live.retriever` 供 recall 工具按调用读取）；`snapshotOrder` 因 section 注册期固定无法热改，响亮写 `settings-startup-fields` 审计并要求重载。`enabled` 不进 namespace：false 时插件整体卸载、卡片随 namespace 消失，从 UI 上无法恢复。settings 缺失（headless）时 live 保持组合值，行为与未接入前一致。
+- **设置一级项（零构建）**：`client/client.js` 同时注册第二个客户端模块 `yammory_system/settings-section`（factory 经宿主模块系统 require 平台内置 react，无构建步骤），向 `settings.section` slot 注册 id 为 `yammory-system` 的一级设置项（宿主设置弹窗左侧菜单即该 slot 账本渲染，无白名单；`label` 即插件名，`order` 用普通值不抢内置位置）。页面内容走统一暂存—保存/放弃/单字段重置语义（对齐宿主 CardForm）；保存落盘后若涉及 `panel.enabled` 则同帧切换本页悬浮按钮显隐（无需刷新）；界面语言跟随所选（含草稿）语言。写入按顶层字段聚合（`scope.set(top, 合并值)`），不依赖点路径写入面。悬浮窗开关经 `/api/memento/entries` 响应的 `panel` 字段贯通到面板启动探测——host 与面板同源，不依赖浏览器读 settings。
 
 ## 协议 v1（0.4.0：dsh-memory-protocol 社区预演）
 

@@ -93,7 +93,7 @@ test('RetrievalProviderRegistry：非法契约响亮失败', () => {
 
 /** 集成挂载：临时库 + 自动放行审批 + 可选 retrieval 配置。 */
 function mount(opts = {}) {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-memento-retrieval-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-retrieval-'))
   const dbPath = path.join(dir, 'memory.db')
   const mock = createMockCtx()
   mock.ctx.approval = { request: async () => 'allowed-once', overrideOf: () => undefined, config: { policy: 'auto' } }

@@ -1,6 +1,6 @@
 <div align="center">
 
-# dsh-memento
+# yammory_system
 - **1024 store channel**: `npm i -g dsh1024` once, then `dsh1024 plugin --profile web add dsh-memento` (counts toward the [deepseek1024.com](https://deepseek1024.com) install ranking).
 [![Gitee](https://img.shields.io/badge/Gitee-mirror-c71d23?logo=gitee)](https://gitee.com/perrylink/dsh-memento)
 
@@ -34,7 +34,7 @@
 
 ## What you get
 
-`dsh-memento` is a capability seam, not another memory warehouse: a typed `ctx.memory` service, a local SQLite provider (`node:sqlite`, WAL, `0600`, at `$DSH_HOME/dsh-memento/memory.db`), and its consumers — the `memory` tool and a frozen snapshot injected into the system prompt.
+`yammory_system` is a capability seam, not another memory warehouse: a typed `ctx.memory` service, a local SQLite provider (`node:sqlite`, WAL, `0600`, at `$DSH_HOME/dsh-memento/memory.db`), and its consumers — the `memory` tool and a frozen snapshot injected into the system prompt.
 
 - **The approval gate cannot be bypassed.** Every write path (`add` / `replace` / `remove` / `seed`) is forced through the approval waterfall inside the service, not in the tool layer. `writePolicy: ask | auto | off` is model-invisible configuration; `replace` / `remove` / `consolidate` carry the full text of the entries they change in the approval payload, and a denied write still lands a `*-denied` audit row.
 - **Model-visible ⟺ logged.** The injected snapshot lands verbatim in `system/message`; every write is reconstructable from `approval/asked` + `approval/decided` + the plugin's own audit table.
@@ -52,21 +52,21 @@ dsh plugin --profile web add "github:PerryLink/dsh-memento#main"
 dsh plugin --profile web add dsh-memento
 
 # 2. restart and verify the row
-dsh --profile web --dump-config | grep -A3 'id: memento'
+dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 ```
 
 ## Install & uninstall
 
 - **git channel** (latest `main`): `dsh plugin --profile web add git+https://github.com/PerryLink/dsh-memento.git`.
 - **npm channel** (published releases): `dsh plugin --profile web add dsh-memento`.
-- **tarball channel**: `npm pack` in this repo, then `dsh plugin --profile web add ./dsh-memento-<version>.tgz`.
+- **tarball channel**: `npm pack` in this repo, then `dsh plugin --profile web add ./yammory_system-<version>.tgz`.
 - **uninstall**: `dsh plugin --profile web remove dsh-memento` (the memory database and session logs are kept).
 
 ## Configuration
 
-All tunables are Schemastery `Config` fields (changeable from cordis.yml). Invalid values fail loudly at load. Override under the `memento` row.
+All tunables are Schemastery `Config` fields (changeable from cordis.yml). Invalid values fail loudly at load. Override under the `yammory_system` row.
 
-**Settings panel.** When the DSH settings service is mounted, every field below (except `enabled`) is editable from the plugin's own **`dsh-memento` entry in the DSH settings sidebar** (a top-level section, like General or Plugins); edits land in the settings user layer (`settings.yaml`) and need no file editing. Nearly everything applies live (write policies, language, budgets, limits, proposals, panel, `dbPath` / `auditRetentionDays` via a store reopen, `retrieval.vector` via a retriever swap) — only `snapshotOrder` needs a DSH reload. Without the settings service everything falls back to the composed cordis config, exactly as before. The floating panel button can be hidden from the same page (`panel.enabled`).
+**Settings panel.** When the DSH settings service is mounted, every field below (except `enabled`) is editable from the plugin's own **`yammory-system` entry in the DSH settings sidebar** (a top-level section, like General or Plugins); edits land in the settings user layer (`settings.yaml`) and need no file editing. Nearly everything applies live (write policies, language, budgets, limits, proposals, panel, `dbPath` / `auditRetentionDays` via a store reopen, `retrieval.vector` via a retriever swap) — only `snapshotOrder` needs a DSH reload. Without the settings service everything falls back to the composed cordis config, exactly as before. The floating panel button can be hidden from the same page (`panel.enabled`).
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -104,11 +104,11 @@ All tunables are Schemastery `Config` fields (changeable from cordis.yml). Inval
 | `memory_recall` | tool | Bounded memory matches plus recent session-history matches |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` |
 | web panel | client drawer | Read-only: browse entries, search, budget bars, audit tail; the floating entry button can be hidden (`panel.enabled`) |
-| settings section | DSH settings sidebar → `dsh-memento` | Edit every config field (except `enabled`) without touching files; live vs reload-required timing is marked on the page |
+| settings section | DSH settings sidebar → `yammory-system` | Edit every config field (except `enabled`) without touching files; live vs reload-required timing is marked on the page |
 
 ## MCP server
 
-`dsh-memento` ships a read-only stdio **MCP server** (`dsh-memento-mcp`) so external MCP clients (Claude, Codex, …) can search the memory store without a harness. It speaks JSON-RPC 2.0 over newline-delimited JSON (NDJSON) — one JSON object per line, no `Content-Length` framing.
+`yammory_system` ships a read-only stdio **MCP server** (`yammory_system-mcp`) so external MCP clients (Claude, Codex, …) can search the memory store without a harness. It speaks JSON-RPC 2.0 over newline-delimited JSON (NDJSON) — one JSON object per line, no `Content-Length` framing.
 
 **Read-only.** The database is opened with `node:sqlite` `readOnly: true` (no migrations, no WAL writes, no recall-count bump); a missing database returns empty results instead of crashing.
 
@@ -121,7 +121,7 @@ Run it directly:
 
 ```sh
 node bin/mcp-server.mjs
-# or, after npm install: npx dsh-memento-mcp
+# or, after npm install: npx yammory_system-mcp
 ```
 
 The database path is `$DSH_MEMENTO_DB_PATH` (absolute, or relative to `$DSH_HOME`); it defaults to `$DSH_HOME/dsh-memento/memory.db`.
@@ -131,9 +131,9 @@ Claude Desktop (`claude_desktop_config.json`) example:
 ```json
 {
   "mcpServers": {
-    "dsh-memento": {
+    "yammory_system": {
       "command": "npx",
-      "args": ["-y", "dsh-memento-mcp"],
+      "args": ["-y", "yammory_system-mcp"],
       "env": {
         "DSH_MEMENTO_DB_PATH": "/home/you/.dsh/dsh-memento/memory.db"
       }
@@ -146,7 +146,7 @@ The server is read-only: no network, no writes, no approval gate — search and 
 
 ## How it's different
 
-| Plugin | What it is | dsh-memento's difference |
+| Plugin | What it is | yammory_system's difference |
 |---|---|---|
 | dsh-memory-evolve | memory warehouse / evolution loops | a typed service seam, approval gate, and session-log audit; no warehouse ambition |
 | dsh-mnemon | memory store helper | protocol + gate + audit, not another store |
@@ -156,11 +156,11 @@ The server is read-only: no network, no writes, no approval gate — search and 
 | dsh-external/Recall | external agent memory | local-first, zero-network, rides DSH's own approval seam |
 | Official MCP memory examples | DSH's stated "memory = external MCP" position | the **native first-party** complement: same goal, no external server; both coexist |
 
-The name is **`dsh-memento`** (published on npm and GitHub). Not `dsh-recall` (confusable with dsh-external/Recall), not the deleted legacy name `dsh-memory`.
+The name is **`yammory_system`** (published on npm and GitHub). Not `dsh-recall` (confusable with dsh-external/Recall), not the deleted legacy name `dsh-memory`.
 
 ## dsh-memory-protocol v1
 
-`dsh-memento` is the community rehearsal of the DSH memory protocol — a candidate shape for an official `ctx.memory` seam. The protocol normalizes this plugin's seam into a cross-plugin contract:
+`yammory_system` is the community rehearsal of the DSH memory protocol — a candidate shape for an official `ctx.memory` seam. The protocol normalizes this plugin's seam into a cross-plugin contract:
 
 - **Entry spec** — two tracks × two layers × per-agent key, plus short `tags` (≤16 × ≤32 chars) and a per-entry `version` that increments on every `replace`.
 - **Write semantics** — idempotent unique-substring conditional writes; approve-what-you-see payloads (`replace` / `remove` / `consolidate` carry the full text they change).
@@ -203,9 +203,9 @@ The name is **`dsh-memento`** (published on npm and GitHub). Not `dsh-recall` (c
 
 ## What we learned from the terminal memories
 
-`dsh-memento` is not a port of Claude Code, Codex, or Hermes — but its design deliberately absorbed the parts each got right, and refused the parts that hurt:
+`yammory_system` is not a port of Claude Code, Codex, or Hermes — but its design deliberately absorbed the parts each got right, and refused the parts that hurt:
 
-| Terminal memory | What it got right | What dsh-memento adopted |
+| Terminal memory | What it got right | What yammory_system adopted |
 |---|---|---|
 | **Claude Code** — `CLAUDE.md` | hierarchical plain-text memory files (user-level → project-level), human-readable and human-editable, merged automatically into every session | plain-text entries; `user-global` / `workspace` layers merged per session; a store you can browse, `export`, and audit — transparency as a feature |
 | **Codex** — `AGENTS.md` | per-directory scoped instructions auto-discovered and injected with zero model friction | the `workspace` layer keyed by the session cwd (Windows case-insensitive); the frozen snapshot injected automatically at session start |
