@@ -60,8 +60,8 @@ try {
     if (include === undefined || typeof include.refresh !== 'function') {
       throw new Error('reload: the include entry exposes no refresh()')
     }
-    const webServer = /** @type {any} */ (ctx.get('webServer'))
-    if (webServer === undefined) throw new Error('reload: the mock webServer row did not mount')
+    const connection = /** @type {any} */ (ctx.get('connection'))
+    if (connection === undefined) throw new Error('reload: the mock connection row did not mount')
     /**
      * Assert the seam (service + tools), the language knob, and the routes.
      * @param {string} language - the expected tool-description language.
@@ -72,7 +72,7 @@ try {
       if (tool === undefined) throw new Error('reload: memory tool is missing')
       const languageOk = language === 'zh' ? tool.description.includes('读写') : tool.description.includes('bounded')
       if (!languageOk) throw new Error(`reload: memory tool description does not reflect language=${language}`)
-      if (webServer.list().length !== 3) throw new Error(`reload: expected 3 routes, got ${webServer.list().length}`)
+      if (connection.list().length !== 3) throw new Error(`reload: expected 3 routes, got ${connection.list().length}`)
     }
 
     // Phase 1: initial mount — seam live, English description, 3 routes.
@@ -91,7 +91,7 @@ try {
     await ctx.loader.await()
     assertBase('en')
 
-    process.stdout.write(`DSH_LOADER_RESULT ${JSON.stringify({ routes: webServer.list().length, cycled: true })}\n`)
+    process.stdout.write(`DSH_LOADER_RESULT ${JSON.stringify({ routes: connection.list().length, cycled: true })}\n`)
   } else {
   // Authoritative registries carry the plugin's contributions.
   if (ctx.get('memory') === undefined) {

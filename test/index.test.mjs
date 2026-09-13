@@ -367,7 +367,7 @@ test('P0-4：replace 审批期间并发新增填满预算 → 复审以此刻用
   assert.equal(service.query({ track: 'user', scope: 'workspace', text: 'ab' }).total, 1, '目标条目未被替换')
 })
 
-test('P0-4：replace 审批期间目标被并发改写 → 复审以重新定位的 previous 为权威', async (t) => {
+test('P0-4：replace 审批期间目标被并发改写 → STALE_WRITE（乐观锁，绝不静默覆盖）', async (t) => {
   const mounted = mount({
     writePolicy: 'ask',
     budgets: { user: { userGlobal: 10, workspace: 10 }, agent: { userGlobal: 10, workspace: 10 } },
@@ -385,12 +385,15 @@ test('P0-4：replace 审批期间目标被并发改写 → 复审以重新定位
   })
   await service.add({ track: 'user', scope: 'workspace', text: 'ab' }, write)
   await service.add({ track: 'user', scope: 'workspace', text: 'cd' }, write)
-  // 并发改写：目标仍包含原 match 但长度变化（ab → xabx），复审必须以新 previous 重算净变化
+  // 并发改写：审批期间目标被改（version 1 → 2）。用户批准的是旧全文，写入却是新目标；
+  // 乐观锁必须响亮失败（不静默覆盖并发写）。
   duringAsk = () => service.store.replaceEntry({ track: 'user', scope: 'workspace', match: 'ab', text: 'xabx', sessionId: 'concurrent' })
-  const replaced = await service.replace({ track: 'user', scope: 'workspace', match: 'ab', text: 'abcdefgh' }, write)
-  assert.equal(replaced.previous.text, 'xabx', 'previous 是审批后重新定位的结果，而非审批前的陈旧值')
-  assert.equal(replaced.entry.text, 'abcdefgh')
-  assert.equal(service.store.usage('user', 'workspace'), 10, 'cd(2) + abcdefgh(8)；xabx 已被替换')
+  await assert.rejects(
+    () => service.replace({ track: 'user', scope: 'workspace', match: 'ab', text: 'abcdefgh' }, write),
+    (error) => error.code === 'STALE_WRITE',
+  )
+  assert.equal(service.query({ track: 'user', scope: 'workspace', text: 'xabx' }).total, 1, '并发写保留')
+  assert.equal(service.query({ track: 'user', scope: 'workspace', text: 'abcdefgh' }).total, 0, '本次 replace 未落盘')
 
   // 并发移除目标 → 复审重新定位响亮报错，绝不静默（换 agent 轨避免 user/workspace 已满）
   await service.add({ track: 'agent', scope: 'workspace', text: 'ef' }, write)

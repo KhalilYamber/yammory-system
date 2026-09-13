@@ -76,13 +76,15 @@ test('disposing the contributing fiber removes the panel routes and remount re-r
   await ctx.plugin(SystemPrompt)
   ctx.provide('approval', { request: async () => 'allowed-once', overrideOf: () => undefined, config: { policy: 'ask' } })
   await ctx.plugin(ToolRuntime)
-  // 与真实宿主一致：重复 exact 路由抛错；返回的 disposer 摘除路由。
+  // 与真实宿主一致：重复 Fetch 路由抛错；返回的 disposer 摘除路由。
   const routes = new Map()
-  ctx.provide('webServer', {
-    register(route) {
-      if (routes.has(route.path)) throw new Error(`duplicate exact route: ${route.path}`)
-      routes.set(route.path, route)
-      return () => { routes.delete(route.path) }
+  ctx.provide('connection', {
+    fetch: {
+      register(route) {
+        if (routes.has(route.path)) throw new Error(`duplicate Fetch route: ${route.path}`)
+        routes.set(route.path, route)
+        return async () => { routes.delete(route.path) }
+      },
     },
   })
   const first = await ctx.plugin(plugin, { dbPath })

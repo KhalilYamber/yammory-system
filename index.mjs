@@ -38,13 +38,14 @@ import {
   WriteDeniedError,
   NoAgentError,
   ProposalNotFoundError,
+  StaleWriteError,
   AdapterNotFoundError,
   AdapterPayloadError,
   SessionQueryUnavailableError,
 } from './lib/errors.mjs'
 import { validateBudgets, budgetReport, budgetLimits, checkBudget } from './lib/budget.mjs'
 import { buildWriteReason, isMemoryWriteRequest, applyWritePolicy, normalizeWritePolicy, resolveWritePolicy, validateWritePolicies, parseWriteReason } from './lib/gate.mjs'
-import { MemoryProtocolCore, PROTOCOL_ID, PROTOCOL_VERSION, PROTOCOL_URI, normalizeTags, validateMemoryEntry, validateExportEnvelope, validateAuditRow, MAX_TAGS_PER_ENTRY, MAX_TAG_LENGTH } from './lib/protocol.mjs'
+import { MemoryProtocolCore, PROTOCOL_ID, PROTOCOL_VERSION, PROTOCOL_URI, trustWriteGate, normalizeTags, validateMemoryEntry, validateExportEnvelope, validateAuditRow, MAX_TAGS_PER_ENTRY, MAX_TAG_LENGTH } from './lib/protocol.mjs'
 import { MemoryAdapterRegistry } from './lib/registry.mjs'
 import { REFERENCE_ADAPTERS } from './lib/adapters.mjs'
 import { renderSnapshot, renderWarmup, visibleEntries, visibleProposals } from './lib/snapshot.mjs'
@@ -1968,7 +1969,7 @@ function handleSessionEvent(store, session, event, proposals, summaries) {
  * @returns {(payload: WritePayload) => Promise<string>} gate 函数。
  */
 function makeCommandGate(ctx, write) {
-  return async (payload) => {
+  return trustWriteGate(async (payload) => {
     const approval = ctx.approval
     const session = write.agent?.session
     const sessionPolicy = typeof approval?.overrideOf === 'function' && session !== undefined
@@ -1983,7 +1984,7 @@ function makeCommandGate(ctx, write) {
       toolName: TOOL_NAME,
       reason: buildWriteReason(payload),
     }, async () => 'unavailable')
-  }
+  })
 }
 
 /**
@@ -2356,8 +2357,8 @@ async function runMemoryCommand(ctx, service, invocation, live) {
           scope: entry.scope,
           text: entry.text,
           ...(typeof entry.source === 'string' && entry.source.length > 0 ? { source: entry.source } : {}),
-          ...(typeof entry.workspaceKey === 'string' && entry.workspaceKey.length > 0 ? { workspaceKey: entry.workspaceKey } : {}),
-          ...(typeof entry.agentKey === 'string' && entry.agentKey.length > 0 ? { agentKey: entry.agentKey } : {}),
+          // 刻意不透传导入载荷的 workspaceKey/agentKey：导入条目回落到调用者会话的工作区/agent，
+          // 否则一条 /memory import 就能把记忆种进别的工作区（下次开会话即进 system prompt）。
         })
       }
       // seed 单次审批 + 全量预算预检 + 单事务原子落盘；条目重获新 id 与新时间戳，召回计数归零。
@@ -2839,19 +2840,23 @@ export function renderMemoryRecallResult(/** @type {object} */ _args, /** @type 
  * @param {{panelEntriesLimit: number, panelAuditLimit: number, panel: {enabled: boolean}, language: 'en'|'zh'}} options - 运行期可变值容器。
  */
 export function registerWebRoutes(ctx, service, options) {
-  withService(ctx, 'webServer', (/** @type {{register?: (route: object) => (() => void) | undefined} | null | undefined} */ webServer) => {
-    if (typeof webServer?.register !== 'function') return
-    // webServer.register 返回的 disposer 是唯一注销途径（重复 exact 路由会抛
-    // duplicate route），不随 fiber 自动撤销：逐个收集，末尾挂进一个
-    // ctx.effect，fiber 卸载时逆序摘除全部路由。
-    /** @type {Array<(() => void) | undefined>} */
+  withService(ctx, 'connection', (/** @type {{fetch?: {register?: (route: object) => (() => Promise<void>) | undefined}} | null | undefined} */ connection) => {
+    if (typeof connection?.fetch?.register !== 'function') return
+    // 走 ctx.connection.fetch 而不是 webServer.register(exact)：exact 路由匹配优先于
+    // 前缀路由，会抢在 connection 的 /api 信任栅栏之前命中，于是绕过 Host/Origin/
+    // sec-fetch-site 与浏览器认证（红队①）。经 connection.fetch 注册的 exact 路由由
+    // connection 的 /api handler 统一分发，栅栏先过、再到这里。
+    // connection.fetch.register 的 disposer 是异步的，且 effect 挂在 connection 的
+    // fiber 上：逐个收集，末尾挂进一个 ctx.effect，插件卸载时逆序摘除。
+    /** @type {Array<(() => Promise<void>) | undefined>} */
     const routeDisposers = []
-    routeDisposers.push(webServer.register({
-      kind: 'exact',
+    routeDisposers.push(connection.fetch.register({
       path: '/api/memento/entries',
-      handler: async (/** @type {{url?: string}} */ req, /** @type {PanelResponse} */ res) => {
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async (/** @type {Request} */ request) => {
         try {
-          const url = new URL(req.url ?? '', 'http://localhost')
+          const url = new URL(request.url)
           const filter = {
             ...(url.searchParams.get('text') ? { text: url.searchParams.get('text') } : {}),
             ...(url.searchParams.get('track') ? { track: url.searchParams.get('track') } : {}),
@@ -2864,52 +2869,53 @@ export function registerWebRoutes(ctx, service, options) {
             ...filter,
             ...(limit === undefined ? {} : { limit }),
           })
-          sendPanelJson(res, 200, { entries, total, truncated, budgets: service.budgets(), language: service.language, panel: { enabled: options.panel.enabled } })
+          return panelJson(200, { entries, total, truncated, budgets: service.budgets(), language: service.language, panel: { enabled: options.panel.enabled } })
         } catch (error) {
-          sendPanelJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+          return panelJson(500, { error: error instanceof Error ? error.message : String(error) })
         }
       },
     }))
-    routeDisposers.push(webServer.register({
-      kind: 'exact',
+    routeDisposers.push(connection.fetch.register({
       path: '/api/memento/audit',
-      handler: async (/** @type {{url?: string}} */ req, /** @type {PanelResponse} */ res) => {
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async (/** @type {Request} */ request) => {
         try {
-          const url = new URL(req.url ?? '', 'http://localhost')
+          const url = new URL(request.url)
           const raw = Number(url.searchParams.get('limit') ?? String(options.panelAuditLimit))
           const limit = Number.isInteger(raw) && raw > 0 ? Math.min(raw, PANEL_AUDIT_CEILING) : options.panelAuditLimit
-          sendPanelJson(res, 200, { rows: service.store.auditList(limit), language: service.language })
+          return panelJson(200, { rows: service.store.auditList(limit), language: service.language })
         } catch (error) {
-          sendPanelJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+          return panelJson(500, { error: error instanceof Error ? error.message : String(error) })
         }
       },
     }))
-    routeDisposers.push(webServer.register({
-      kind: 'exact',
+    routeDisposers.push(connection.fetch.register({
       path: '/api/memento/proposals',
-      handler: async (/** @type {{url?: string}} */ _req, /** @type {PanelResponse} */ res) => {
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async () => {
         try {
           // 只读：仅列出 pending 提案；approve/dismiss 走 /memory 命令（用户动作 + 审批门）。
-          sendPanelJson(res, 200, { proposals: service.store.proposalList('pending', 50), language: service.language })
+          return panelJson(200, { proposals: service.store.proposalList('pending', 50), language: service.language })
         } catch (error) {
-          sendPanelJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+          return panelJson(500, { error: error instanceof Error ? error.message : String(error) })
         }
       },
     }))
     // 路由随插件生命周期撤销：fiber 卸载时逆序执行全部 disposer。
     ctx.effect(() => () => {
-      for (const dispose of routeDisposers.splice(0).reverse()) dispose?.()
+      for (const dispose of routeDisposers.splice(0).reverse()) void dispose?.()
     }, 'memento: web panel routes')
   })
 }
 
-/** 面板 JSON 响应（node:http）。 */
-function sendPanelJson(/** @type {PanelResponse} */ res, /** @type {number} */ status, /** @type {unknown} */ value) {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
-  res.end(JSON.stringify(value))
+/** 面板 JSON 响应（WHATWG Response）。 */
+function panelJson(/** @type {number} */ status, /** @type {unknown} */ value) {
+  return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json; charset=utf-8' } })
 }
 
-export { MemoryError, InvalidInputError, BudgetExceededError, EntryNotFoundError, AmbiguousMatchError, WriteDeniedError, NoAgentError, ProposalNotFoundError, AdapterNotFoundError, AdapterPayloadError }
+export { MemoryError, InvalidInputError, BudgetExceededError, EntryNotFoundError, AmbiguousMatchError, StaleWriteError, WriteDeniedError, NoAgentError, ProposalNotFoundError, AdapterNotFoundError, AdapterPayloadError }
 export { buildWriteReason, isMemoryWriteRequest, applyWritePolicy, normalizeWritePolicy, resolveWritePolicy, validateWritePolicies, parseWriteReason }
 export { openMemoryStore, resolveDbPath }
 export { renderSnapshot, renderWarmup, visibleEntries }

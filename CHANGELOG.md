@@ -27,6 +27,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`seed` now carries a single-source batch's `source` into the approval payload** (S4b). Without it the per-source granularity key had no footing for batched writes: `source:observation` could not be resolved, so a user who set `source:observation: off` (or `auto`) would silently get the global `writePolicy` instead. Mixed-source batches still omit it and fall back to `track/scope` and the global policy.
 - **The warm-up block no longer emits an empty paragraph** when it has no constraint and no resident profile but does have proposals or a directory line to show.
 
+### Fixed
+
+- **Hid the panel routes behind the Connection trust fence (red team ①, medium-high).** The three `/api/memento/*` routes were registered as `webServer` exact routes. The webserver matches its `exact` table before its `prefix` table, so those routes answered *before* `client-connection`'s `/api` prefix route ever ran its `Host` / `Origin` / `Sec-Fetch-Site` fence and browser authentication — a request with hostile trust headers got a 200 and the whole store (cross-workspace, cross-agent, audit and proposals included). They now register through `ctx.connection.fetch.register`, so the fence applies and only the authenticated dispatch reaches the handler (same posture as `/api/other`, which already answered 401/403).
+- **`STALE_WRITE` — optimistic lock on `replace` (red team ⑦).** The version shown in the approval payload is now pinned into the write; if the target changed while the write waited, it fails loud instead of silently overwriting the concurrent change. This deliberately supersedes the old P0-4 behaviour ("re-locate and continue"), which broke approve-what-you-see: the approver saw one text and a different one was overwritten. New error code + `docs/schemas/dsh-memory-protocol-v1.schema.json` enum entry + protocol tables (en/zh).
+- **Input guards that used to fail silently or kill the store (red team ②③⑧⑨⑩).** `text` containing `U+0000` is refused before SQLite sees it (the column truncated silently: 511 chars in, 10 back, no error); `tags` elements must be non-empty, control-character-free strings (one dirty element used to poison the whole store with a permanent `STORE_CORRUPT`); `queryEntries` validates `track` / `scope` and throws `INVALID_INPUT` instead of leaking a raw SQLite error; `add(undefined)` and friends throw `INVALID_INPUT` instead of a bare `TypeError`; `extractHumanMessages` clamps a non-positive `maxChars` so `slice(0, -1)` can no longer emit an over-long slice.
+- **Idempotent migration (red team ④).** `CREATE TABLE IF NOT EXISTS` plus per-column `PRAGMA table_info` guards, and a missing `schema_version` row self-heals by re-filling it rather than re-running the ladder from 0 and dying on "table already exists" (a permanent dead end).
+- **`/memory import` no longer honours payload `workspaceKey` / `agentKey` (red team ⑤).** Imported entries fall back to the calling session's workspace and agent, so an import can no longer plant memory into another workspace (where it would enter that session's system prompt).
+- **`write.gate` needs an internal registration (red team ⑥).** A caller-supplied `gate` can no longer override the approval transport; only gates created by the command path (`trustWriteGate`) are accepted — defence in depth.
+
+### Tests
+
+- 272/272 (`node --test "test/*.test.mjs"`): the 263 existing tests plus `test/redteam.test.mjs` (②③④⑥⑦⑧⑨⑩) and a `/memory import` scope-injection case in `v2.test.mjs` (⑤); the panel-route tests and the Loader composition / hot-reload fixture were migrated from the `webServer` mock to a `connection.fetch` mock (`test/fixtures/mock-connection.mjs`).
+
 ## [0.5.12] - 2026-09-12
 
 ### Changed

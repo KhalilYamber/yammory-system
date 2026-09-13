@@ -75,7 +75,7 @@ test('Loader composition applies the special config value (language: zh)', () =>
 // 随之重启，面板路由卸载后重注册不抛 duplicate route。行携带稳定 id——无 id
 // 的行在每次配置读取后被视为删除+新增而整体重挂。
 test('Loader hot-reload: a language config edit restarts the fiber and keeps the panel routes clean', () => {
-  const fixture = join(repositoryRoot, 'test', 'fixtures', 'mock-webserver.mjs')
+  const fixture = join(repositoryRoot, 'test', 'fixtures', 'mock-connection.mjs')
   const configPath = join(temporaryRoot, 'reload.yml')
   writeFileSync(configPath, [
     "- id: sysprompt",
@@ -84,7 +84,7 @@ test('Loader hot-reload: a language config edit restarts the fiber and keeps the
     "  name: '@deepseek-ai/dsh-tools'",
     "- id: approval",
     "  name: '@deepseek-ai/dsh-user-approval'",
-    "- id: mock-webserver",
+    "- id: mock-connection",
     `  name: ${JSON.stringify(pathToFileURL(fixture).href)}`,
     "- id: yammory_system",
     `  name: ${JSON.stringify(pathToFileURL(entry).href)}`,

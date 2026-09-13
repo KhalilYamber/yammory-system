@@ -92,7 +92,7 @@ function mount(opts = {}) {
   }
   /** @type {Array<object>} */
   const routes = []
-  mock.ctx.provide('webServer', { register(route) { routes.push(route); return () => {} } })
+  mock.ctx.provide('connection', { fetch: { register(route) { routes.push(route); return async () => {} } } })
   const fake = makeFakeSettings(opts.userLayer)
   if (opts.withSettings !== false) mock.ctx.provide('settings', fake.service)
   apply(mock.ctx, composedOptions(dir, opts.composed))
@@ -103,18 +103,12 @@ function mount(opts = {}) {
   return { mock, fake, routes, teardown }
 }
 
-/** 同步执行一条面板路由并解析 JSON 响应。 */
-function callRoute(/** @type {{path: string, handler: (req: object, res: object) => Promise<void>}} */ route) {
-  /** @type {Array<string>} */
-  const bodies = []
-  void route.handler({ url: route.path }, {
-    writeHead(_status, _headers) {},
-    end(/** @type {string} */ body) { bodies.push(body) },
-  })
-  return JSON.parse(bodies[0])
+/** 执行一条面板 Fetch 路由并解析 JSON 响应。 */
+async function callRoute(/** @type {{path: string, fetch: (request: Request) => Promise<Response>}} */ route) {
+  return (await route.fetch(new Request(`http://localhost${route.path}`))).json()
 }
 
-test('settings 缺失（headless）：行为与组合配置一致，panel 默认开启', () => {
+test('settings 缺失（headless）：行为与组合配置一致，panel 默认开启', async () => {
   const mounted = mount({ withSettings: false })
   try {
     const { mock, routes } = mounted
@@ -122,7 +116,7 @@ test('settings 缺失（headless）：行为与组合配置一致，panel 默认
     assert.equal(mock.ctx.get('memory').writePolicy, 'auto')
     const entries = routes.find((route) => route.path === '/api/memento/entries')
     assert.ok(entries)
-    const payload = callRoute(entries)
+    const payload = await callRoute(entries)
     assert.equal(payload.panel.enabled, true)
     assert.equal(payload.language, 'zh')
   } finally {
@@ -182,14 +176,14 @@ test('watch 热更：publish 后 writePolicy/language 即时生效', () => {
   }
 })
 
-test('panel 开关：publish 关闭后 entries 路由透出 panel.enabled=false', () => {
+test('panel 开关：publish 关闭后 entries 路由透出 panel.enabled=false', async () => {
   const mounted = mount()
   try {
     const { fake, routes } = mounted
     const entries = routes.find((route) => route.path === '/api/memento/entries')
-    assert.equal(callRoute(entries).panel.enabled, true)
+    assert.equal((await callRoute(entries)).panel.enabled, true)
     fake.publish({ panel: { enabled: false } })
-    assert.equal(callRoute(entries).panel.enabled, false)
+    assert.equal((await callRoute(entries)).panel.enabled, false)
   } finally {
     mounted.teardown()
   }

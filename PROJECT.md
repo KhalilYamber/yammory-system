@@ -57,8 +57,9 @@ AI 不知道用户的知识水位，就按自己的水位说话——术语、�
 | **v2 · 记忆机制规格（D1）** | `docs/记忆机制v2规格.md` | ✅ 落纸（待 F 层施工） |
 | **F2 · 检索主梁（层 A）** | `KeywordRetriever` 默认承接 `memory_recall`（分词＋多词召回＋相关度排序）；`docs/F2检索升级方案.md` | ✅ 测试 263/263 |
 | **S4b · 观察通道** | `memory_observe` 工具 ＋ `yammory-observe` skill ＋ `/memory observe` ＋ 预热段目录行；`docs/观察通道方案.md` | ✅ 测试 263/263 · 门链 8/8 |
+| **R1 · 红队硬化** | 2026-09-13 红队 11 条全部收口：面板路由过大信任栅栏① · `replace` 乐观锁⑦ · NUL、脏标签、迁移幂等、import 越界、gate 白名单、词汇校验、入参、maxChars；`test/redteam.test.mjs` 回归 9 条 | ✅ 测试 272/272 · 门链 8/8 |
 
-**待办**：S5 治理（soft delete 行为 ＋ **分面裁决**）· **v2 各机制**（F3/F4/F5/F6/F7，见 `docs/记忆机制v2规格.md`）· S6 Dream（并入整理机）。
+**待办**：S5 治理（soft delete 行为 ＋ **分面裁决**）· **v2 各机制**（F3/F4/F5/F6/F7，见 `docs/记忆机制v2规格.md`）· S6 Dream（并入整理机）· **R1-⑪ 待主人定**（workspace 层预算全局共享，A 可耗光 B 的额度——属预算语义的设计取舍，建议与 F3 预算改造合并处理）。
 
 **身份**：项目已由 `dsh-memento` 更名为 `yammory_system`；出处与 Apache-2.0 归属保留；仓库指向 <https://github.com/KhalilYamber/yammory-system>；数据面（库目录 / 环境变量 / 路由）为兼容旧数据**保持不变**。
 

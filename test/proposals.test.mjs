@@ -34,7 +34,7 @@ function mount(opts = {}) {
   mock.ctx.approval = approval
   const commands = []
   mock.ctx.provide('commands', { register(def) { commands.push(def); return () => {} } })
-  if (opts.webServer) mock.ctx.provide('webServer', opts.webServer)
+  if (opts.connection) mock.ctx.provide('connection', opts.connection)
   apply(mock.ctx, {
     enabled: opts.enabled ?? true,
     dbPath,
@@ -168,14 +168,12 @@ test('/memory proposals：list / approve（写入走审批门）/ dismiss / 重�
 
 test('面板 proposals 路由只读返回 pending 列表', async (t) => {
   const routes = []
-  const mounted = mount({ webServer: { register(route) { routes.push(route); return () => {} } } })
+  const mounted = mount({ connection: { fetch: { register(route) { routes.push(route); return async () => {} } } } })
   t.after(() => teardown(mounted))
   emitCompaction(mounted.mock.ctx, makeSession({ id: 's-panel' }), '面板可见提案')
   const route = routes.find((r) => r.path === '/api/memento/proposals')
   assert.ok(route)
-  let captured = ''
-  await route.handler({ url: '/api/memento/proposals', method: 'GET' }, { writeHead() {}, end(body) { captured = body } })
-  const data = JSON.parse(captured)
+  const data = await (await route.fetch(new Request('http://localhost/api/memento/proposals'))).json()
   assert.equal(data.proposals.length, 1)
   assert.equal(data.proposals[0].text, '面板可见提案')
 })

@@ -139,6 +139,7 @@
             "BUDGET_EXCEEDED",
             "ENTRY_NOT_FOUND",
             "AMBIGUOUS_MATCH",
+            "STALE_WRITE",
             "WRITE_DENIED",
             "PROPOSAL_NOT_FOUND",
             "STORE_CORRUPT",

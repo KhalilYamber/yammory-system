@@ -126,6 +126,7 @@
 | `BUDGET_EXCEEDED` | 超预算写或 seed 批次 | `track, scope, used, limit, needed` |
 | `ENTRY_NOT_FOUND` | 零命中匹配 | `track, scope, match` |
 | `AMBIGUOUS_MATCH` | 多命中匹配 | `candidates`, `sample` |
+| `STALE_WRITE` | 审批期间目标条目被并发改动 | `track`, `scope`, `match`, `expected`, `actual` |
 | `WRITE_DENIED` | 审批 rejected/cancelled/unavailable | `outcome` |
 | `PROPOSAL_NOT_FOUND` | 对非 pending 提案裁决 | `id` |
 | `STORE_CORRUPT` / `STORE_UNSUPPORTED_VERSION` | 库不可读 / schema 过新 | `path` |

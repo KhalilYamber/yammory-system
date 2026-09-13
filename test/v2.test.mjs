@@ -38,7 +38,7 @@ function mount(opts = {}) {
   mock.ctx.approval = approval
   const commands = []
   mock.ctx.provide('commands', { register(def) { commands.push(def); return () => {} } })
-  if (opts.webServer) mock.ctx.provide('webServer', opts.webServer)
+  if (opts.connection) mock.ctx.provide('connection', opts.connection)
   if (opts.sessionQuery) mock.ctx.provide('sessionQuery', opts.sessionQuery)
   apply(mock.ctx, {
     enabled: opts.enabled ?? true,
@@ -332,6 +332,25 @@ test('F10：/memory import 校验——坏 JSON/坏 schema/超上限/坏条目�
   assert.equal(service.query({}).total, 0, '所有失败路径零落盘')
 })
 
+test('红队⑤：/memory import 不接受载荷里的 workspaceKey/agentKey（防跨作用域注入）', async (t) => {
+  const mounted = mount({ writePolicy: 'auto' })
+  t.after(() => teardown(mounted))
+  const { mock } = mounted
+  const service = mock.services.get('memory')
+  const invocation = { agent: makeAgent(makeSession({ id: 's-imp-inject' })), signal: new AbortController().signal }
+  const payload = JSON.stringify({
+    plugin: 'dsh-memento',
+    schema: 'memory-export-v1',
+    entries: [{ track: 'agent', scope: 'workspace', text: '潜入的条目', workspaceKey: '/other/workspace', agentKey: 'other-agent' }],
+  })
+  const result = await handleMemoryCommand(mock.ctx, service, { ...invocation, rawInput: `import ${payload}` })
+  assert.equal(result.kind, 'success')
+  const [entry] = service.query({ track: 'agent', scope: 'workspace' }).entries
+  assert.ok(entry)
+  assert.notEqual(entry.workspaceKey, '/other/workspace', '不接受载荷指定的工作区键，落回调用者会话')
+  assert.notEqual(entry.agentKey, 'other-agent', '不接受载荷指定的 agent 键，落回调用者会话')
+})
+
 test('F10：proposals approve 写入成功后提案被并发裁决 → 仍报成功（不掩盖成功写）', async (t) => {
   const mounted = mount({ writePolicy: 'auto' })
   t.after(() => teardown(mounted))
@@ -402,7 +421,7 @@ test('F10 语言面：language=en 命令输出英文（默认），zh 输出中�
 
 test('F9：面板路由只读——entries（含预算）与 audit（上限钳制）', async (t) => {
   const routes = []
-  const mounted = mount({ webServer: { register(route) { routes.push(route); return () => {} } } })
+  const mounted = mount({ connection: { fetch: { register(route) { routes.push(route); return async () => {} } } } })
   t.after(() => teardown(mounted))
   const service = mounted.mock.services.get('memory')
   await service.add(
@@ -413,31 +432,21 @@ test('F9：面板路由只读——entries（含预算）与 audit（上限钳�
   assert.deepEqual(routes.map((route) => route.path).sort(), ['/api/memento/audit', '/api/memento/entries', '/api/memento/proposals'])
 
   const entriesRoute = routes.find((route) => route.path === '/api/memento/entries')
-  let captured = ''
-  await entriesRoute.handler(
-    { url: '/api/memento/entries?text=面板', method: 'GET' },
-    { writeHead() {}, end(body) { captured = body } },
-  )
-  const entriesData = JSON.parse(captured)
+  const entriesData = await (await entriesRoute.fetch(new Request('http://localhost/api/memento/entries?text=面板'))).json()
   assert.equal(entriesData.total, 1)
   assert.ok(Array.isArray(entriesData.budgets))
   assert.equal(entriesData.budgets.length, 4)
   assert.equal(entriesData.language, 'zh', '面板路由携带 language 供客户端选文案')
 
   const auditRoute = routes.find((route) => route.path === '/api/memento/audit')
-  captured = ''
-  await auditRoute.handler(
-    { url: '/api/memento/audit?limit=500', method: 'GET' },
-    { writeHead() {}, end(body) { captured = body } },
-  )
-  const auditData = JSON.parse(captured)
+  const auditData = await (await auditRoute.fetch(new Request('http://localhost/api/memento/audit?limit=500'))).json()
   assert.ok(Array.isArray(auditData.rows))
   assert.ok(auditData.rows.length <= 20, 'limit 钳制到 20')
 })
 
 test('F9：面板 entries 路由解析 limit——显式大页返回全部，缺省/非法值回退默认并报 truncated', async (t) => {
   const routes = []
-  const mounted = mount({ webServer: { register(route) { routes.push(route); return () => {} } } })
+  const mounted = mount({ connection: { fetch: { register(route) { routes.push(route); return async () => {} } } } })
   t.after(() => teardown(mounted))
   const service = mounted.mock.services.get('memory')
   const agent = makeAgent(makeSession())
@@ -447,9 +456,7 @@ test('F9：面板 entries 路由解析 limit——显式大页返回全部，缺
   const entriesRoute = routes.find((route) => route.path === '/api/memento/entries')
 
   const fetchPage = async (query) => {
-    let captured = ''
-    await entriesRoute.handler({ url: `/api/memento/entries${query}`, method: 'GET' }, { writeHead() {}, end(body) { captured = body } })
-    return JSON.parse(captured)
+    return (await entriesRoute.fetch(new Request(`http://localhost/api/memento/entries${query}`))).json()
   }
 
   const full = await fetchPage('?limit=200')

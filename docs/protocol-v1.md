@@ -142,6 +142,7 @@ Structured errors expose a stable `code`; tools and models branch on the code, n
 | `BUDGET_EXCEEDED` | over-budget write or seed batch | `track, scope, used, limit, needed` |
 | `ENTRY_NOT_FOUND` | zero-hit match | `track, scope, match` |
 | `AMBIGUOUS_MATCH` | multi-hit match | `candidates`, `sample` |
+| `STALE_WRITE` | target entry changed while the write was being approved | `track`, `scope`, `match`, `expected`, `actual` |
 | `WRITE_DENIED` | rejected/cancelled/unavailable approval | `outcome` |
 | `PROPOSAL_NOT_FOUND` | proposal decision on non-pending id | `id` |
 | `STORE_CORRUPT` / `STORE_UNSUPPORTED_VERSION` | unreadable store / newer schema | `path` |
