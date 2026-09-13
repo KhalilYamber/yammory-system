@@ -34,6 +34,7 @@
 - **审批门不可绕过。** 每条写路径（`add` / `replace` / `remove` / `seed`）都被强制经过服务内部的审批 waterfall，而非工具层。`writePolicy: ask | auto | off` 是模型看不见的配置；`replace` / `remove` / `consolidate` 的审批载荷携带将被改动条目的全文，被拒的写同样落一条 `*-denied` 审计行。
 - **模型可见 ⟺ 已记录。** 注入的快照逐字进入 `system/message`；每次写都能从 `approval/asked` + `approval/decided` + 插件自有审计表重建。
 - **有界且诚实。** 每轨每层软预警线（默认 user 2000 / agent 4000）。越线绝不拦写——只提示这一格值得整合。绝不截断、绝不自动压缩。
+- **会话级开关。** 每个会话一个自己的记忆开关（插件自有 SQLite 表，schema v6；默认开）。关掉即四件同时停：**注入停**（该会话的冻结预热块立刻作废）、**召回禁**（`SESSION_MEMORY_OFF`）、**写入停**（与审批门同层拦截）、**观察不碰**（本会话不扫，历史选区也不选它）。管理面只读（`/memory list` / `budgets` / `audit` / `export`）照常可用。用 `/memory session on|off` 或输入框下方的开关切换；开关状态本身绝不进会话日志，审计行 `text` 恒为 `null`。
 
 两条轨道 × 两个层级 × 按 agent 隔离：`user` 轨（关于用户的事实）与 `agent` 轨（环境事实与约定），各自再分为 `user-global` 与 `workspace` 层，并按 `agentPreset` 隔离。快照在会话首次组装提示时冻结一次，会话中途不再变化。预热块承载表达约束与常驻画像，末行是一行目录（`本工作区与 agent 轨另有 N 条记忆不在本块`），让模型知道还有东西可按需取——只报条数，正文仍留在 `memory_recall` 那一侧。
 
@@ -104,7 +105,8 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 | `memory_recall` | tool | 有界的记忆匹配（查询按词元切分：中文二字、英文整词；任一词元命中即召回，按相关度排序）+ 近期会话历史匹配 |
 | `memory_observe` | tool | 观察通道：`scan` 只读取「用户本人」旧发言的有界切片（`cwd` 精确收窄、系统注入的伪发言过滤并计数、预算缺口如实报出）；`commit` 以一次审批、一次原子写落 1..8 条带证据的条目，`source` 固定 `observation` |
 | `yammory-observe` | skill | 用户主动发起的行为观察，把五个仅观察面（思维方式与思辨 / 人格特质 / 情绪模式与心理强度 / 自我认知 / 决策与行动风格）经 `memory_observe` 落库。源文件：`skills/yammory-observe/` |
-| `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` · `observe [--days=N]` |
+| `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` · `observe [--days=N]` · `session [on|off]` |
+| session switch | composer dock | 输入框下方的会话记忆开关（`conversation.composer.dock`，session scope）：显示当前状态并点击切换，走 `GET`/`POST /api/memento/session`（与面板路由同一条 `connection.fetch` 信任栅栏） |
 | web panel | client drawer | 只读：浏览条目、搜索、预算条、审计尾部；悬浮入口按钮可隐藏（`panel.enabled`） |
 | settings section | DSH 设置侧栏 → `yammory-system` | 免改文件编辑除 `enabled` 外的全部配置字段；即时/重载生效时机在页面内标注 |
 

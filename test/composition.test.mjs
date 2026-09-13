@@ -98,7 +98,7 @@ test('Loader hot-reload: a language config edit restarts the fiber and keeps the
   const marker = evidence.stdout.match(/DSH_LOADER_RESULT (.+)$/mu)
   const summary = JSON.parse(marker[1])
   assert.equal(summary.cycled, true)
-  assert.equal(summary.routes, 3)
+  assert.equal(summary.routes, 4)
 })
 
 test('invalid config fails loud through the Loader for the expected reason', () => {

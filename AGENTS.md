@@ -22,13 +22,13 @@ lib/constraint.mjs   表达约束生成：分领域水平 → 四档说话要求
 lib/workspace.mjs    工作区键规范化（Windows 大小写不敏感，零依赖）
 lib/extract.mjs      会话事件文本抽取（memory_recall 历史片段用，零依赖）
 lib/observe.mjs      观察通道纯函数核心（闸一授权收窄 / 闸二真人发言白名单 / 均匀采样 / 预算记账 / 观察条目组装，零依赖）
-lib/strings.mjs      模型可见/命令面双语词表（预热头/约束头/四档说话要求/分组标题/提案头，零依赖）
-lib/store.mjs        node:sqlite Provider：条目表+审计账本+迁移（零依赖）
+lib/strings.mjs      模型可见/命令面双语词表（预热头/约束头/四档说话要求/分组标题/提案头 ＋ `COMMAND_TEXT` 命令面文案包与 `CommandTextBundle` typedef，零依赖）
+lib/store.mjs        node:sqlite Provider：条目表+审计账本+迁移（SCHEMA v1→v6，含 `session_switch` 会话开关表；零依赖）
 lib/retrieval.mjs    可插拔检索 Provider seam：keyword 主路径（分词＋多词召回＋相关度排序，F2 层 A）+ substring 对照 + vector 可选后端（零 DSH 依赖）
 lib/embedding.mjs    嵌入 Provider seam：确定性伪嵌入（零 DSH 依赖，仅 node: 内置模块）
 lib/mcp.mjs          stdio MCP server 导出：只读工具面 memory_search / memory_stats（零 DSH 依赖）
 bin/mcp-server.mjs   MCP 可执行入口（零 DSH 依赖）
-client/client.js     Web 面板（零构建 vanilla，只读；en/zh 随 language 配置；经 dsh.client 注入）
+client/client.js     Web 面板（零构建 vanilla，只读；en/zh 随 language 配置；经 dsh.client 注入）+ 会话开关钮（`conversation.composer.dock`，session scope）
 scripts/             机械门：verify-readmes.mjs（五语一致性）、check-coverage.mjs（覆盖率）、verify-self-contained.mjs（拒绝仓库外依赖）、verify-artifacts.mjs（制品齐全+语法+导入）、loader-runner.mjs（真实 Loader composition）
 cordis.patch.yml     bundle 声明（insert yammory_system）
 package.json         npm 元数据；files 白名单 = 发布内容（含 docs/ 协议三件套与一致性套件）
@@ -80,6 +80,7 @@ npm run test:conformance  # 协议一致性套件（黄金参考；第三方 Pro
 - **只消费公开服务**：`tools`、`systemPrompt`、审批 seam（`inject` 声明）。不修改 DSH 引擎 / agent-loop / apiproxy / 官方 UI 包。
 - **注册即 effect**：一切贡献走 `ctx.effect()` / `ctx.on()` / 服务 `register()`（返回 disposer）；绝不手动收尾。
 - **模型可见 ⟺ 落盘**：注入模型的快照文本可自会话日志重建（system/message + snapshot 审计行 + 审批 reason 携带完整载荷）。
+- **会话级开关不可绕过**：`session_switch` 表的「关」状态在 `MemoryProtocolCore` 写方法内部拦截（与审批门同级、在 gate 与落盘之前），预热段/召回/观察在 `index.mjs` 各自入口拦截；开关状态**绝不进会话日志**（决策 4 的自适应门不变），审计行 `text` 恒为 `null`。
 - **审批门不可绕过**：写路径的强制点位于 `MemoryProtocolCore`（`lib/protocol.mjs`）写方法内部（`MemoryService` 继承它并注入 `ctx.approval.request` 传输），不在工具层；`writePolicy` 是 Config，模型不可见、不可改；禁用（`enabled:false`）时一切贡献整体消失，不留半残状态。
 - **失败要大声**：库损坏/版本过新/非法配置在加载期抛错；子串歧义报 `AMBIGUOUS_MATCH`；绝不静默吞、绝不静默截断。（v2：写入不因容量被拒，预算只是软预警线。）
 - **本地优先**：零网络、零凭据；记忆库只写 `dbPath`（默认 `$DSH_HOME/dsh-memento/memory.db`），POSIX 权限 0600。

@@ -28,7 +28,11 @@ import {
   OBSERVATION_FACE_VALUES,
   OBSERVATION_SOURCE,
   OBSERVE_LIMITS,
+  MAX_SWITCH_SESSION_ID,
 } from './lib/constants.mjs'
+import { COMMAND_TEXT } from './lib/strings.mjs'
+// CommandTextBundle 与 COMMAND_TEXT 同住 lib/strings.mjs（JSDoc typedef 随模块可见）。
+/** @typedef {import('./lib/strings.mjs').CommandTextBundle} CommandTextBundle */
 import {
   MemoryError,
   InvalidInputError,
@@ -42,6 +46,7 @@ import {
   AdapterNotFoundError,
   AdapterPayloadError,
   SessionQueryUnavailableError,
+  SessionMemoryOffError,
 } from './lib/errors.mjs'
 import { validateBudgets, budgetReport, budgetLimits, checkBudget } from './lib/budget.mjs'
 import { buildWriteReason, isMemoryWriteRequest, applyWritePolicy, normalizeWritePolicy, resolveWritePolicy, validateWritePolicies, parseWriteReason } from './lib/gate.mjs'
@@ -89,6 +94,9 @@ import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, Vector
  * @property {(input: {domain: string, level: number, tier?: string}) => ProfileRowValue} profileUpsert
  * @property {(domain: string) => ProfileRowValue | null} profileGet
  * @property {() => ProfileRowValue[]} profileList
+ * @property {(sessionId: unknown) => boolean} sessionEnabled
+ * @property {(sessionId: unknown, enabled: unknown) => boolean} sessionSetEnabled
+ * @property {() => string[]} disabledSessionIds
  * @property {() => void} close
  * @typedef {{request: (req: object) => Promise<string>, overrideOf?: (session: unknown) => string | undefined, config?: {policy?: string}}} ApprovalLike
  * @typedef {object} ServiceDeps
@@ -580,7 +588,13 @@ export function makeMemoryTool(service, language = 'en') {
         ...(exec.callId === undefined ? {} : { callId: exec.callId }),
         signal: exec.signal,
       }
+      // F5 会话级开关：关了记忆的会话，模型面查库（action=query）一律拒。写动作由
+      // 协议层拦（同一开关的第二道，也是安全保证的那一道），此处只是不重复打听。
+      // 抛出点放在 try 内：拒绝要变成结构化结果，绝不让裸错误逃出工具层。
       try {
+        if (args.action === 'query' && !service.store.sessionEnabled(exec.agent?.session?.id)) {
+          throw new SessionMemoryOffError(/** @type {string | undefined} */ (exec.agent?.session?.id))
+        }
         switch (args.action) {
           case 'query': {
             const result = service.query(
@@ -1074,6 +1088,9 @@ async function scanObservationHistory(ctx, live, args, exec) {
   const sessionQuery = /** @type {SessionQueryLike | null | undefined} */ (ctx.get('sessionQuery'))
   if (sessionQuery === undefined || sessionQuery === null) throw new SessionQueryUnavailableError()
   const session = /** @type {MemorySessionLike | null | undefined} */ (exec.agent?.session ?? null)
+  // F5：关了记忆的会话不观察。当下半边拒扫；历史半边由下面的选区过滤挡。
+  const sessionId = /** @type {string | undefined} */ (session?.id)
+  if (!/** @type {MemoryService} */ (ctx.get('memory')).store.sessionEnabled(sessionId)) throw new SessionMemoryOffError(sessionId)
   const now = Date.now()
   const { options, clamped } = resolveObserveOptions(/** @type {{[key: string]: unknown}} */ (args), live.observe)
   const scope = sessionScope({
@@ -1083,7 +1100,12 @@ async function scanObservationHistory(ctx, live, args, exec) {
     now,
   })
   const records = await sessionQuery.filterSessions(scope.filters, exec.signal)
-  const selected = records.slice(0, options.sessions)
+  // F5 选区过滤：已被关闭记忆的会话不进观察选区（规格 3.6 的历史半边）。
+  // 先滤后截断——被滤掉的条数进账单的 scanned.skippedOff，绝不静默少看几个会话。
+  const offIds = new Set(/** @type {MemoryService} */ (ctx.get('memory')).store.disabledSessionIds())
+  const kept = records.filter((record) => !offIds.has(String(record?.header?.id ?? '')))
+  const skippedOff = records.length - kept.length
+  const selected = kept.slice(0, options.sessions)
   /** @type {string[]} */
   const ids = []
   for (const record of selected) {
@@ -1110,7 +1132,7 @@ async function scanObservationHistory(ctx, live, args, exec) {
   }
   // 服务端已按 newest-first 返回，这里再排一次是防御：顺序变了也不会把老会话当成最近。
   snapshots.sort((a, b) => b.createdAt - a.createdAt)
-  const slice = buildObservationSlice(snapshots, options, now, OBSERVE_SLICE_LABELS[live.language] ?? OBSERVE_SLICE_LABELS.en)
+  const slice = buildObservationSlice(snapshots, options, now, OBSERVE_SLICE_LABELS[live.language] ?? OBSERVE_SLICE_LABELS.en, skippedOff)
   return { slice, options, clamped, selfOnly: scope.selfOnly, unreadable }
 }
 
@@ -1809,6 +1831,12 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
       const agent = context?.agent
       const session = agent?.session
       if (session === undefined || session === null) return ''
+      // F5 会话级开关：关掉即停注入。开关优先于会话内冻结——已冻结的段立刻失效，
+      // 本会话后续 assemble 一律返回空段，且不落 snapshot 审计（关了就不再留痕）。
+      if (!store.sessionEnabled(session.id)) {
+        snapshots.delete(session)
+        return ''
+      }
       let frozen = snapshots.get(session)
       if (frozen === undefined) {
         const workspaceKey = workspaceKeyOf(/** @type {string | undefined} */ (session.header?.cwd))
@@ -1987,165 +2015,6 @@ function makeCommandGate(ctx, write) {
   })
 }
 
-/**
- * /memory 命令文案（en 源文 / zh 译文；service.language 选择）。
- * @typedef {object} CommandTextBundle
- * @property {string} usage
- * @property {string} memoryEmpty
- * @property {(total: number, shown: number) => string} entries
- * @property {(total: number) => string} entriesFull
- * @property {string} queryNeedsWord
- * @property {(text: string) => string} noMatch
- * @property {(total: number, shown: number) => string} matches
- * @property {(total: number) => string} matchesFull
- * @property {string} budgets
- * @property {string} proposalsNone
- * @property {(n: number, rows: string) => string} proposalsList
- * @property {string} proposalsUsage
- * @property {(id: string) => string} proposalNotPending
- * @property {(track: string, scope: string, text: string, used: number, limit: number) => string} proposalApproved
- * @property {(id: string) => string} proposalDismissed
- * @property {string} auditEmpty
- * @property {(n: number) => string} audit
- * @property {string} addNeedsText
- * @property {(track: string, scope: string, text: string, used: number, limit: number) => string} added
- * @property {string} removeNeedsSubstring
- * @property {(track: string, scope: string, text: string, used: number, limit: number) => string} removed
- * @property {string} consolidateUsage
- * @property {string} consolidateNeedsMatches
- * @property {string} consolidateNeedsText
- * @property {(track: string, scope: string, removed: number, text: string, used: number, limit: number) => string} consolidated
- * @property {string} exportUsage
- * @property {string} importUsage
- * @property {string} importBadJson
- * @property {(path: string, message: string) => string} importReadFailed
- * @property {(schema: string) => string} importBadSchema
- * @property {string} importNoEntries
- * @property {(max: number) => string} importTooMany
- * @property {string} importBadEntry
- * @property {(n: number) => string} imported
- * @property {string} adaptersEmpty
- * @property {(n: number, rows: string) => string} adaptersList
- * @property {string} adapterExportUsage
- * @property {string} adapterImportUsage
- * @property {string} adapterServiceMissing
- * @property {string} adapterBadFlag
- * @property {(id: string) => string} adapterUnknown
- * @property {(id: string, message: string) => string} adapterPayload
- * @property {(n: number, id: string) => string} adapterImported
- * @property {string} observeUsage
- * @property {string} observeUnavailable
- * @property {string} observeHint
- * @property {(message: string) => string} observeFailed
- * @property {(verb: string) => string} unknownVerb
- * @property {(message: string) => string} commandFailed
- */
-const COMMAND_TEXT = /** @type {{en: CommandTextBundle, zh: CommandTextBundle}} */ ({
-  en: {
-    usage: 'Usage: /memory list | query <word> | add <text> | remove <substring> | consolidate <substring...> => <new text> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path> | observe [--days=N]',
-    memoryEmpty: 'Memory is empty.',
-    entries: (total, shown) => `Memory entries (${total} total, showing first ${shown}):`,
-    entriesFull: (total) => `Memory entries (${total}):`,
-    queryNeedsWord: 'query needs a keyword: /memory query <word>',
-    noMatch: (text) => `No entry contains "${text}".`,
-    matches: (total, shown) => `Matches (${total} total, showing first ${shown}):`,
-    matchesFull: (total) => `Matches (${total}):`,
-    budgets: 'Warning-line usage:',
-    proposalsNone: 'No pending memory proposals.',
-    proposalsList: (n, rows) => `Pending proposals (${n}):\n${rows}\nApprove: /memory proposals approve <id>; dismiss: /memory proposals dismiss <id>`,
-    proposalsUsage: 'proposals usage: /memory proposals | proposals approve <id> | proposals dismiss <id>',
-    proposalNotPending: (id) => `proposal ${JSON.stringify(id)} is not a pending proposal (decided or missing)`,
-    proposalApproved: (track, scope, text, used, limit) => `Proposal approved and written to memory (${track}/${scope}): ${text}\nLayer usage: ${used}/${limit}`,
-    proposalDismissed: (id) => `Proposal ${id} dismissed.`,
-    auditEmpty: 'Audit is empty.',
-    audit: (n) => `Recent audit (${n} rows):`,
-    addNeedsText: 'add needs text: /memory add [--track=user|agent] [--scope=user-global|workspace] <text>',
-    added: (track, scope, text, used, limit) => `Added (${track}/${scope}): ${text}\nLayer usage: ${used}/${limit}`,
-    removeNeedsSubstring: 'remove needs a unique substring: /memory remove [--track=user|agent] [--scope=user-global|workspace] <substring>',
-    removed: (track, scope, text, used, limit) => `Removed (${track}/${scope}): ${text}\nLayer usage: ${used}/${limit}`,
-    consolidateUsage: 'consolidate usage: /memory consolidate [--track=user|agent] [--scope=user-global|workspace] <substring1> [<substring2> ...] => <new text>',
-    consolidateNeedsMatches: 'consolidate needs 1..20 unique substrings (left of =>)',
-    consolidateNeedsText: 'consolidate needs new text (right of =>)',
-    consolidated: (track, scope, removed, text, used, limit) => `Consolidated (${track}/${scope}): removed ${removed}, added 1.\nNew entry: ${text}\nLayer usage: ${used}/${limit}`,
-    exportUsage: 'export dumps all entries + budgets as one JSON document (read-only; redirect it to a file for backup/migration): /memory export',
-    importUsage: 'import restores entries from an export document (a file path, or inline JSON starting with {): /memory import <path> | /memory import \'{"plugin":"dsh-memento",...}\'',
-    importBadJson: 'import: inline JSON could not be parsed',
-    importReadFailed: (path, message) => `import: cannot read ${JSON.stringify(path)}: ${message}`,
-    importBadSchema: (schema) => `import: not a dsh-memento export document (expected schema "${schema}")`,
-    importNoEntries: 'import: the export document contains no entries',
-    importTooMany: (max) => `import: the export document has more than ${max} entries; split it and import in batches`,
-    importBadEntry: 'import: every entry needs a string track, scope, and non-empty text',
-    imported: (n) => `Imported ${n} entries into memory (single approval). Entries get fresh ids and timestamps; proposals, audit rows and recall counts are not migrated.`,
-    adaptersEmpty: 'No memory adapters registered.',
-    adaptersList: (n, rows) => `Memory adapters (${n}):\n${rows}\nImport: /memory import --adapter=<id> <path|inline JSON>; export: /memory export --adapter=<id>`,
-    adapterExportUsage: 'adapter export usage: /memory export --adapter=<id> (read-only conversion to stdout)',
-    adapterImportUsage: 'adapter import usage: /memory import --adapter=<id> <file path> (or inline JSON starting with {)',
-    adapterServiceMissing: 'memory adapter registry is unavailable in this profile',
-    adapterBadFlag: 'adapter id missing or invalid: use --adapter=<id> (lowercase kebab-case)',
-    adapterUnknown: (id) => `no memory adapter "${id}" is registered; run /memory adapters`,
-    adapterPayload: (id, message) => `adapter ${id} rejected the payload: ${message}`,
-    adapterImported: (n, id) => `Imported ${n} entries via adapter ${id} (single approval). Entries get fresh ids and timestamps.`,
-    observeUsage: 'observe usage: /memory observe [--days=N] [--sessions=N] [--per-session=N] [--chars=N] [--budget=N] — read-only scan of your own past messages (no approval, no writes). Parameters are clamped to the hard limits; the output states what was NOT covered. To have the model infer from it, just say "observe me".',
-    observeUnavailable: 'observe: this profile provides no session-query service, so conversation history cannot be read.',
-    observeHint: 'Hand this slice to the model for inference: say "observe me" (the yammory-observe skill drives memory_observe commit through the approval gate). This command itself only reads — nothing was written.',
-    observeFailed: (message) => `observe scan failed: ${message}`,
-    unknownVerb: (verb) => `Unknown subcommand "${verb}". Usage: /memory list | query <word> | add <text> | remove <substring> | consolidate <substring...> => <new text> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path> | observe [--days=N]`,
-    commandFailed: (message) => `memory command failed: ${message}`,
-  },
-  zh: {
-    usage: '用法：/memory list | query <词> | add <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径> | observe [--days=N]',
-    memoryEmpty: '记忆为空。',
-    entries: (total, shown) => `记忆条目（共 ${total} 条，显示前 ${shown} 条）：`,
-    entriesFull: (total) => `记忆条目（${total} 条）：`,
-    queryNeedsWord: 'query 需要一个关键词：/memory query <词>',
-    noMatch: (text) => `没有条目包含「${text}」。`,
-    matches: (total, shown) => `命中（共 ${total} 条，显示前 ${shown} 条）：`,
-    matchesFull: (total) => `命中（${total} 条）：`,
-    budgets: '预警线用量：',
-    proposalsNone: '暂无待审批记忆提案。',
-    proposalsList: (n, rows) => `待审批提案（${n} 条）：\n${rows}\n审批：/memory proposals approve <id>；驳回：/memory proposals dismiss <id>`,
-    proposalsUsage: 'proposals 用法：/memory proposals | proposals approve <id> | proposals dismiss <id>',
-    proposalNotPending: (id) => `proposal ${JSON.stringify(id)} 不是待审批提案（可能已裁决或不存在）`,
-    proposalApproved: (track, scope, text, used, limit) => `已批准提案并写入记忆（${track}/${scope}）：${text}\n该层用量：${used}/${limit}`,
-    proposalDismissed: (id) => `已驳回提案 ${id}。`,
-    auditEmpty: '审计为空。',
-    audit: (n) => `最近审计（${n} 条）：`,
-    addNeedsText: 'add 需要文本：/memory add [--track=user|agent] [--scope=user-global|workspace] <文本>',
-    added: (track, scope, text, used, limit) => `已添加（${track}/${scope}）：${text}\n该层用量：${used}/${limit}`,
-    removeNeedsSubstring: 'remove 需要一个唯一子串：/memory remove [--track=user|agent] [--scope=user-global|workspace] <唯一子串>',
-    removed: (track, scope, text, used, limit) => `已删除（${track}/${scope}）：${text}\n该层用量：${used}/${limit}`,
-    consolidateUsage: 'consolidate 用法：/memory consolidate [--track=user|agent] [--scope=user-global|workspace] <唯一子串1> [<唯一子串2> ...] => <新文本>',
-    consolidateNeedsMatches: 'consolidate 需要 1..20 个唯一子串（=> 左侧）',
-    consolidateNeedsText: 'consolidate 需要新文本（=> 右侧）',
-    consolidated: (track, scope, removed, text, used, limit) => `已整合（${track}/${scope}）：删除 ${removed} 条，新增 1 条。\n新条目：${text}\n该层用量：${used}/${limit}`,
-    exportUsage: 'export 把所有条目 + 预算导出为一份 JSON 文档（只读；可重定向到文件做备份/迁移）：/memory export',
-    importUsage: 'import 从导出文档恢复条目（文件路径，或以 { 开头的内联 JSON）：/memory import <路径> | /memory import \'{"plugin":"dsh-memento",...}\'',
-    importBadJson: 'import：内联 JSON 无法解析',
-    importReadFailed: (path, message) => `import：无法读取 ${JSON.stringify(path)}：${message}`,
-    importBadSchema: (schema) => `import：不是 dsh-memento 导出文档（要求 schema "${schema}"）`,
-    importNoEntries: 'import：导出文档没有任何条目',
-    importTooMany: (max) => `import：导出文档超过 ${max} 条；请拆分后分批导入`,
-    importBadEntry: 'import：每条都需要字符串 track、scope 与非空 text',
-    imported: (n) => `已导入 ${n} 条记忆（单次审批）。条目获得新 id 与新时间戳；提案、审计行与召回计数不迁移。`,
-    adaptersEmpty: '没有已注册的记忆适配器。',
-    adaptersList: (n, rows) => `记忆适配器（${n} 个）：\n${rows}\n导入：/memory import --adapter=<id> <路径|内联 JSON>；导出：/memory export --adapter=<id>`,
-    adapterExportUsage: '适配器导出用法：/memory export --adapter=<id>（只读转换输出到 stdout）',
-    adapterImportUsage: '适配器导入用法：/memory import --adapter=<id> <文件路径>（或以 { 开头的内联 JSON）',
-    adapterServiceMissing: '当前 profile 没有记忆适配器注册表',
-    adapterBadFlag: '适配器 id 缺失或非法：请用 --adapter=<id>（小写 kebab-case）',
-    adapterUnknown: (id) => `没有注册记忆适配器「${id}」；请运行 /memory adapters`,
-    adapterPayload: (id, message) => `适配器 ${id} 拒绝了载荷：${message}`,
-    adapterImported: (n, id) => `已通过适配器 ${id} 导入 ${n} 条记忆（单次审批）。条目获得新 id 与新时间戳。`,
-    observeUsage: 'observe 用法：/memory observe [--days=N] [--sessions=N] [--per-session=N] [--chars=N] [--budget=N]——只读扫描你自己的旧发言（无审批、不写入）。参数会被夹到硬上限；输出会写明「没看到哪些」。想让模型据此推断，直接说「观察一下我」。',
-    observeUnavailable: 'observe：本 profile 未提供 session-query 服务，读不到会话历史。',
-    observeHint: '把这段交给模型推断：说「观察一下我」（yammory-observe skill 会引导 memory_observe commit 走审批门落库）。本命令自身只读，没有写入任何东西。',
-    observeFailed: (message) => `observe 扫描失败：${message}`,
-    unknownVerb: (verb) => `未知子命令「${verb}」。用法：/memory list | query <词> | add <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径> | observe [--days=N]`,
-    commandFailed: (message) => `memory 命令失败：${message}`,
-  },
-})
-
-/** 命令注册描述与输入提示（双语）。 */
 const COMMAND_DESCRIPTION = /** @type {{en: {description: string, hint: string}, zh: {description: string, hint: string}}} */ ({
   en: {
     description: 'View/manage yammory_system memory: list | query <word> | add [--track=user|agent] [--scope=user-global|workspace] <text> | remove <substring> | consolidate <substring...> => <new text> | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path> | observe [--days=N]',
@@ -2223,6 +2092,9 @@ async function runMemoryCommand(ctx, service, invocation, live) {
       return { kind: 'success', text: `${header}\n${entries.map(renderEntryLine).join('\n')}` }
     }
     case 'query': {
+      // F5：模型按需查库与 memory_recall 同档——关了记忆，本会话的查库一律拒；
+      // /memory list|budgets|audit 等管理面只读不受影响。
+      if (!service.store.sessionEnabled(invocation?.agent?.session?.id)) return { kind: 'error', text: text.sessionOffRead }
       const query = rest.join(' ')
       if (query.length === 0) return { kind: 'error', text: text.queryNeedsWord }
       const { entries, total, truncated } = service.query(
@@ -2410,6 +2282,28 @@ async function runMemoryCommand(ctx, service, invocation, live) {
         { agent: invocation?.agent, gate: makeCommandGate(ctx, invocation) },
       )
       return { kind: 'success', text: text.consolidated(track, scope, result.removed.length, result.entry.text, result.usage.used, result.usage.limit) }
+    }
+    case 'session': {
+      // F5 会话级开关：用户自己的控制件（非记忆写操作）——不打扰审批门，
+      // 但状态本身绝不进会话日志（memory/* 事件未注册）；插件审计表记一行。
+      const sessionId = invocation?.agent?.session?.id
+      if (typeof sessionId !== 'string' || sessionId.length === 0) return { kind: 'error', text: text.sessionNoId }
+      const mode = (rest[0] ?? 'status').toLowerCase()
+      if (mode !== 'status' && mode !== 'on' && mode !== 'off') return { kind: 'error', text: text.sessionUsage }
+      const enabled = mode === 'status' ? service.store.sessionEnabled(sessionId) : service.store.sessionSetEnabled(sessionId, mode === 'on')
+      if (mode !== 'status') {
+        service.store.auditAppend({
+          action: 'session-switch',
+          track: null,
+          scope: null,
+          entryId: null,
+          text: null,
+          outcome: enabled ? 'on' : 'off',
+          source: DEFAULT_SOURCE,
+          sessionId,
+        })
+      }
+      return { kind: 'success', text: `${text.sessionState(shortSessionId(sessionId), enabled ? text.sessionOn : text.sessionOff, mode === 'status')}\n${enabled ? text.sessionToggleHintOn : text.sessionToggleHintOff}` }
     }
     case 'observe': {
       // 观察通道的命令面：只读扫描 ＋ 打印切片与账单。推断由模型做（本命令不叫模型、
@@ -2679,25 +2573,35 @@ export function makeMemoryRecallTool(service, ctx, live) {
       const agentKey = agentKeyOf(/** @type {string | undefined} */ (exec.agent?.session?.header?.agentPreset))
       const limit = args.memoryLimit ?? 10
       const retriever = /** @type {import('./lib/retrieval.mjs').RetrievalProvider} */ (live.retriever)
-      const memory = recallViaRetriever(service, retriever, args.query, limit, { sessionId, session, agentKey })
-      const history = await recallHistory(
-        ctx,
-        args.query,
-        args.historyLimit ?? live.recall.historyLimitDefault,
-        live.recall.snippetCap,
-        live.recall.snippetChars,
-        exec.signal,
-        /** @type {string | undefined} */ (exec.agent?.session?.header?.cwd),
-        live.recall.windowDays,
-      )
-      return {
-        ok: true,
-        memory: {
-          entries: memory.entries.map(publicEntry),
-          total: memory.total,
-          truncated: memory.truncated,
-        },
-        history,
+      try {
+        // F5 会话级开关：召回禁。不检索、不 bumpRecall、不落 recalled 审计——
+        // 「关掉记忆」在模型面就是一次干净的拒绝。
+        if (!service.store.sessionEnabled(sessionId)) {
+          throw new SessionMemoryOffError(sessionId, 'memory_recall is disabled for this session')
+        }
+        const memory = recallViaRetriever(service, retriever, args.query, limit, { sessionId, session, agentKey })
+        const history = await recallHistory(
+          ctx,
+          args.query,
+          args.historyLimit ?? live.recall.historyLimitDefault,
+          live.recall.snippetCap,
+          live.recall.snippetChars,
+          exec.signal,
+          /** @type {string | undefined} */ (exec.agent?.session?.header?.cwd),
+          live.recall.windowDays,
+        )
+        return {
+          ok: true,
+          memory: {
+            entries: memory.entries.map(publicEntry),
+            total: memory.total,
+            truncated: memory.truncated,
+          },
+          history,
+        }
+      } catch (error) {
+        if (error instanceof SessionMemoryOffError) return { ok: false, error: toToolError(error) }
+        throw error
       }
     }),
   })
@@ -2903,6 +2807,52 @@ export function registerWebRoutes(ctx, service, options) {
         }
       },
     }))
+    // F5 会话级开关：GET 读状态，POST 只切换开关（不接受任何其它字段）。
+    // 与上面三条同栅栏（connection.fetch）——不得走 webServer exact（红队①）。
+    // 注册表以 path 为键（同 path 只能一条），GET/POST 合并为一条路由按 method 分派。
+    routeDisposers.push(connection.fetch.register({
+      path: '/api/memento/session',
+      methods: ['GET', 'POST'],
+      requestBody: 'buffered',
+      fetch: async (/** @type {Request} */ request) => {
+        try {
+          if (request.method === 'GET') {
+            const sessionId = new URL(request.url).searchParams.get('sessionId')
+            if (!validSwitchSessionId(sessionId)) return panelJson(400, { error: 'sessionId must be a non-empty string of at most 200 characters' })
+            return panelJson(200, { sessionId, enabled: service.store.sessionEnabled(sessionId), language: service.language })
+          }
+          /** @type {unknown} */
+          let body
+          try {
+            body = await request.json()
+          } catch {
+            return panelJson(400, { error: 'body must be a JSON object {sessionId, enabled}' })
+          }
+          const input = /** @type {{[key: string]: unknown}} */ (body)
+          if (input === null || typeof input !== 'object') return panelJson(400, { error: 'body must be a JSON object {sessionId, enabled}' })
+          const keys = Object.keys(input)
+          if (keys.length !== 2 || !keys.includes('sessionId') || !keys.includes('enabled')) {
+            return panelJson(400, { error: 'body must contain exactly {sessionId, enabled}' })
+          }
+          if (!validSwitchSessionId(input.sessionId)) return panelJson(400, { error: 'sessionId must be a non-empty string of at most 200 characters' })
+          const sessionId = /** @type {string} */ (input.sessionId)
+          const enabled = service.store.sessionSetEnabled(sessionId, input.enabled === true)
+          service.store.auditAppend({
+            action: 'session-switch',
+            track: null,
+            scope: null,
+            entryId: null,
+            text: null,
+            outcome: enabled ? 'on' : 'off',
+            source: DEFAULT_SOURCE,
+            sessionId,
+          })
+          return panelJson(200, { sessionId, enabled, language: service.language })
+        } catch (error) {
+          return panelJson(500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    }))
     // 路由随插件生命周期撤销：fiber 卸载时逆序执行全部 disposer。
     ctx.effect(() => () => {
       for (const dispose of routeDisposers.splice(0).reverse()) void dispose?.()
@@ -2910,12 +2860,22 @@ export function registerWebRoutes(ctx, service, options) {
   })
 }
 
+/** 会话 id 短码（命令面展示用：太长会撑破一行，前缀已足够定位）。 */
+function shortSessionId(/** @type {string} */ sessionId) {
+  return sessionId.length <= 12 ? sessionId : `${sessionId.slice(0, 12)}…`
+}
+
+/** 会话开关路由的 sessionId 校验（非空字符串且 ≤ 200 字符，否则 400）。 */
+function validSwitchSessionId(/** @type {unknown} */ value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_SWITCH_SESSION_ID
+}
+
 /** 面板 JSON 响应（WHATWG Response）。 */
 function panelJson(/** @type {number} */ status, /** @type {unknown} */ value) {
   return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json; charset=utf-8' } })
 }
 
-export { MemoryError, InvalidInputError, BudgetExceededError, EntryNotFoundError, AmbiguousMatchError, StaleWriteError, WriteDeniedError, NoAgentError, ProposalNotFoundError, AdapterNotFoundError, AdapterPayloadError }
+export { MemoryError, InvalidInputError, BudgetExceededError, EntryNotFoundError, AmbiguousMatchError, StaleWriteError, WriteDeniedError, NoAgentError, ProposalNotFoundError, AdapterNotFoundError, AdapterPayloadError, SessionMemoryOffError }
 export { buildWriteReason, isMemoryWriteRequest, applyWritePolicy, normalizeWritePolicy, resolveWritePolicy, validateWritePolicies, parseWriteReason }
 export { openMemoryStore, resolveDbPath }
 export { renderSnapshot, renderWarmup, visibleEntries }

@@ -77,6 +77,27 @@ const STRINGS = {
 }
 
 /**
+ * 会话开关钮文案（en 源文 / zh 译文；语言取 /api/memento/session 响应的 language）。
+ * 与 COMAND_TEXT 的命令面文案同口径：开关关掉 = 不注入、不召回、不写入、不观察。
+ */
+const SWITCH_STRINGS = {
+  en: {
+    title: 'Memory switch for this session',
+    on: 'Memory on',
+    off: 'Memory off',
+    loading: 'Memory …',
+    unavailable: 'Memory n/a',
+  },
+  zh: {
+    title: '本会话的记忆开关',
+    on: '记忆已开',
+    off: '记忆已关',
+    loading: '记忆 …',
+    unavailable: '记忆不可用',
+  },
+}
+
+/**
  * 启动探测：panel.enabled=false 时入口按钮不渲染（设置面板可随时改回）；
  * 探测失败按开启处理，行为与未引入开关前的版本一致。
  * @returns {Promise<{enabled: boolean, language: string}>}。
@@ -692,6 +713,12 @@ function escapeHtml(value) {
 .memsec-failed { font-size: 12px; color: var(--dsw-alias-label-error, #e5534b); }
 .memsec-btn { font: inherit; font-size: 13px; border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.35)); background: transparent; color: inherit; border-radius: 6px; padding: 4px 14px; cursor: pointer; }
 .memsec-btn:disabled { opacity: 0.5; cursor: default; }
+.memswitch { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px; color: var(--dsw-alias-label-secondary, #8a93a6); background: 0 0; border: 1px solid transparent; border-radius: 999px; padding: 2px 10px; cursor: pointer; }
+.memswitch:hover:not(:disabled) { border-color: var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.35)); color: inherit; }
+.memswitch:disabled { cursor: default; opacity: 0.6; }
+.memswitch-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dsw-alias-label-success, #3fb950); }
+.memswitch-off { color: var(--dsw-alias-label-tertiary, #98a2b3); text-decoration: line-through; }
+.memswitch-off .memswitch-dot { background: var(--dsw-alias-label-tertiary, #98a2b3); }
 `
 
       /** 单字段控件行（label + input/checkbox/select + override 徽标 + reset + hint/invalid）。 */
@@ -804,6 +831,83 @@ function escapeHtml(value) {
         }
       }
 
+/**
+       * /api/memento/session 客户端面（GET 读状态 / POST 切换）。
+       * 路由由 host 经 connection.fetch 注册（红队①后不得走 webServer exact）。
+       * @param {string} sessionId - 当前会话 id。
+       * @param {boolean} [next] - 省略 = 只读；传入 = 切换后的目标状态。
+       * @returns {Promise<{enabled: boolean, language: string}>}。
+       */
+      async function fetchSessionSwitch(sessionId, next) {
+        const response = next === undefined
+          ? await fetch(`/api/memento/session?sessionId=${encodeURIComponent(sessionId)}`)
+          : await fetch('/api/memento/session', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ sessionId, enabled: next }),
+            })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const data = await response.json()
+        if (typeof data?.enabled !== 'boolean') throw new Error('malformed response')
+        return { enabled: data.enabled, language: typeof data.language === 'string' ? data.language : 'en' }
+      }
+
+      /**
+       * 会话开关钮（conversation.composer.dock，session scope）：这个会话的记忆开关。
+       * 注册被拒或拿不到 sessionId 时降级为只读显示，绝不因 UI 把插件带崩（方案 §6）。
+       * @param {object} ctx - 客户端插件上下文。
+       */
+      function registerComposerSwitch(ctx) {
+        const slots = ctx.slots
+        if (slots === undefined || slots === null) return
+        try {
+          ctx.effect(() => slots.inject('conversation.composer.dock', () => slots.register({
+            name: 'conversation.composer.dock',
+            id: 'yammory-session-switch',
+            order: 40,
+          }, SessionSwitch)), 'yammory-system: composer session switch')
+        } catch {
+          // 宿主拒绝该 slot：仅缺一个开关钮，命令面与拦截链不受影响。
+          return
+        }
+      }
+
+      /** 会话记忆开关按钮（会话内点一下即切；文案随宿主面板语言，缺省 en）。 */
+      function SessionSwitch(props) {
+        const sessionId = typeof props?.sessionId === 'string' && props.sessionId.length > 0 ? props.sessionId : ''
+        const [state, setState] = react.useState({ phase: sessionId === '' ? 'unavailable' : 'loading', enabled: true, language: 'en' })
+        const [busy, setBusy] = react.useState(false)
+        react.useEffect(() => {
+          if (sessionId === '') return undefined
+          let live = true
+          fetchSessionSwitch(sessionId)
+            .then((data) => { if (live) setState({ phase: 'ready', enabled: data.enabled, language: data.language }) })
+            .catch(() => { if (live) setState((prev) => ({ ...prev, phase: 'failed' })) })
+          return () => { live = false }
+        }, [sessionId])
+        const t = SWITCH_STRINGS[state.language === 'zh' ? 'zh' : 'en']
+        const toggle = () => {
+          if (busy || sessionId === '' || state.phase === 'failed') return
+          setBusy(true)
+          fetchSessionSwitch(sessionId, !state.enabled)
+            .then((data) => setState({ phase: 'ready', enabled: data.enabled, language: data.language }))
+            .catch(() => setState((prev) => ({ ...prev, phase: 'failed' })))
+            .finally(() => setBusy(false))
+        }
+        const label = state.phase === 'loading' ? t.loading
+          : state.phase === 'unavailable' || state.phase === 'failed' ? t.unavailable
+            : state.enabled ? t.on : t.off
+        return jsx('button', {
+          type: 'button',
+          className: `memswitch${state.phase === 'ready' && !state.enabled ? ' memswitch-off' : ''}`,
+          disabled: busy || sessionId === '' || state.phase === 'failed',
+          title: t.title,
+          'aria-label': `${t.title} — ${label}`,
+          'aria-pressed': state.phase === 'ready' ? state.enabled : undefined,
+          onClick: toggle,
+        }, jsx('span', { className: 'memswitch-dot' }), label)
+      }
+
       function apply(ctx) {
         void bootPanel()
         if (!styleInstalled && typeof document !== 'undefined') {
@@ -813,6 +917,7 @@ function escapeHtml(value) {
           tag.textContent = CARD_CSS
           document.head.appendChild(tag)
         }
+        registerComposerSwitch(ctx)
         const controller = new YammoryCardController(ctx.settingsScope.bind({ namespace: 'yammory-system' }))
         ctx.effect(() => ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',

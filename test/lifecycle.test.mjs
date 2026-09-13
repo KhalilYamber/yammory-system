@@ -89,14 +89,14 @@ test('disposing the contributing fiber removes the panel routes and remount re-r
   })
   const first = await ctx.plugin(plugin, { dbPath })
   try {
-    assert.equal(routes.size, 3, 'the panel routes should be registered on mount')
+    assert.equal(routes.size, 4, 'the panel routes should be registered on mount')
 
     await first.dispose()
     assert.equal(routes.size, 0, 'the panel routes should be removed on fiber dispose')
 
     // 重挂载（配置热重载）不得再触发 duplicate route。
     const second = await ctx.plugin(plugin, { dbPath })
-    assert.equal(routes.size, 3, 'a remount should re-register the panel routes')
+    assert.equal(routes.size, 4, 'a remount should re-register the panel routes')
     await second.dispose()
     assert.equal(routes.size, 0)
   } finally {
