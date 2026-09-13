@@ -23,6 +23,10 @@ lib/workspace.mjs    工作区键规范化（Windows 大小写不敏感，零依
 lib/extract.mjs      会话事件文本抽取（memory_recall 历史片段用，零依赖）
 lib/strings.mjs      模型可见/命令面双语词表（预热头/约束头/四档说话要求/分组标题/提案头，零依赖）
 lib/store.mjs        node:sqlite Provider：条目表+审计账本+迁移（零依赖）
+lib/retrieval.mjs    可插拔检索 Provider seam：substring 主路径 + vector 可选后端（零 DSH 依赖）
+lib/embedding.mjs    嵌入 Provider seam：确定性伪嵌入（零 DSH 依赖，仅 node: 内置模块）
+lib/mcp.mjs          stdio MCP server 导出：只读工具面 memory_search / memory_stats（零 DSH 依赖）
+bin/mcp-server.mjs   MCP 可执行入口（零 DSH 依赖）
 client/client.js     Web 面板（零构建 vanilla，只读；en/zh 随 language 配置；经 dsh.client 注入）
 scripts/             机械门：verify-readmes.mjs（五语一致性）、check-coverage.mjs（覆盖率）、verify-self-contained.mjs（拒绝仓库外依赖）、verify-artifacts.mjs（制品齐全+语法+导入）、loader-runner.mjs（真实 Loader composition）
 cordis.patch.yml     bundle 声明（insert yammory_system）
