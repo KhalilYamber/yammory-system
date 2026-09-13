@@ -93,7 +93,9 @@ Todos os parâmetros são campos Schemastery `Config` (alteráveis pelo cordis.y
 
 | Surface | Kind | Notes |
 |---|---|---|
-| `memory` | tool | add/replace/remove/consolidate/query com orientação Save/Skip; escritas passam pela porta de aprovação |
+| `memory` | tool | add/replace/remove/consolidate/query com orientação Save/Skip; as entradas podem carregar coordenadas de perfil (`facet` = uma das sete facetas, `level` = nível de conhecimento por domínio); escritas passam pela porta de aprovação |
+| `memory_profile` | tool | Nível de conhecimento por domínio na escala de 31 subdomínios (`set` / `list` / `get`); `set` passa pela porta de aprovação e é auditado, `tier` é derivado de `level` |
+| `yammory-survey` | skill | Questionário de perfil iniciado pelo usuário, cobrindo os 24 subblocos elegíveis; grava via `memory` + `memory_profile`. Código-fonte: `skills/yammory-survey/` |
 | `memory_recall` | tool | Correspondências limitadas de memória mais correspondências recentes do histórico de sessão |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` |
 | web panel | client drawer | Somente leitura: navegar entradas, buscar, barras de orçamento, cauda de auditoria; o botão flutuante pode ser ocultado (`panel.enabled`) |

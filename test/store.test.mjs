@@ -420,6 +420,55 @@ test('facet/level 非法值在 Provider 层响亮拒绝（不落 SQL）', (t) =>
   assert.throws(() => store.insertEntry({ track: 'user', scope: 'workspace', text: 'x', level: 3.5 }), InvalidInputError)
 })
 
+test('S3：replaceEntry 省略 facet/level 保持原坐标，显式传入才覆盖', (t) => {
+  const { dir, store } = tempStore()
+  t.after(() => closeAndClean({ dir, store }))
+  store.insertEntry({ track: 'user', scope: 'user-global', text: '会 Python，能写脚本', facet: '能力与技能', level: 6 })
+
+  const kept = store.replaceEntry({ track: 'user', scope: 'user-global', match: 'Python', text: '会 Python，能写中小型工具' })
+  assert.equal(kept.entry.facet, '能力与技能', '改写文本不动面')
+  assert.equal(kept.entry.level, 6, '改写文本不动档位')
+  assert.equal(kept.entry.version, 2)
+
+  const overridden = store.replaceEntry({ track: 'user', scope: 'user-global', match: '中小型工具', text: '会 Python，能写中小型工具', facet: '心智', level: 8 })
+  assert.equal(overridden.entry.facet, '心智')
+  assert.equal(overridden.entry.level, 8)
+
+  // 显式 null = 清空坐标
+  const cleared = store.replaceEntry({ track: 'user', scope: 'user-global', match: 'Python', text: '会 Python', facet: null, level: null })
+  assert.equal(cleared.entry.facet, null)
+  assert.equal(cleared.entry.level, null)
+
+  // 非法坐标响亮拒绝且不落 SQL
+  assert.throws(
+    () => store.replaceEntry({ track: 'user', scope: 'user-global', match: 'Python', text: '会 Python', facet: '不存在' }),
+    InvalidInputError,
+  )
+  assert.throws(
+    () => store.replaceEntry({ track: 'user', scope: 'user-global', match: 'Python', text: '会 Python', level: 0 }),
+    InvalidInputError,
+  )
+  assert.equal(store.listEntries()[0].facet, null, '被拒的替换不改动原条目')
+})
+
+test('S3：consolidateEntries 把 facet/level 落在新条目上', (t) => {
+  const { dir, store } = tempStore()
+  t.after(() => closeAndClean({ dir, store }))
+  store.insertEntry({ track: 'user', scope: 'user-global', text: '会 Python，能写脚本' })
+  store.insertEntry({ track: 'user', scope: 'user-global', text: '会一点 Rust，读得懂' })
+  const { removed, entry } = store.consolidateEntries({
+    track: 'user', scope: 'user-global',
+    matches: ['Python', 'Rust'],
+    text: '编程语言：Python 可独立写，Rust 能读',
+    facet: '能力与技能', level: 7,
+  })
+  assert.equal(removed.length, 2)
+  assert.equal(entry.facet, '能力与技能')
+  assert.equal(entry.level, 7)
+  assert.equal(store.listEntries().length, 1)
+  assert.equal(store.listEntries()[0].level, 7)
+})
+
 test('profile：幂等 upsert 覆盖、list 升序、get 命中/未命中、tier 推导', (t) => {
   const { dir, store } = tempStore()
   t.after(() => closeAndClean({ dir, store }))

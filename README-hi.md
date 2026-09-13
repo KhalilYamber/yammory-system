@@ -93,7 +93,9 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 
 | Surface | Kind | Notes |
 |---|---|---|
-| `memory` | tool | Save/Skip मार्गदर्शन के साथ add/replace/remove/consolidate/query; लेखन अनुमोदन द्वार से गुज़रता है |
+| `memory` | tool | Save/Skip मार्गदर्शन के साथ add/replace/remove/consolidate/query; प्रविष्टियाँ वैकल्पिक प्रोफ़ाइल निर्देशांक रख सकती हैं (`facet` = सात में से एक, `level` = प्रति-क्षेत्र ज्ञान स्तर); लेखन अनुमोदन द्वार से गुज़रता है |
+| `memory_profile` | tool | 31 उप-क्षेत्रों के पैमाने पर प्रति-क्षेत्र ज्ञान स्तर (`set` / `list` / `get`); `set` अनुमोदन द्वार से गुज़रता है और ऑडिट होता है, `tier` `level` से निकलता है |
+| `yammory-survey` | skill | उपयोगकर्ता द्वारा शुरू की गई प्रोफ़ाइल प्रश्नावली, 24 प्रश्नावली-योग्य उप-खंडों को कवर करती है; `memory` + `memory_profile` से लिखती है। स्रोत: `skills/yammory-survey/` |
 | `memory_recall` | tool | परिबद्ध मेमोरी मिलान + हाल के सत्र-इतिहास मिलान |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` |
 | web panel | client drawer | केवल-पठन: प्रविष्टियाँ ब्राउज़ करें, खोजें, बजट बार, ऑडिट पूँछ; फ़्लोटिंग बटन छिपाया जा सकता है (`panel.enabled`) |

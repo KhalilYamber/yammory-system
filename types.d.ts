@@ -86,7 +86,7 @@ export interface MemoryEntryInput {
 
 /** 分领域知识水平画像行（profile 表：领域 × level × tier）。 */
 export interface MemoryProfile {
-  /** 子领域名（8 大类 27 子领域之一，见 docs/知识领域清单.md）。 */
+  /** 子领域名（8 大类 31 子领域之一，见 docs/知识领域清单.md）。 */
   domain: string
   /** 知识水平 1–10。 */
   level: number
@@ -161,17 +161,29 @@ export interface MemoryService {
   add(input: MemoryEntryInput, write: MemoryWriteContext): Promise<{ entry: MemoryEntry; usage: MemoryUsage }>
 
   /** 按唯一子串替换（审批门 + 预算门；零/多命中报错）。写定位 = 会话可见集：
-   *  agentKey/workspaceKey 显式给定则覆盖写方会话的推导值。审批载荷携带将被改写的旧条目全文。 */
-  replace(input: { track: MemoryTrack; scope: MemoryScope; match: string; text: string; source?: string; agentKey?: string; workspaceKey?: string; tags?: string[] }, write: MemoryWriteContext): Promise<{ previous: MemoryEntry; entry: MemoryEntry; usage: MemoryUsage }>
+   *  agentKey/workspaceKey 显式给定则覆盖写方会话的推导值。审批载荷携带将被改写的旧条目全文。
+   *  facet/level 省略时保持原条目的画像坐标，显式传入才覆盖。 */
+  replace(input: { track: MemoryTrack; scope: MemoryScope; match: string; text: string; source?: string; agentKey?: string; workspaceKey?: string; tags?: string[]; facet?: MemoryFacet | null; level?: number | null }, write: MemoryWriteContext): Promise<{ previous: MemoryEntry; entry: MemoryEntry; usage: MemoryUsage }>
 
   /** 按唯一子串删除（审批门；零/多命中报错）。写定位 = 会话可见集；审批载荷携带将被删除的条目全文。 */
   remove(input: { track: MemoryTrack; scope: MemoryScope; match: string; agentKey?: string; workspaceKey?: string }, write: MemoryWriteContext): Promise<{ entry: MemoryEntry; usage: MemoryUsage }>
 
-  /** 整合多条为一条（一次审批 + Provider 单事务原子执行；零/多命中或超预算响亮失败）。 */
-  consolidate(input: { track: MemoryTrack; scope: MemoryScope; matches: string[]; text: string; source?: string; workspaceKey?: string; agentKey?: string; tags?: string[] }, write: MemoryWriteContext): Promise<{ removed: MemoryEntry[]; entry: MemoryEntry; usage: MemoryUsage }>
+  /** 整合多条为一条（一次审批 + Provider 单事务原子执行；零/多命中或超预算响亮失败）。
+   *  facet/level 落在新条目上（省略 = 无坐标）。 */
+  consolidate(input: { track: MemoryTrack; scope: MemoryScope; matches: string[]; text: string; source?: string; workspaceKey?: string; agentKey?: string; tags?: string[]; facet?: MemoryFacet; level?: number }, write: MemoryWriteContext): Promise<{ removed: MemoryEntry[]; entry: MemoryEntry; usage: MemoryUsage }>
 
   /** 批量种子（一次 ask 审批整批；任一条超预算整批拒绝）。 */
   seed(inputs: MemoryEntryInput[], write: MemoryWriteContext): Promise<{ added: number; entries: MemoryEntry[] }>
+
+  /** 分领域知识水平列表（读；按 domain 升序）。 */
+  listProfiles(): MemoryProfile[]
+
+  /** 按领域读单条画像行（读）；未记录返回 null，领域名非法响亮报错。 */
+  getProfile(domain: string): MemoryProfile | null
+
+  /** 写入一条分领域知识水平（审批门 + 审计；domain 主键，覆盖旧值）。
+   *  tier 缺省由 level 推导；审批载荷携带 from → to。首次写入时 previous 为 null。 */
+  setProfile(input: { domain: string; level: number; tier?: MemoryKnowledgeTier; source?: string }, write: MemoryWriteContext): Promise<{ profile: MemoryProfile; previous: MemoryProfile | null }>
 }
 
 /** 适配器描述（/memory adapters 与接入指南展示面）。 */

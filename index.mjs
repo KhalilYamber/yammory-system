@@ -22,6 +22,9 @@ import {
   PANEL_AUDIT_CEILING,
   EXPORT_SCHEMA,
   MAX_IMPORT_ENTRIES,
+  PROFILE_FACETS,
+  KNOWLEDGE_DOMAINS,
+  KNOWLEDGE_TIERS,
 } from './lib/constants.mjs'
 import {
   MemoryError,
@@ -71,7 +74,9 @@ import { RetrievalProviderRegistry, SubstringRetriever, VectorRetriever, detectV
  * @property {(input: object) => object | null} proposalUpsert
  * @property {(status?: string, limit?: number) => object[]} proposalList
  * @property {(id: string, status: string) => object} proposalDecide
- * @property {() => object[]} profileList
+ * @property {(input: {domain: string, level: number, tier?: string}) => ProfileRowValue} profileUpsert
+ * @property {(domain: string) => ProfileRowValue | null} profileGet
+ * @property {() => ProfileRowValue[]} profileList
  * @property {() => void} close
  * @typedef {{request: (req: object) => Promise<string>, overrideOf?: (session: unknown) => string | undefined, config?: {policy?: string}}} ApprovalLike
  * @typedef {object} ServiceDeps
@@ -104,7 +109,7 @@ import { RetrievalProviderRegistry, SubstringRetriever, VectorRetriever, detectV
  * @property {{enabled?: boolean}} [panel]
  * @typedef {{action: string, track: string, scope: string, text: string, count?: number, source?: string}} WritePayload
  * @typedef {{agent?: {session?: MemorySessionLike | null} | null, callId?: unknown, signal?: AbortSignal}} AskWrite
- * @typedef {{track: string, scope: string, text: string}} PublicEntry
+ * @typedef {{track: string, scope: string, text: string, facet?: string, level?: number}} PublicEntry
  * @typedef {object} MemoryToolValue - memory 工具规范结果形状。
  * @property {boolean} ok
  * @property {string} action
@@ -115,6 +120,16 @@ import { RetrievalProviderRegistry, SubstringRetriever, VectorRetriever, detectV
  * @property {PublicEntry} [entry]
  * @property {Array<{id: string, text: string}>} [removed]
  * @property {{used: number, limit: number}} [usage]
+ * @typedef {{domain: string, level: number, tier: string, updatedAt: number}} ProfileRowValue
+ * @typedef {object} MemoryProfileToolValue - memory_profile 工具规范结果形状。
+ * @property {boolean} ok
+ * @property {string} action
+ * @property {{message: string}} [error]
+ * @property {boolean} [found]
+ * @property {ProfileRowValue} [profile]
+ * @property {ProfileRowValue | null} [previous]
+ * @property {ProfileRowValue[]} [profiles]
+ * @property {number} [total]
  * @typedef {object} RecallToolValue - memory_recall 工具规范结果形状。
  * @property {{total: number, entries: PublicEntry[], truncated: boolean}} memory
  * @property {{available: boolean, error?: string, sessions: Array<{sessionId: string, matches: number, snippets: string[]}>}} history
@@ -321,6 +336,8 @@ const MEMORY_TOOL_DESCRIPTION = {
     'SKIP: trivial or re-derivable facts; encyclopedia knowledge a fresh search can answer; large data dumps or logs; one-off file paths; content already available in the current workspace.',
     '',
     'Writes (add/replace/remove/consolidate) require approval under the configured policy and are audited; reads (query) are free. replace/remove target an entry by a UNIQUE case-insensitive substring — an ambiguous match fails with the candidate list, so use a longer substring. consolidate merges 1..20 existing entries (unique substrings) into ONE new entry with a single approval and one atomic write — use it when a layer is over budget. Each session starts with a FROZEN warm-up block: the user\u2019s per-domain knowledge level (as speaking constraints) plus the standing user-global profile. That block never changes mid-session. Workspace-scoped and agent-track memory is deliberately NOT in it — fetch those on demand with memory_recall (or query).',
+    '',
+    'PROFILE COORDINATES: every entry can carry two optional coordinates. facet tags which face of the user profile the entry belongs to (one of: 躯体 | 心智 | 价值与意愿 | 能力与技能 | 行为与习惯 | 社会与处境 | 经历与轨迹). level (1..10) is the per-domain knowledge level and belongs only on entries about the user\u2019s knowledge/subject level; the structured per-domain scale itself is written with memory_profile, not with this tool. On replace, an omitted facet/level keeps the existing coordinate.',
   ].join('\n'),
   zh: [
     '读写有界、分层、带审批门、可审计的跨会话记忆库（yammory_system）。',
@@ -333,6 +350,8 @@ const MEMORY_TOOL_DESCRIPTION = {
     '应跳过（SKIP）：琐碎或可再推导的事实；重新搜索即可回答的百科知识；大数据转储或日志；一次性文件路径；当前工作区已有的内容。',
     '',
     '写（add/replace/remove/consolidate）需按配置策略审批并落审计；读（query）免费。replace/remove 用唯一大小写不敏感子串定位——歧义时报候选清单，请用更长子串。consolidate 以一次审批 + 一次原子写把 1..20 条整合为一条——层超预算时使用。每个会话启动时获得一个冻结的预热块：用户分领域知识水平（表达约束）＋ 常驻 user-global 画像。该块在会话内不变。工作区层与 agent 轨记忆刻意不入此块——需要时用 memory_recall（或 query）按需取。',
+    '',
+    '画像坐标：每条条目可带两个可选坐标。facet 标明该条目属于用户画像的哪一面（取值：躯体 | 心智 | 价值与意愿 | 能力与技能 | 行为与习惯 | 社会与处境 | 经历与轨迹）。level（1..10）是分领域知识水平，只用在「知识与学科水平」类条目上；结构化的分领域刻度本身请用 memory_profile 写，不用本工具。replace 时省略 facet/level 即保持原坐标。',
   ].join('\n'),
 }
 
@@ -347,6 +366,8 @@ const MEMORY_TOOL_PARAMETERS = {
     matches: 'consolidate: 1..20 UNIQUE case-insensitive substrings of the entries to merge into the new text.',
     limit: 'query: maximum entries to return (default 20; hard-capped at 1000).',
     tags: 'Optional short labels for the entry (e.g. ["project-x", "decision"]). At most 16 tags, each at most 32 characters; applies to add/replace/consolidate.',
+    facet: 'Optional profile face this entry belongs to (one of the seven facets). Applies to add/replace/consolidate; on replace an omitted facet keeps the current one.',
+    level: 'Optional per-domain knowledge level 1..10 (科普 1-3 / 本科 4-6 / 硕士 7-8 / 专家 9-10), for entries about the user\u2019s knowledge or subject level. Applies to add/replace/consolidate; on replace an omitted level keeps the current one.',
   },
   zh: {
     action: 'add = 新增一条；replace = 改写一条既有条目；remove = 删除一条既有条目；consolidate = 把 1..20 条既有条目整合为一条新条目（单次审批、原子执行）；query = 对既有条目的子串检索。',
@@ -357,6 +378,8 @@ const MEMORY_TOOL_PARAMETERS = {
     matches: 'consolidate：要并入新文本的 1..20 个唯一大小写不敏感子串。',
     limit: 'query：最多返回条数（默认 20；硬钳 1000）。',
     tags: '可选短标签（如 ["project-x", "decision"]）。最多 16 个、每个最多 32 字符；用于 add/replace/consolidate。',
+    facet: '可选：该条目属于七面中的哪一面。用于 add/replace/consolidate；replace 时省略即保持原面。',
+    level: '可选：分领域知识水平 1..10（科普 1-3 / 本科 4-6 / 硕士 7-8 / 专家 9-10），用于「知识与学科水平」类条目。用于 add/replace/consolidate；replace 时省略即保持原值。',
   },
 }
 
@@ -411,6 +434,15 @@ export function makeMemoryTool(service, language = 'en') {
         items: { type: 'string' },
         description: parameters.tags,
       },
+      facet: {
+        type: 'string',
+        enum: [...PROFILE_FACETS],
+        description: parameters.facet,
+      },
+      level: {
+        type: 'integer',
+        description: parameters.level,
+      },
     },
     output: {
       schema: {
@@ -429,6 +461,8 @@ export function makeMemoryTool(service, language = 'en') {
               text: { type: 'string', required: true },
               source: { type: 'string', required: true },
               tags: { type: 'array', items: { type: 'string' }, required: true },
+              facet: { type: 'string' },
+              level: { type: 'integer' },
             },
           },
           removed: {
@@ -462,6 +496,8 @@ export function makeMemoryTool(service, language = 'en') {
                 text: { type: 'string', required: true },
                 source: { type: 'string', required: true },
                 tags: { type: 'array', items: { type: 'string' }, required: true },
+                facet: { type: 'string' },
+                level: { type: 'integer' },
               },
             },
           },
@@ -542,6 +578,8 @@ export function makeMemoryTool(service, language = 'en') {
                 text: args.text,
                 source: 'memory-tool',
                 ...(args.tags === undefined ? {} : { tags: args.tags }),
+                ...(args.facet === undefined ? {} : { facet: args.facet }),
+                ...(args.level === undefined ? {} : { level: args.level }),
               },
               write,
             )
@@ -556,6 +594,8 @@ export function makeMemoryTool(service, language = 'en') {
                 text: args.text,
                 source: 'memory-tool',
                 ...(args.tags === undefined ? {} : { tags: args.tags }),
+                ...(args.facet === undefined ? {} : { facet: args.facet }),
+                ...(args.level === undefined ? {} : { level: args.level }),
               },
               write,
             )
@@ -587,6 +627,8 @@ export function makeMemoryTool(service, language = 'en') {
                 text: args.text,
                 source: 'memory-tool',
                 ...(args.tags === undefined ? {} : { tags: args.tags }),
+                ...(args.facet === undefined ? {} : { facet: args.facet }),
+                ...(args.level === undefined ? {} : { level: args.level }),
               },
               write,
             )
@@ -612,7 +654,7 @@ export function makeMemoryTool(service, language = 'en') {
   })
 }
 
-/** 工具结果里的公开条目投影（只带声明过的字段）。 */
+/** 工具结果里的公开条目投影（只带声明过的字段；未设坐标的条目不出现 facet/level 键）。 */
 function publicEntry(/** @type {MemoryEntry} */ entry) {
   return {
     id: entry.id,
@@ -621,6 +663,8 @@ function publicEntry(/** @type {MemoryEntry} */ entry) {
     text: entry.text,
     source: entry.source,
     tags: entry.tags,
+    ...(entry.facet === null || entry.facet === undefined ? {} : { facet: entry.facet }),
+    ...(entry.level === null || entry.level === undefined ? {} : { level: entry.level }),
   }
 }
 
@@ -640,18 +684,227 @@ export function renderMemoryResult(/** @type {object} */ _args, /** @type {Memor
         type: 'text',
         text: value.entries.length === 0
           ? 'memory query: no entries matched'
-          : `memory query: ${value.entries.length} match${value.entries.length === 1 ? '' : 'es'}${value.truncated ? ` (of ${value.total} total; refine the filter for more)` : ''}\n${value.entries.map((entry) => `- [${entry.track}/${entry.scope}] ${entry.text}`).join('\n')}`,
+          : `memory query: ${value.entries.length} match${value.entries.length === 1 ? '' : 'es'}${value.truncated ? ` (of ${value.total} total; refine the filter for more)` : ''}\n${value.entries.map((entry) => `- [${entry.track}/${entry.scope}]${coordinateTag(entry)} ${entry.text}`).join('\n')}`,
       }]
     case 'add':
-      return [{ type: 'text', text: `memory entry added (${value.entry.track}/${value.entry.scope}): ${value.entry.text}\nbudget: ${value.usage.used}/${value.usage.limit} chars used` }]
+      return [{ type: 'text', text: `memory entry added (${value.entry.track}/${value.entry.scope}): ${value.entry.text}${coordinateTag(value.entry)}\nbudget: ${value.usage.used}/${value.usage.limit} chars used` }]
     case 'replace':
-      return [{ type: 'text', text: `memory entry replaced (${value.entry.track}/${value.entry.scope}): ${value.entry.text}\nbudget: ${value.usage.used}/${value.usage.limit} chars used` }]
+      return [{ type: 'text', text: `memory entry replaced (${value.entry.track}/${value.entry.scope}): ${value.entry.text}${coordinateTag(value.entry)}\nbudget: ${value.usage.used}/${value.usage.limit} chars used` }]
     case 'remove':
-      return [{ type: 'text', text: `memory entry removed (${value.entry.track}/${value.entry.scope}): ${value.entry.text}\nbudget: ${value.usage.used}/${value.usage.limit} chars used` }]
+      return [{ type: 'text', text: `memory entry removed (${value.entry.track}/${value.entry.scope}): ${value.entry.text}${coordinateTag(value.entry)}\nbudget: ${value.usage.used}/${value.usage.limit} chars used` }]
     case 'consolidate':
-      return [{ type: 'text', text: `memory entries consolidated (${value.entry.track}/${value.entry.scope}): ${value.removed.length} removed → ${value.entry.text}\nbudget: ${value.usage.used}/${value.usage.limit} chars used` }]
+      return [{ type: 'text', text: `memory entries consolidated (${value.entry.track}/${value.entry.scope}): ${value.removed.length} removed → ${value.entry.text}${coordinateTag(value.entry)}\nbudget: ${value.usage.used}/${value.usage.limit} chars used` }]
     default:
       return [{ type: 'text', text: `memory ${value.action}: ok` }]
+  }
+}
+
+/** 条目坐标后缀（facet/level 在场才渲染；都没有返回空串）。 */
+function coordinateTag(/** @type {PublicEntry} */ entry) {
+  const parts = [
+    ...(typeof entry.facet === 'string' ? [`facet: ${entry.facet}`] : []),
+    ...(Number.isInteger(entry.level) ? [`level: ${entry.level}/10`] : []),
+  ]
+  return parts.length === 0 ? '' : ` [${parts.join(' · ')}]`
+}
+
+/** memory_profile 工具描述：分领域知识水平（表达约束的数据源）。en 为源文，zh 为对应译文。 */
+const MEMORY_PROFILE_TOOL_DESCRIPTION = {
+  en: [
+    'Read and write the per-domain knowledge level (yammory_system) — the structured scale behind the speaking constraints injected into each session.',
+    '',
+    'This table holds ONE integer per knowledge subdomain (31 subdomains across 8 categories), on a 1..10 scale mapped to four tiers: 科普 (1-3), 本科 (4-6), 硕士 (7-8), 专家 (9-10). It is written by the user-facing profile questionnaire, not by prose entries — use the memory tool for everything else.',
+    '',
+    'ACTION set writes one (domain, level) pair and needs approval under the configured policy; list and get are free reads. set is idempotent (domain is the primary key) and audited. Prefer writing only what the user actually stated or confirmed; never invent a level. When a self-reported level conflicts with observed behaviour, keep the reported value here and note the observation as a memory entry instead.',
+  ].join('\n'),
+  zh: [
+    '读写分领域知识水平（yammory_system）——注入到每个会话的表达约束背后的那把结构化标尺。',
+    '',
+    '本表为每个知识子领域（8 大类 31 个子领域）各存一个 1..10 的整数，映射四档：科普（1-3）、本科（4-6）、硕士（7-8）、专家（9-10）。它由面向用户的画像问卷写入，不用散文条目充当标尺——其它内容一律走 memory 工具。',
+    '',
+    'action set 写入一对（领域, 水平），按配置策略需审批；list 与 get 是免费读。set 幂等（domain 为主键）且落审计。只写用户真正说过或确认过的值，绝不替用户编造档位。自陈档位与实际表现冲突时，本表保留自陈值，把观察写进 memory 条目。',
+  ].join('\n'),
+}
+
+/** memory_profile 工具参数描述（双语）。 */
+const MEMORY_PROFILE_TOOL_PARAMETERS = {
+  en: {
+    action: 'set = write one (domain, level) pair (approval-gated, idempotent); list = all scored domains; get = one domain.',
+    domain: 'Knowledge subdomain (one of the 31 fixed subdomains across 8 categories: 语言 / 数理与逻辑 / 自然科学 / 工程与技术 / 人文与社会 / 艺术与审美 / 生活与实务 / 元能力). Required for set and get.',
+    level: 'Knowledge level 1..10: 科普 1-3 (popular), 本科 4-6 (undergraduate, the default anchor), 硕士 7-8 (graduate), 专家 9-10 (expert). Required for set.',
+    tier: 'Optional tier override (科普 | 本科 | 硕士 | 专家). Omit it: the tier is derived from level.',
+  },
+  zh: {
+    action: 'set = 写入一对（领域, 水平）（需审批、幂等）；list = 全部已打分领域；get = 单个领域。',
+    domain: '知识子领域（8 大类 31 个固定子领域之一：语言 / 数理与逻辑 / 自然科学 / 工程与技术 / 人文与社会 / 艺术与审美 / 生活与实务 / 元能力）。set 与 get 必填。',
+    level: '知识水平 1..10：科普 1-3、本科 4-6（默认锚点）、硕士 7-8、专家 9-10。set 必填。',
+    tier: '可选档位覆盖（科普 | 本科 | 硕士 | 专家）。一般不传：档位由 level 推导。',
+  },
+}
+
+/**
+ * memory_profile 工具（S3）：分领域知识水平（profile 表）的对外读写通道。
+ * 写（set）在协议核心 MemoryProtocolCore.setProfile 内强制走审批门与审计（与 memory
+ * 工具同一套不变量，工具层绕不过）；读（list/get）无审批。领域用 31 项清单校验，
+ * level 限 1..10 整数，tier 缺省由 tierForLevel 推导。
+ * @param {MemoryService} service - ctx.memory。
+ * @param {'en'|'zh'} [language] - 'en' | 'zh'。
+ * @returns {object} 工具定义。
+ */
+export function makeMemoryProfileTool(service, language = 'en') {
+  const parameters = MEMORY_PROFILE_TOOL_PARAMETERS[language] ?? MEMORY_PROFILE_TOOL_PARAMETERS.en
+  const profileShape = /** @type {const} */ ({
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      domain: { type: 'string', required: true },
+      level: { type: 'integer', required: true },
+      tier: { type: 'string', required: true },
+      updatedAt: { type: 'integer', required: true },
+    },
+  })
+  return defineTool({
+    name: 'memory_profile',
+    description: MEMORY_PROFILE_TOOL_DESCRIPTION[language] ?? MEMORY_PROFILE_TOOL_DESCRIPTION.en,
+    parameters: {
+      action: {
+        type: 'string',
+        required: true,
+        enum: ['set', 'list', 'get'],
+        description: parameters.action,
+      },
+      domain: {
+        type: 'string',
+        enum: [...KNOWLEDGE_DOMAINS],
+        description: parameters.domain,
+      },
+      level: {
+        type: 'integer',
+        description: parameters.level,
+      },
+      tier: {
+        type: 'string',
+        enum: [...KNOWLEDGE_TIERS],
+        description: parameters.tier,
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          action: { type: 'string', required: true, enum: ['set', 'list', 'get'] },
+          ok: { type: 'boolean', required: true },
+          found: { type: 'boolean' },
+          profile: profileShape,
+          previous: profileShape,
+          profiles: { type: 'array', items: profileShape },
+          total: { type: 'integer' },
+          error: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              code: { type: 'string', required: true },
+              message: { type: 'string', required: true },
+            },
+          },
+        },
+      },
+      render: renderMemoryProfileResult,
+    },
+    execute: /** @type {(args: any, exec: any) => Promise<any>} */ (async (args, exec) => {
+      exec.signal.throwIfAborted()
+      const write = {
+        agent: exec.agent,
+        ...(exec.callId === undefined ? {} : { callId: exec.callId }),
+        signal: exec.signal,
+      }
+      try {
+        switch (args.action) {
+          case 'set': {
+            const result = await service.setProfile(
+              {
+                domain: args.domain,
+                level: args.level,
+                ...(args.tier === undefined ? {} : { tier: args.tier }),
+                source: 'memory-profile-tool',
+              },
+              write,
+            )
+            return {
+              action: 'set',
+              ok: true,
+              found: true,
+              profile: publicProfile(result.profile),
+              ...(result.previous === null ? {} : { previous: publicProfile(result.previous) }),
+            }
+          }
+          case 'list': {
+            const profiles = service.listProfiles().map(publicProfile)
+            return { action: 'list', ok: true, profiles, total: profiles.length }
+          }
+          case 'get': {
+            const row = service.getProfile(args.domain)
+            return row === null
+              ? { action: 'get', ok: true, found: false }
+              : { action: 'get', ok: true, found: true, profile: publicProfile(row) }
+          }
+          default: {
+            throw new InvalidInputError(`unknown memory_profile action ${JSON.stringify(args.action)}`)
+          }
+        }
+      } catch (error) {
+        if (error instanceof MemoryError) {
+          return { action: args.action, ok: false, error: toToolError(error) }
+        }
+        throw error
+      }
+    }),
+  })
+}
+
+/** 工具结果里的公开画像行投影（只带声明过的字段）。 */
+function publicProfile(/** @type {ProfileRowValue} */ row) {
+  return {
+    domain: row.domain,
+    level: row.level,
+    tier: row.tier,
+    updatedAt: row.updatedAt,
+  }
+}
+
+/**
+ * memory_profile 结果渲染（纯函数）。
+ * @param {object} _args - 调用参数（未用）。
+ * @param {MemoryProfileToolValue} value - 规范 JSON 结果。
+ * @returns {Array<{type: 'text', text: string}>} 模型可见文本。
+ */
+export function renderMemoryProfileResult(/** @type {object} */ _args, /** @type {MemoryProfileToolValue} */ value) {
+  if (!value.ok) {
+    return [{ type: 'text', text: `memory_profile ${value.action} failed: ${value.error.message}` }]
+  }
+  switch (value.action) {
+    case 'set': {
+      const row = value.profile
+      const from = value.previous === undefined ? 'new' : `${value.previous.level}/10 (${value.previous.tier}) → `
+      return [{ type: 'text', text: `memory_profile set: ${row.domain} ${from}${row.level}/10 (${row.tier})` }]
+    }
+    case 'list':
+      return [{
+        type: 'text',
+        text: value.profiles.length === 0
+          ? 'memory_profile: no domain scored yet'
+          : `memory_profile: ${value.profiles.length} domain(s) scored\n${value.profiles.map((row) => `- ${row.domain} ${row.level}/10 (${row.tier})`).join('\n')}`,
+      }]
+    case 'get':
+      return [{
+        type: 'text',
+        text: value.found === true
+          ? `memory_profile ${value.profile.domain}: ${value.profile.level}/10 (${value.profile.tier})`
+          : 'memory_profile: no entry for that domain',
+      }]
+    default:
+      return [{ type: 'text', text: `memory_profile ${value.action}: ok` }]
   }
 }
 
@@ -983,6 +1236,7 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
   }, { prepend: true })
 
   ctx.tools.register(/** @type {import('@deepseek-ai/dsh-tools').ToolDefinition} */ (makeMemoryTool(service, resolved.language)))
+  ctx.tools.register(/** @type {import('@deepseek-ai/dsh-tools').ToolDefinition} */ (makeMemoryProfileTool(service, resolved.language)))
 
   // 预热段注入（分路注入的「普遍相关」半边）：会话首个 assemble 时同步读库渲染，
   // WeakMap 按 Session 冻结——冻结机制与 memento 原语义一致，变的只是内容构成：

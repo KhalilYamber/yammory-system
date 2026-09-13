@@ -18,6 +18,7 @@ import {
   WriteDeniedError,
   NoAgentError,
   renderMemoryResult,
+  renderMemoryProfileResult,
   DEFAULT_BUDGETS,
 } from '../index.mjs'
 import { createMockCtx, makeSession, makeAgent, makeExec } from './helpers/mock-ctx.mjs'
@@ -87,6 +88,7 @@ test('F1/F5/F6 注册面：ctx.memory 服务、memory 工具、快照段、审�
   const { mock } = mounted
   assert.ok(mock.services.get('memory') instanceof MemoryService)
   assert.ok(mock.tools.some((tool) => tool.name === 'memory'))
+  assert.ok(mock.tools.some((tool) => tool.name === 'memory_profile'), 'S3：profile 写入通道有对外工具面')
   const section = mock.sections.find((s) => s.name === 'yammory_system:memory')
   assert.ok(section)
   assert.equal(section.order, -50)
@@ -765,4 +767,191 @@ test('memory/recalled：query 带 session 时按已知类型自适应派发（�
   const tool = mounted.mock.tools.find((t) => t.name === 'memory')
   await tool.execute({ action: 'query', text: '召回' }, makeExec({ agent: makeAgent(session) }))
   assert.equal(session.events.filter((event) => event.type === 'memory/recalled').length, 2)
+})
+
+test('S3：memory 工具暴露 facet/level——add 落坐标，query 回带，replace 省略保持 / 显式覆盖', async (t) => {
+  const mounted = mount({ writePolicy: 'auto' })
+  t.after(() => teardown(mounted))
+  const { mock } = mounted
+  const tool = mock.tools.find((t) => t.name === 'memory')
+  const exec = makeExec({ agent: makeAgent(makeSession({ id: 's-facet' })) })
+
+  const added = await tool.execute(
+    {
+      action: 'add', track: 'user', scope: 'user-global', text: '会 Python 与 TypeScript，能独立写中小型工具',
+      facet: '能力与技能', level: 7, tags: ['计算机与编程', 'questionnaire'],
+    },
+    exec,
+  )
+  assert.equal(added.ok, true)
+  assert.equal(added.entry.facet, '能力与技能')
+  assert.equal(added.entry.level, 7)
+
+  // 落盘侧：坐标真的进了列，不只是回显
+  const stored = mock.services.get('memory').store.listEntries()
+  assert.equal(stored[0].facet, '能力与技能')
+  assert.equal(stored[0].level, 7)
+
+  // query 回带坐标（skill 靠它判断哪些面已有条目）
+  const queried = await tool.execute({ action: 'query', text: 'Python' }, makeExec({ agent: makeAgent(makeSession()) }))
+  assert.equal(queried.entries[0].facet, '能力与技能')
+  assert.equal(queried.entries[0].level, 7)
+
+  // replace 省略 facet/level：改的是文本，坐标保持
+  const replaced = await tool.execute(
+    { action: 'replace', match: 'Python 与 TypeScript', text: '会 Python / TypeScript，能独立写中小型工具与脚本', track: 'user', scope: 'user-global' },
+    exec,
+  )
+  assert.equal(replaced.ok, true)
+  assert.equal(replaced.entry.facet, '能力与技能', '省略面不抹掉原坐标')
+  assert.equal(replaced.entry.level, 7, '省略档位不抹掉原坐标')
+
+  // replace 显式传入：覆盖坐标
+  const reLeveled = await tool.execute(
+    { action: 'replace', match: '中小型工具与脚本', text: '会 Python / TypeScript，能独立写中小型工具与脚本', track: 'user', scope: 'user-global', level: 8 },
+    exec,
+  )
+  assert.equal(reLeveled.entry.level, 8, '显式档位覆盖生效')
+  assert.equal(reLeveled.entry.facet, '能力与技能')
+
+  // consolidate 把坐标落在新条目上
+  await tool.execute(
+    { action: 'add', track: 'user', scope: 'user-global', text: '会一点 Rust，读得懂别人写的', facet: '能力与技能' },
+    exec,
+  )
+  const consolidated = await tool.execute(
+    {
+      action: 'consolidate', track: 'user', scope: 'user-global',
+      matches: ['Python / TypeScript', 'Rust'], text: '编程语言：Python / TypeScript 可独立写，Rust 能读',
+      facet: '能力与技能', level: 8,
+    },
+    exec,
+  )
+  assert.equal(consolidated.ok, true)
+  assert.equal(consolidated.entry.facet, '能力与技能')
+  assert.equal(consolidated.entry.level, 8)
+  assert.equal(consolidated.removed.length, 2)
+})
+
+test('S3：facet/level 非法值响亮失败（schema 边界拦词汇，语义边界拦越界），零落盘', async (t) => {
+  const mounted = mount({ writePolicy: 'auto' })
+  t.after(() => teardown(mounted))
+  const { mock } = mounted
+  const tool = mock.tools.find((t) => t.name === 'memory')
+  const exec = makeExec({ agent: makeAgent(makeSession()) })
+
+  // schema 边界：非七面词汇 / 非整数的 level 在 defineTool 参数校验处即拒（不进 execute）
+  await assert.rejects(
+    () => tool.execute({ action: 'add', track: 'user', scope: 'user-global', text: 'x', facet: '不存在的面' }, exec),
+    (error) => error.code === 'INVALID_ARGS',
+  )
+  await assert.rejects(
+    () => tool.execute({ action: 'add', track: 'user', scope: 'user-global', text: 'x', level: 3.5 }, exec),
+    (error) => error.code === 'INVALID_ARGS',
+  )
+
+  // 语义边界：合法整数但越界 → 结构化 INVALID_INPUT（模型可读、可纠正）
+  for (const level of [0, 11, -1]) {
+    const result = await tool.execute({ action: 'add', track: 'user', scope: 'user-global', text: 'x', level }, exec)
+    assert.equal(result.ok, false, `level ${level} 应失败`)
+    assert.equal(result.error.code, 'INVALID_INPUT')
+  }
+  assert.equal(mock.services.get('memory').store.listEntries().length, 0, '非法坐标零落盘')
+})
+
+test('S3：memory_profile 工具——set 走审批门 + tier 推导，list/get 免费读', async (t) => {
+  const mounted = mount({ writePolicy: 'auto' })
+  t.after(() => teardown(mounted))
+  const { mock } = mounted
+  const tool = mock.tools.find((t) => t.name === 'memory_profile')
+  assert.ok(tool, 'memory_profile 工具已注册')
+  const exec = makeExec({ agent: makeAgent(makeSession({ id: 's-profile' })) })
+
+  const set = await tool.execute({ action: 'set', domain: '计算机与编程', level: 8 }, exec)
+  assert.equal(set.ok, true)
+  assert.equal(set.profile.tier, '硕士', 'tier 由 level 8 推导')
+  assert.equal(set.profile.domain, '计算机与编程')
+  assert.equal(set.profile.level, 8)
+
+  // 幂等覆盖：同 domain 再写，previous 携带旧档位
+  const override = await tool.execute({ action: 'set', domain: '计算机与编程', level: 3, tier: '科普' }, exec)
+  assert.equal(override.ok, true)
+  assert.equal(override.previous.level, 8)
+  assert.equal(override.profile.tier, '科普')
+
+  const listed = await tool.execute({ action: 'list' }, exec)
+  assert.equal(listed.ok, true)
+  assert.equal(listed.total, 1)
+  assert.deepEqual(listed.profiles.map((row) => row.domain), ['计算机与编程'])
+
+  const got = await tool.execute({ action: 'get', domain: '数学' }, exec)
+  assert.equal(got.ok, true)
+  assert.equal(got.found, false, '未打分的领域 found:false')
+
+  // 审计：profile-set 行落在 user/user-global
+  const audit = mock.services.get('memory').store.auditList()
+  const profileAudit = audit.filter((row) => row.action === 'profile-set')
+  assert.equal(profileAudit.length, 2)
+  assert.equal(profileAudit[0].track, 'user')
+  assert.equal(profileAudit[0].scope, 'user-global')
+  assert.ok(profileAudit[0].text.includes('计算机与编程'), '审计文本携带领域与档位')
+
+  // 渲染纯函数 + 可读
+  const rendered = renderMemoryProfileResult({}, structuredClone(set))
+  assert.deepEqual(rendered, renderMemoryProfileResult({}, set))
+  assert.ok(rendered[0].text.includes('计算机与编程'), '渲染带领域名')
+  assert.ok(rendered[0].text.includes('8/10 (硕士)'), '渲染带档位')
+})
+
+test('S3：memory_profile 写入不绕审批门——ask 无 answerer 失败封闭；非法 domain/level 先响亮失败', async (t) => {
+  const mounted = mount({ writePolicy: 'ask' })
+  t.after(() => teardown(mounted))
+  const { mock } = mounted
+  const tool = mock.tools.find((t) => t.name === 'memory_profile')
+  const exec = makeExec({ agent: makeAgent(makeSession()) })
+
+  const denied = await tool.execute({ action: 'set', domain: '数学', level: 5 }, exec)
+  assert.equal(denied.ok, false)
+  assert.equal(denied.error.code, 'WRITE_DENIED', 'ask 且无 answerer → unavailable → 失败封闭')
+  assert.equal(mock.services.get('memory').store.profileList().length, 0, '被拒的写不落盘')
+  // 拒绝也留证据链：profile-denied 审计行
+  assert.equal(mock.services.get('memory').store.auditList().filter((row) => row.action === 'profile-denied').length, 1)
+
+  // 非法入参在打扰用户之前失败（不进审批）：词汇/类型在 schema 边界拒，越界在语义边界拒
+  const askedBefore = mounted.approval.asked.length
+  await assert.rejects(
+    () => tool.execute({ action: 'set', domain: '不存在的领域', level: 5 }, exec),
+    (error) => error.code === 'INVALID_ARGS',
+  )
+  for (const level of [0, 11]) {
+    const result = await tool.execute({ action: 'set', domain: '数学', level }, exec)
+    assert.equal(result.ok, false)
+    assert.equal(result.error.code, 'INVALID_INPUT')
+  }
+  assert.equal(mounted.approval.asked.length, askedBefore, '非法入参不产生审批请求')
+})
+
+test('S3：profile 审批载荷携带 from → to，parseWriteReason 可解（会话日志可重建）', async (t) => {
+  const mounted = mount({ writePolicy: 'auto' })
+  t.after(() => teardown(mounted))
+  const service = mounted.mock.services.get('memory')
+  const write = { agent: makeAgent(makeSession({ id: 's-profile-reason' })) }
+
+  await service.setProfile({ domain: '生物与医学', level: 3 }, write)
+  const first = parseWriteReason(mounted.approval.asked[0].reason)
+  assert.equal(first.action, 'profile')
+  assert.equal(first.track, 'user')
+  assert.equal(first.scope, 'user-global')
+  assert.ok(first.text.includes('domain: 生物与医学'), '首次写入载荷含领域')
+  assert.ok(first.text.includes('level: 3/10 (科普)'), '首次写入载荷含目标档位')
+
+  await service.setProfile({ domain: '生物与医学', level: 7 }, write)
+  const second = parseWriteReason(mounted.approval.asked[1].reason)
+  assert.ok(second.text.includes('3/10 (科普) → 7/10 (硕士)'), '改档载荷含 from → to')
+
+  // 读路径无审批
+  const askedBefore = mounted.approval.asked.length
+  assert.equal(service.getProfile('生物与医学').level, 7)
+  assert.equal(service.listProfiles().length, 1)
+  assert.equal(mounted.approval.asked.length, askedBefore, '读不产生审批请求')
 })

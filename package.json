@@ -136,6 +136,7 @@
     "check:readmes": "node scripts/verify-readmes.mjs",
     "verify:self-contained": "node scripts/verify-self-contained.mjs",
     "verify:artifacts": "node scripts/verify-artifacts.mjs",
+    "verify:skill": "node scripts/verify-skill.mjs",
     "test:conformance": "node test/protocol-conformance/run.mjs"
   },
   "keywords": [

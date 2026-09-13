@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Profile coordinates on the `memory` tool.** `add` / `replace` / `consolidate` now accept `facet` (one of the seven profile facets) and `level` (1..10) and pass them through to the store; `query` results carry both back. On `replace` an omitted coordinate keeps its current value, so rewriting an entry's text no longer drops its profile coordinates. Both parameters are documented in the English and Chinese tool descriptions.
+- **`memory_profile` tool** (S3) — the write channel the per-domain knowledge level table was missing. `set` / `list` / `get` over the 31 fixed knowledge subdomains; `set` is idempotent (`domain` is the primary key), audited as `profile-set`, and rides the same `MemoryProtocolCore` approval gate as entry writes (the tool layer cannot bypass it). `tier` is optional and derives from `level` via `tierForLevel`.
+- **`yammory-survey` skill** (S3) — a DSH-native, user-initiated profile questionnaire, source in `skills/yammory-survey/`. It reads the existing profile first, then asks one question at a time across 1–3 facets per round, covering the 24 questionnaire-legal sub-blocks (the five observation-only blocks are deliberately excluded); answers persist through `memory` (facet + tags) and `memory_profile` (per-domain level). Installation and discovery steps: `skills/README.md`.
+- `npm run verify:skill` — a frontmatter gate for skill sources: kebab-case `name` matching the directory, `name` / `description` / `whenToUse` present, `description` within the DSH catalog cap, and every `./`-relative resource reference present on disk.
+
 ### Changed
 
 - **Renamed the project from `dsh-memento` to `yammory_system`.** The identity face changed (npm package name, Cordis plugin name, settings namespace, client module id, approval markers, snapshot headers, tool descriptions, error prefixes, MCP server name, CI workflow). Upstream attribution and the Apache-2.0 licence are preserved verbatim, and the upstream lineage (`dsh-memento`) is retained in the changelog history and in the export envelope's `plugin` field.

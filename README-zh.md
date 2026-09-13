@@ -93,7 +93,9 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 
 | Surface | Kind | Notes |
 |---|---|---|
-| `memory` | tool | 带 Save/Skip 指引的 add/replace/remove/consolidate/query；写入走审批门 |
+| `memory` | tool | 带 Save/Skip 指引的 add/replace/remove/consolidate/query；条目可带画像坐标（`facet` 七面之一、`level` 分领域知识水平）；写入走审批门 |
+| `memory_profile` | tool | 31 个子领域刻度上的分领域知识水平（`set` / `list` / `get`）；`set` 走审批门并落审计，`tier` 由 `level` 推导 |
+| `yammory-survey` | skill | 用户主动激发的画像问卷，覆盖 24 个问卷合法子板块；经 `memory` + `memory_profile` 落库。源文件：`skills/yammory-survey/` |
 | `memory_recall` | tool | 有界的记忆匹配 + 近期会话历史匹配 |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` |
 | web panel | client drawer | 只读：浏览条目、搜索、预算条、审计尾部；悬浮入口按钮可隐藏（`panel.enabled`） |

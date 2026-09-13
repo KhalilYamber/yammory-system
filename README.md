@@ -90,7 +90,9 @@ All tunables are Schemastery `Config` fields (changeable from cordis.yml). Inval
 
 | Surface | Kind | Notes |
 |---|---|---|
-| `memory` | tool | add/replace/remove/consolidate/query with Save/Skip guidance; writes ride the approval gate |
+| `memory` | tool | add/replace/remove/consolidate/query with Save/Skip guidance; entries may carry profile coordinates (`facet` = one of the seven facets, `level` = per-domain knowledge level); writes ride the approval gate |
+| `memory_profile` | tool | Per-domain knowledge level over the 31-subdomain scale (`set` / `list` / `get`); `set` is approval-gated and audited, `tier` derives from `level` |
+| `yammory-survey` | skill | User-initiated profile questionnaire covering the 24 questionnaire-legal sub-blocks; writes through `memory` + `memory_profile`. Source: `skills/yammory-survey/` |
 | `memory_recall` | tool | Bounded memory matches plus recent session-history matches |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` |
 | web panel | client drawer | Read-only: browse entries, search, budget bars, audit tail; the floating entry button can be hidden (`panel.enabled`) |
