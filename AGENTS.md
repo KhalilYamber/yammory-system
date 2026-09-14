@@ -30,7 +30,7 @@ lib/retrieval.mjs    可插拔检索 Provider seam：keyword 主路径（分词�
 lib/embedding.mjs    嵌入 Provider seam：确定性伪嵌入（零 DSH 依赖，仅 node: 内置模块）
 lib/mcp.mjs          stdio MCP server 导出：只读工具面 memory_search / memory_stats（零 DSH 依赖）
 bin/mcp-server.mjs   MCP 可执行入口（零 DSH 依赖）
-client/client.js     Web 面板（零构建 vanilla，对记忆内容只读；en/zh 随 language 配置；经 dsh.client 注入）+ 会话开关钮（`conversation.composer.dock`，session scope）+ 「整理全库」排队按钮（只登记 `tidy_requests` 标记，不调模型、不碰条目）
+client/client.js     Web 面板（零构建单模块：React ＋ 官方控件库 `@deepseek-ai/dsh-client-ui-primitives`，抽屉挂官方 `shell.overlay` 浮层；对记忆内容只读；en/zh 随 language 配置；经 dsh.client 注入）+ 会话开关钮（`conversation.composer.dock`，session scope，官方 Switch）+ 「整理全库」排队按钮（只登记 `tidy_requests` 标记，不调模型、不碰条目）
 scripts/             机械门：verify-readmes.mjs（五语一致性）、check-coverage.mjs（覆盖率）、verify-self-contained.mjs（拒绝仓库外依赖）、verify-artifacts.mjs（制品齐全+语法+导入）、loader-runner.mjs（真实 Loader composition）
 cordis.patch.yml     bundle 声明（insert yammory_system）
 package.json         npm 元数据；files 白名单 = 发布内容（含 docs/ 协议三件套与一致性套件）
@@ -44,6 +44,7 @@ docs/protocol-v1.md(+.zh)       dsh-memory-protocol v1 规范（双语；docs/sc
 docs/adapters-guide.md(+.zh)    第三方插件接入指南（双语）
 docs/upstream-proposal.md(+.zh) 官方 ctx.memory seam 采纳论证与迁移路径（双语）
 test/                单测 + mock ctx 集成测试（进 GitHub）
+test/client-harness.mjs     客户端半侧测试桩：迷你 React ＋ 假 DOM ＋ 官方控件占位件（测试专用，不进 npm 包）
 test/protocol-conformance/  协议一致性套件（可对外分发：进 GitHub 也进 npm 包）
 LICENSE / THIRD_PARTY_NOTICES.md   Apache-2.0 + 复用出处标注
 dev/                 ❌ 本地工程面：冒烟脚本、夹具、演示——永不提交

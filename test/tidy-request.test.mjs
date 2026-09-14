@@ -21,6 +21,7 @@ import { openMemoryStore } from '../lib/store.mjs'
 import { SCHEMA_VERSION } from '../lib/constants.mjs'
 import { apply, SessionMemoryOffError, DEFAULT_BUDGETS } from '../index.mjs'
 import { createMockCtx, makeSession, makeAgent } from './helpers/mock-ctx.mjs'
+import { mountClient } from './client-harness.mjs'
 
 /** 临时库目录 + 记忆库路径（单个 after 钩子里先关库再删目录：Windows 上开着文件删不掉）。 */
 function tempStore() {
@@ -360,106 +361,31 @@ test('收边路由：面板来源没有会话 → 审计行 sessionId 为 null�
   assert.equal(rows[0].text, null)
 })
 
-// ── 面板按钮面（fake DOM）：三数行 ＋ 点击登记并就地回显 ─────────────────────
+// ── 面板按钮面（测试桩）：三数行 ＋ 点击登记并就地回显 ───────────────────────
+//
+// 客户端半侧已迁到 React ＋ 官方控件库（docs/前端优化方案.md），仓库不带 React
+// （它是宿主浏览器平台的种子模块），因此这里用 test/client-harness.mjs 的迷你
+// React／渲染器／官方控件占位件把它跑起来：断言口径从「innerHTML 里找字符串」
+// 改成「在渲染出来的元素树上找节点」，界线本身（只读、只登记、不调模型）不变。
 
-/**
- * 极简 DOM：只覆盖 client.js 抽屉用到的面（createElement/appendChild/事件/内联 HTML 里的
- * id 登记）。HTML 注入的 id 解析成占位元素，元素上的 innerHTML / insertAdjacentHTML 与
- * 真实浏览器同语义（占位元素拿到后续渲染内容）。
- */
-function makeDom() {
-  /** @type {Map<string, any>} */
-  const byId = new Map()
-  /** @type {WeakMap<object, Map<string, Function[]>>} */
-  const listeners = new WeakMap()
-  /** @type {any} */
-  let document
-
-  const registerIds = (/** @type {string} */ html) => {
-    for (const match of html.matchAll(/id="([^"]+)"/g)) {
-      if (byId.has(match[1])) continue
-      const placeholder = makeElement('#placeholder')
-      placeholder.id = match[1]
-      byId.set(match[1], placeholder)
-    }
+/** 在假 DOM 子树里按 class 找第一个节点。 */
+function findByClass(/** @type {any} */ node, /** @type {string} */ className) {
+  for (const child of node.children ?? []) {
+    if (typeof child.className === 'string' && child.className.split(' ').includes(className)) return child
+    const nested = findByClass(child, className)
+    if (nested !== null) return nested
   }
-
-  function makeElement(/** @type {string} */ tag) {
-    /** @type {any} */
-    const element = {
-      tagName: String(tag).toUpperCase(),
-      id: '',
-      className: '',
-      textContent: '',
-      title: '',
-      placeholder: '',
-      disabled: false,
-      value: '',
-      style: {},
-      dataset: {},
-      children: [],
-      html: '',
-      get innerHTML() { return element.html },
-      set innerHTML(value) {
-        element.html = String(value)
-        element.children.length = 0
-        registerIds(element.html)
-      },
-      appendChild(/** @type {any} */ child) {
-        element.children.push(child)
-        if (typeof child.id === 'string' && child.id.length > 0) byId.set(child.id, child)
-        return child
-      },
-      insertAdjacentHTML(/** @type {string} */ _position, /** @type {string} */ html) {
-        element.html += html
-        registerIds(html)
-      },
-      addEventListener(/** @type {string} */ type, /** @type {Function} */ fn) {
-        const table = listeners.get(element) ?? new Map()
-        table.set(type, [...(table.get(type) ?? []), fn])
-        listeners.set(element, table)
-      },
-      click() {
-        for (const fn of listeners.get(element)?.get('click') ?? []) fn({ target: element })
-      },
-      querySelector() { return null },
-      setAttribute() {},
-    }
-    return element
-  }
-
-  document = {
-    head: makeElement('head'),
-    body: makeElement('body'),
-    createElement: (/** @type {string} */ tag) => makeElement(tag),
-    getElementById: (/** @type {string} */ id) => byId.get(id) ?? null,
-    querySelector: () => null,
-  }
-  const win = {
-    innerHeight: 800,
-    addEventListener() {},
-    removeEventListener() {},
-    /** @type {object | null} */
-    __ModuleLoader__: { load(/** @type {object} */ definition) { win.plugin = definition } },
-    plugin: /** @type {any} */ (null),
-  }
-  return { document, window: win, byId }
-}
-
-/** 依次让出事件循环（面板的 fetch 链是若干个 promise 接续）。 */
-async function settle() {
-  for (let index = 0; index < 8; index += 1) await new Promise((resolve) => setTimeout(resolve, 0))
+  return null
 }
 
 test('收边面板：三数行照抄 stats 响应的 lines；「整理全库」按钮 POST 登记并就地回显', async (t) => {
-  const dom = makeDom()
   /** @type {Array<{url: string, method: string}>} */
   const calls = []
   const responses = {
     'GET /api/memento/entries?limit=1': { panel: { enabled: true }, language: 'zh' },
     'GET /api/memento/entries?limit=200': {
       language: 'zh',
-      entries: [{ track: 'user', scope: 'user-global', text: '常驻画像：偏好先给结论', source: 'dsh-memento', agentKey: '', createdAt: Date.now() }],
+      entries: [{ id: 'e1', track: 'user', scope: 'user-global', text: '常驻画像：偏好先给结论', source: 'dsh-memento', agentKey: '', createdAt: Date.now() }],
       total: 1,
       truncated: false,
       budgets: [{ track: 'user', scope: 'user-global', used: 12, limit: 2000 }],
@@ -471,79 +397,79 @@ test('收边面板：三数行照抄 stats 响应的 lines；「整理全库」�
       language: 'zh',
     },
     'GET /api/memento/tidy-request': { pending: null, language: 'zh' },
-    'POST /api/memento/tidy-request': { pending: { id: 'req-1', createdAt: Date.now(), status: 'pending' }, created: true, language: 'zh' },
   }
-  const originalFetch = globalThis.fetch
-  const originalWindow = /** @type {any} */ (globalThis).window
-  const originalDocument = /** @type {any} */ (globalThis).document
-  const originalObserver = /** @type {any} */ (globalThis).MutationObserver
   let registrations = 0
-  globalThis.fetch = /** @type {any} */ (async (/** @type {string} */ url, /** @type {any} */ init = {}) => {
-    const method = init.method ?? 'GET'
+  const app = await mountClient(async (/** @type {string} */ key) => {
+    const [method, url] = key.split(' ')
     calls.push({ url, method })
     // 登记端点的幂等语义照实现来：第二次 POST 返回 created=false，面板应回显「已在队列里」。
-    if (method === 'POST' && url === '/api/memento/tidy-request') {
+    if (key === 'POST /api/memento/tidy-request') {
       registrations += 1
       const pending = { id: 'req-1', createdAt: Date.now(), status: 'pending' }
       return { ok: true, status: 200, json: async () => ({ pending, created: registrations === 1, language: 'zh' }) }
     }
-    const payload = responses[`${method} ${url}`]
-    assert.ok(payload, `未预置响应：${method} ${url}`)
+    const payload = responses[key]
+    assert.ok(payload, `未预置响应：${key}`)
     return { ok: true, status: 200, json: async () => payload }
   })
-  ;/** @type {any} */ (globalThis).window = dom.window
-  ;/** @type {any} */ (globalThis).document = dom.document
-  ;/** @type {any} */ (globalThis).MutationObserver = class { observe() {} disconnect() {} }
-  t.after(() => {
-    globalThis.fetch = originalFetch
-    ;/** @type {any} */ (globalThis).window = originalWindow
-    ;/** @type {any} */ (globalThis).document = originalDocument
-    ;/** @type {any} */ (globalThis).MutationObserver = originalObserver
-  })
+  t.after(() => app.restore())
 
-  await import('../client/client.js')
-  const definition = /** @type {{id: string, factory: Function}} */ (dom.window.plugin)
-  assert.equal(definition.id, 'yammory_system', 'client 半侧按插件名注册唯一 factory')
-  const plugin = definition.factory((/** @type {string} */ name) => {
-    assert.equal(name, 'react')
-    return { createElement: () => ({}), useState: (/** @type {unknown} */ value) => [value, () => {}], useEffect: () => {} }
-  })
-  const cleanups = []
-  plugin.apply({
-    effect: (/** @type {Function} */ fn) => { const cleanup = fn(); if (typeof cleanup === 'function') cleanups.push(cleanup); return { dispose() {} } },
-    // 宿主 slot 面在测试里直接拒绝（只缺面板位时插件照常工作）；设置页控制器用只读快照兜住。
-    slots: { inject() {}, register() {} },
-    settingsScope: { bind: () => ({ subscribe() {}, getSnapshot: () => ({ status: 'unavailable', writable: false, value: {}, user: {}, base: {} }) }) },
-  })
-  await settle()
+  // ① 半侧契约：按插件名注册唯一 factory；官方模块都是经种子表 require 拿到的。
+  assert.equal(app.plugin.name, 'yammory_system-client')
+  assert.equal(app.dom.window.plugin.id, 'yammory_system', 'client 半侧按插件名注册唯一 factory')
+  assert.deepEqual(
+    app.slots.injected,
+    ['conversation.composer.dock', 'shell.overlay', 'settings.section'],
+    '开关钮在 composer dock、抽屉挂官方通栏浮层、设置页仍是一级项',
+  )
+  assert.equal(app.slots.registered[1].name, 'shell.overlay')
+  assert.equal(app.slots.registered[1].id, 'yammory-system-drawer')
 
-  const open = dom.document.getElementById('mem-open')
+  // ② 第一步（样式对齐）：自造 CSS 里不再有硬编码色值，浮起感走官方 elevation 令牌。
+  const css = app.dom.styleText.join('\n')
+  assert.equal(/#[0-9a-fA-F]{3,8}\b/.test(css), false, '面板样式不含硬编码色值')
+  assert.equal(/rgba?\(/.test(css), false, '面板样式不含硬编码 rgba')
+  assert.equal(css.includes('var(--dsw-elevation-prominent)'), true, '入口按钮的浮起感走官方 elevation 令牌')
+
+  // ③ 入口按钮（官方 Button，id 不变）开抽屉。
+  const open = app.dom.document.getElementById('mem-open')
   assert.ok(open, '悬浮入口按钮已渲染')
+  assert.equal(open.attributes['data-test'], 'ui-button', '入口按钮换成官方 Button')
+  assert.equal(open.textContent, '🧠 记忆')
   open.click()
-  await settle()
+  await app.render()
 
-  const statsSlot = dom.document.getElementById('mem-stats-slot')
-  assert.ok(statsSlot, '三数区已渲染')
-  assert.equal(statsSlot.innerHTML.includes('① 重复率：0.00%'), true, '三数行照抄响应里的 lines')
-  assert.equal(statsSlot.innerHTML.includes('③ 注入量'), true)
+  const drawer = app.dom.document.getElementById('mem-drawer')
+  assert.ok(drawer, '点击后抽屉已渲染（React 根挂在官方浮层容器里）')
+  assert.equal(calls.some((call) => call.url === '/api/memento/entries?limit=200'), true, '打开抽屉取一轮条目')
   assert.equal(calls.some((call) => call.url === '/api/memento/stats'), true, '面板纯读三数路由')
 
-  const tidyBtn = dom.document.getElementById('mem-tidy-request')
-  const tidyNote = dom.document.getElementById('mem-tidy-note')
+  // ④ 三数行照抄响应里的 lines（不再拼 innerHTML，改为渲染出的文本）。
+  assert.equal(drawer.textContent.includes('① 重复率：0.00%'), true, '三数行照抄响应里的 lines')
+  assert.equal(drawer.textContent.includes('③ 注入量'), true)
+  assert.equal(drawer.textContent.includes('user/user-global: 12/2000'), true, '预算条照抄预算数')
+
+  // ⑤「整理全库」按钮：点一下只登记一条标记，就地回显。
+  const tidyBtn = app.dom.document.getElementById('ui-button')
   assert.ok(tidyBtn, '「整理全库」按钮已渲染')
   assert.equal(tidyBtn.textContent, '整理全库')
-  assert.equal(tidyNote.textContent, '只登记一条待整理标记：下次会话会请模型跑整理——这里不会合并任何条目。', '未登记时说明排队语义')
+  assert.equal(
+    findByClass(drawer, 'mem-tidy-note').textContent,
+    '只登记一条待整理标记：下次会话会请模型跑整理——这里不会合并任何条目。',
+    '未登记时说明排队语义',
+  )
 
   tidyBtn.click()
-  await settle()
+  await app.render()
   const posts = calls.filter((call) => call.method === 'POST')
   assert.equal(posts.length, 1, '点一下只发一次登记')
   assert.equal(posts[0].url, '/api/memento/tidy-request')
-  assert.equal(tidyNote.textContent, '已登记。下次会话会请模型整理全库。', '就地回显登记结果')
+  assert.equal(findByClass(drawer, 'mem-tidy-note').textContent, '已登记。下次会话会请模型整理全库。', '就地回显登记结果')
   assert.equal(tidyBtn.disabled, false, '登记完成后按钮恢复可用')
 
   tidyBtn.click()
-  await settle()
+  await app.render()
   assert.equal(calls.filter((call) => call.method === 'POST').length, 2, '再点一次会再发一次（幂等由服务端保证）')
-  assert.equal(tidyNote.textContent, '已在队列里了，不重复登记。', '第二次登记如实回显「已排队」')
+  assert.equal(findByClass(drawer, 'mem-tidy-note').textContent, '已在队列里了，不重复登记。', '第二次登记如实回显「已排队」')
 })
+

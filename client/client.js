@@ -27,16 +27,16 @@
 
 const PANEL_ID = 'yammory_system-panel'
 
-/** 本页已渲染的悬浮入口按钮引用（设置页 panel.enabled 开关即时切换用）。 */
+/** 本页浮层根节点引用（设置页 panel.enabled 开关即时切换用）。 */
 let panelOpenButton = null
 
-/** 悬浮窗开关的即时生效面：切显隐；开启时按钮缺失（上次探测为关）则重建。 */
+/** 浮层开关的即时生效面：切显隐；开启时根节点缺失（上次探测为关）则重建。 */
 function setPanelButtonVisible(visible) {
-  if (panelOpenButton === null) panelOpenButton = document.getElementById('mem-open')
+  if (panelOpenButton === null) panelOpenButton = document.getElementById(PANEL_ID)
   if (panelOpenButton !== null) {
     panelOpenButton.style.display = visible ? '' : 'none'
   } else if (visible) {
-    void bootPanel()
+    void bootPanel({ onToggle: () => {} })
   }
 }
 
@@ -137,141 +137,204 @@ async function probePanelState() {
   return { enabled: true, language: 'en' }
 }
 
-async function bootPanel() {
+/**
+ * 启动探测：panel.enabled=false 时入口按钮不渲染（设置面板可随时改回）；
+ * 探测失败按开启处理，行为与未引入开关前的版本一致。
+ * @param {{ onToggle: () => void }} hooks - 入口按钮的开合回调。
+ */
+async function bootPanel(hooks) {
   const state = await probePanelState()
   if (!state.enabled) return
-  installPanel(state)
+  installPanel({ ...state, onToggle: hooks.onToggle })
+}
+
+/** 平台内置模块（种子表）：官方原语与 react-dom/client 只 require 一次。 */
+let uiPrimitives = null
+let reactDomClient = null
+
+/** 取官方控件库（种子表模块；拿不到即响亮失败，绝不静默降级成自造控件）。 */
+function getPrimitives() {
+  if (uiPrimitives === null) uiPrimitives = require('@deepseek-ai/dsh-client-ui-primitives')
+  return uiPrimitives
+}
+
+/** 取 react-dom/client（同种子表）。 */
+function getReactDomClient() {
+  if (reactDomClient === null) reactDomClient = require('react-dom/client')
+  return reactDomClient
+}
+
+/** 抽屉的关闭出口（apply 注入；抽屉自身不持有开合状态）。 */
+const drawerClose = { current: () => {} }
+
+/** 面板槽挂载点：抽屉渲染进宿主给的那块容器（官方 shell.overlay 条目）。 */
+let drawerHost = null
+
+/** shell.overlay 条目：只交出一块容器，抽屉本体按需渲染进去。 */
+function DrawerHost() {
+  const ref = react.useRef(null)
+  react.useEffect(() => {
+    drawerHost = ref.current
+    return () => { drawerHost = null }
+  }, [])
+  return jsx('div', { ref, 'data-plugin': 'yammory_system' })
 }
 
 /**
- * 右下角让位：dsh-tidewatch 的峰谷徽章（.tw-root）也住在右下。
- * 它在，就把本按钮抬到徽章之上（按实测矩形算，徽章上下移动都跟得上）；
- * 它不在，回落默认的 56px。与另一插件的耦合只此一处，且失败也不影响功能。
- * @param {HTMLElement} el - #mem-open 按钮。
- * @returns {() => void} 解绑函数。
+ * 抽屉挂载：渲染进官方 `shell.overlay` 给的容器；宿主未声明该槽时退回自建 fixed 层。
+ *
+ * 挂上之后，本插件不再需要「量 dsh-tidewatch 徽章高度、把按钮抬到它之上」那套让位逻辑：
+ * 浮层条目由宿主自己排布，插件间唯一的硬耦合随之解除。
+ * @returns {() => void} 卸载函数（卸载 React 根；官方槽容器归宿主，不自删）。
  */
-function placeOpenButton(el) {
-  const GAP = 10
-  const DEFAULT_BOTTOM = 56
-  function apply() {
-    const tw = document.querySelector('.tw-root')
-    let bottom = DEFAULT_BOTTOM
-    if (tw !== null) {
-      const r = tw.getBoundingClientRect()
-      if (r.height > 0) bottom = Math.max(DEFAULT_BOTTOM, Math.round(window.innerHeight - r.top + GAP))
-    }
-    el.style.bottom = `${bottom}px`
-  }
-  apply()
-  window.addEventListener('resize', apply)
-  const mo = new MutationObserver(apply)
-  mo.observe(document.body, { childList: true, subtree: true })
+function mountDrawer() {
+  const el = document.createElement('div')
+  ;(drawerHost ?? document.body).appendChild(el)
+  const root = getReactDomClient().createRoot(el)
+  root.render(jsx(DrawerHolder, null))
   return () => {
-    window.removeEventListener('resize', apply)
-    mo.disconnect()
+    root.unmount()
+    el.remove()
   }
 }
 
-function installPanel(state) {
-  if (document.getElementById(PANEL_ID)) return
-  let S = STRINGS[state.language] ?? STRINGS.en
+/** 抽屉的宿主壳：文案表与关闭动作在插槽条目内收口（抽屉本体只管取数与渲染）。 */
+function DrawerHolder() {
+  const [language, setLanguage] = react.useState('en')
+  // 两个回调递给抽屉当 prop，抽屉又拿它们当 effect 依赖：身份必须稳定，
+  // 否则每次渲染都会重跑取数 effect（浏览器里就是无限请求）。
+  const onLanguage = react.useCallback((code) => { setLanguage(code === 'zh' ? 'zh' : 'en') }, [])
+  const onClose = react.useCallback(() => { drawerClose.current() }, [])
+  return jsx(Drawer, {
+    primitives: getPrimitives(),
+    S: STRINGS[language] ?? STRINGS.en,
+    onLanguage,
+    onClose,
+  })
+}
 
-  const style = document.createElement('style')
-  style.textContent = `
+// ── 浮层抽屉（React ＋ 官方原语）────────────────────────────────────────────
+// 自造 CSS 只剩三段：定位/滚动/排布。控件一律来自
+// @deepseek-ai/dsh-client-ui-primitives；色值一律来自 --dsw-* 令牌（亮暗自动跟随）。
+
+/** 面板自造样式（定位、滚动与排布；观感由官方控件与令牌承担）。
+ * 入口按钮由官方 Button 承担观感，这里只补定位与浮起（elevation 令牌）。 */
+const PANEL_LAYOUT_CSS = `
 #yammory_system-panel { position: fixed; z-index: 2147483000; font: 13px/1.5 system-ui, "Segoe UI", sans-serif; }
-#mem-open { position: fixed; right: 16px; bottom: 56px; z-index: 2147483000; padding: 8px 14px; border: 1px solid #3f6fae;
-  border-radius: 999px; background: #0d1526; color: #7db4ff; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
-#mem-open:hover { background: #16233c; }
+#mem-open { position: fixed; right: 16px; bottom: 56px; z-index: 2147483000; box-shadow: var(--dsw-elevation-prominent); }
 #mem-drawer { position: fixed; right: 0; top: 0; bottom: 0; width: 460px; max-width: 92vw; display: flex; flex-direction: column;
-  background: #101827; color: #d7e2f2; border-left: 1px solid #24344d; box-shadow: -8px 0 24px rgba(0,0,0,.4); }
-#mem-head { padding: 10px 12px; border-bottom: 1px solid #24344d; display: flex; gap: 8px; align-items: center; }
-#mem-head b { flex: 1; }
-#mem-head button { background: #1c2a42; color: #cfe1f7; border: 1px solid #2f4466; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
-#mem-head button:hover { background: #27395a; }
-#mem-filter { margin: 8px 12px; padding: 6px 8px; background: #0b1120; color: #d7e2f2; border: 1px solid #24344d; border-radius: 6px; }
-#mem-body { flex: 1; overflow: auto; padding: 0 12px 12px; }
-.mem-group { margin: 10px 0 4px; color: #8fb4e8; }
-.mem-entry { padding: 6px 8px; margin: 3px 0; border: 1px solid #24344d; border-radius: 8px; background: #131e33; }
-.mem-entry .t { display: block; color: #e6eefb; }
-.mem-entry .m { display: block; color: #9fb4d4; font-size: 11px; }
-.mem-bar { height: 6px; margin: 6px 0 2px; background: #0b1120; border-radius: 3px; overflow: hidden; border: 1px solid #24344d; }
-.mem-bar i { display: block; height: 100%; background: #3f6fae; }
-.mem-row { margin: 6px 0; color: #9fb4d4; }
-.mem-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 12px 8px; }
-.mem-btn { background: #1c2a42; color: #cfe1f7; border: 1px solid #2f4466; border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
-.mem-btn:hover:not(:disabled) { background: #27395a; }
-.mem-btn:disabled { opacity: .6; cursor: default; }
-.mem-tidy-note { flex: 1 1 100%; color: #8fa8cc; font-size: 12px; }
-.mem-stats { margin: 6px 0; color: #9fb4d4; font-size: 12px; }
-.mem-audit { margin: 6px 0; padding: 4px 8px; border-left: 2px solid #3f6fae; color: #9fb4d4; font-size: 12px; }
-.mem-empty { color: #8fa8cc; margin: 10px 0; }
+  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); border-left: 1px solid var(--dsw-alias-border-l2); box-shadow: var(--dsw-elevation-panel); }
+.mem-head { padding: 10px 12px; border-bottom: 1px solid var(--dsw-alias-border-l2); display: flex; gap: 8px; align-items: center; }
+.mem-head-title { flex: 1; font-weight: 600; }
+.mem-filter { display: flex; margin: 8px 12px; }
+.mem-body { flex: 1; overflow: auto; padding: 0 12px 12px; }
+.mem-bar { height: 6px; margin: 6px 0 2px; background: var(--dsw-alias-bg-module-platform); border-radius: 3px; overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); }
+.mem-bar i { display: block; height: 100%; background: var(--dsw-alias-brand-primary); }
+.mem-rows { display: flex; flex-direction: column; gap: 6px; }
+.mem-entry { padding: 6px 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-layer-2); }
+.mem-entry .t { display: block; color: var(--dsw-alias-label-primary); }
+.mem-entry .m { display: block; color: var(--dsw-alias-label-tertiary); font-size: 11px; }
+.mem-text { margin: 6px 0; color: var(--dsw-alias-label-tertiary); font-size: 12px; }
+.mem-tidy-note { flex: 1 1 100%; color: var(--dsw-alias-label-tertiary); font-size: 12px; }
+.mem-audit { margin: 6px 0; padding: 4px 8px; border-left: 2px solid var(--dsw-alias-brand-primary); color: var(--dsw-alias-label-tertiary); font-size: 12px; }
 `
 
-  const openBtn = document.createElement('button')
-  openBtn.id = 'mem-open'
-  openBtn.textContent = S.open
-  panelOpenButton = openBtn
+/** 分组小标题：轨道/层 ＋ 计数（计数用官方 Tag；计数未知时不渲染 Tag）。 */
+function groupHeading(primitives, key, count, S) {
+  const badge = Number.isInteger(count) ? jsx(primitives.Tag, { tone: 'neutral' }, S.groupCount(count)) : null
+  return jsx('div', { className: 'mem-head-title', style: { margin: '10px 0 4px' } },
+    jsx('span', { style: { marginRight: badge === null ? 0 : 6 } }, key),
+    badge)
+}
 
-  const root = document.createElement('div')
-  root.id = PANEL_ID
-  const drawer = document.createElement('div')
-  drawer.id = 'mem-drawer'
-  drawer.style.display = 'none'
-  drawer.innerHTML = `
-    <div id="mem-head"><b id="mem-title">${S.title}</b>
-      <button id="mem-refresh" title="${S.refresh}">${S.refresh}</button>
-      <button id="mem-close" title="${S.close}">✕</button>
-    </div>
-    <input id="mem-filter" placeholder="${S.filter}" />
-    <div id="mem-actions"></div>
-    <div id="mem-body"></div>
-  `
-  root.appendChild(openBtn)
-  root.appendChild(drawer)
-  document.body.appendChild(root)
-  document.head.appendChild(style)
-  placeOpenButton(openBtn)
+function renderSnippet(primitives, lines) {
+  if (lines === null) return jsx(primitives.Tag, { tone: 'quiet' }, '…')
+  return jsx('div', { className: 'mem-rows' }, lines.map((line, index) => jsx('div', { key: index, className: 'mem-text' }, line)))
+}
 
-  const body = document.getElementById('mem-body')
-  const filter = document.getElementById('mem-filter')
-  const titleLabel = document.getElementById('mem-title')
-  const refreshBtn = document.getElementById('mem-refresh')
-  const closeBtn = document.getElementById('mem-close')
-  const filterInput = document.getElementById('mem-filter')
-  const actions = document.getElementById('mem-actions')
-
-  // 「整理全库」按钮（收边 §2）：动作栏挂在抽屉固定位置（记忆体每次重渲染都不碰它）。
-  // 点击只登记一条待整理标记（POST /api/memento/tidy-request）——不调模型、不合并条目；
-  // 整理由模型在下次会话里显式跑。按钮面因此不含任何写记忆的入口。
-  const tidyBtn = document.createElement('button')
-  tidyBtn.id = 'mem-tidy-request'
-  tidyBtn.className = 'mem-btn'
-  tidyBtn.textContent = S.tidyRequest
-  const tidyNote = document.createElement('span')
-  tidyNote.id = 'mem-tidy-note'
-  tidyNote.className = 'mem-tidy-note'
-  tidyNote.textContent = S.tidyHint
-  if (actions !== null) {
-    actions.appendChild(tidyBtn)
-    actions.appendChild(tidyNote)
+/** 三数（收边 §1）：路由已把三数渲染成文本行，面板照抄。 */
+function StatsSection(props) {
+  const { primitives, S, state } = props
+  const [data, setData] = react.useState(null)
+  react.useEffect(() => {
+    let alive = true
+    if (state.fresh) setData(null)
+    void fetch('/api/memento/stats')
+      .then((res) => res.json())
+      .then((payload) => { if (alive) setData(payload === null || typeof payload !== 'object' ? {} : payload) })
+      .catch((error) => { if (alive) setData({ error: String(error && error.message ? error.message : error) }) })
+    return () => { alive = false }
+  }, [S, state])
+  let lines = []
+  if (data !== null) {
+    if (data.error !== undefined) lines = [S.statsFailed(String(data.error))]
+    else if (!Array.isArray(data.lines) || data.lines.length === 0) lines = [S.statsEmpty]
+    else lines = data.lines.map(String)
   }
-  let tidyBusy = false
-  let tidyPending = null
+  return renderSnippet(primitives, data === null ? null : lines)
+}
 
-  /** 待整理标记的展示态：无标记 = 说明文案；有标记 = 按「本次是否新建」分别回显。 */
-  const showTidyState = (pending, created) => {
-    tidyPending = pending
-    if (tidyBusy) return
-    tidyNote.textContent = pending === null
-      ? S.tidyHint
-      : created === true ? S.tidyQueued : S.tidyAlreadyQueued
-  }
+/** 最近审计：加载中 → null（Tag …）；失败与空一律「审计为空」（照旧）。 */
+function AuditSection(props) {
+  const { primitives, S, state } = props
+  const [rows, setRows] = react.useState(null)
+  react.useEffect(() => {
+    let alive = true
+    if (state.fresh) setRows(null)
+    void fetch('/api/memento/audit?limit=20')
+      .then((res) => res.json())
+      .then((data) => { if (alive) setRows(Array.isArray(data.rows) ? data.rows : []) })
+      .catch(() => { if (alive) setRows([]) })
+    return () => { alive = false }
+  }, [S, state])
+  if (rows === null) return renderSnippet(primitives, null)
+  if (rows.length === 0) return jsx('div', { className: 'mem-text' }, S.auditEmpty)
+  return renderSnippet(primitives, rows.map((row) => {
+    const where = row.track ? ` ${row.track}/${row.scope}` : ''
+    return `${formatTime(row.ts)} ${row.action}${where} · ${row.outcome ?? ''} · ${row.source ?? ''}`
+  }))
+}
 
-  const requestTidy = async () => {
-    if (tidyBusy) return
-    tidyBusy = true
-    tidyBtn.disabled = true
-    tidyNote.textContent = S.tidyBusy
+/** 待审批提案：加载中 → null；失败与空一律「暂无提案」（照旧）。 */
+function ProposalsSection(props) {
+  const { primitives, S, state } = props
+  const [proposals, setProposals] = react.useState(null)
+  react.useEffect(() => {
+    let alive = true
+    if (state.fresh) setProposals(null)
+    void fetch('/api/memento/proposals')
+      .then((res) => res.json())
+      .then((data) => { if (alive) setProposals(Array.isArray(data.proposals) ? data.proposals : []) })
+      .catch(() => { if (alive) setProposals([]) })
+    return () => { alive = false }
+  }, [S, state])
+  if (proposals === null) return renderSnippet(primitives, null)
+  if (proposals.length === 0) return jsx('div', { className: 'mem-text' }, S.proposalsEmpty)
+  return renderSnippet(primitives, proposals.map((proposal) => {
+    const text = proposal.text.length > 160 ? `${proposal.text.slice(0, 160)}…` : proposal.text
+    return `[${proposal.id}] ${proposal.track}/${proposal.scope} · ${text}`
+  }))
+}
+
+/** 「整理全库」按钮 ＋ 状态说明（收边 §2 的同一套行为，改成 React 状态驱动）。 */
+function TidyRow(props) {
+  const { primitives, S, onLanguage } = props
+  const [busy, setBusy] = react.useState(false)
+  const [pending, setPending] = react.useState(null)
+  const [note, setNote] = react.useState(null)
+  const [alive, setAlive] = react.useState(true)
+  react.useEffect(() => () => { setAlive(false) }, [])
+  react.useEffect(() => {
+    void fetch('/api/memento/tidy-request')
+      .then((res) => res.json())
+      .then((data) => { if (data.error === undefined) setPending(data.pending ?? null) })
+      .catch(() => {})
+  }, [])
+  const request = async () => {
+    if (busy) return
+    setBusy(true)
+    setNote(S.tidyBusy)
+    let failed = null
     try {
       const response = await fetch('/api/memento/tidy-request', {
         method: 'POST',
@@ -280,38 +343,33 @@ function installPanel(state) {
       })
       const data = await response.json()
       if (!response.ok || data.error !== undefined) throw new Error(data.error === undefined ? `tidy-request ${response.status}` : data.error)
-      applyLanguage(data.language)
-      tidyBusy = false
-      showTidyState(data.pending ?? null, data.created === true)
+      onLanguage(data.language)
+      setPending(data.pending ?? null)
+      setNote(data.created === true ? S.tidyQueued : S.tidyAlreadyQueued)
     } catch (error) {
-      tidyNote.textContent = S.tidyFailed(String(error && error.message ? error.message : error))
+      failed = S.tidyFailed(String(error && error.message ? error.message : error))
     } finally {
-      tidyBusy = false
-      tidyBtn.disabled = false
+      if (alive) {
+        setBusy(false)
+        if (failed !== null) setNote(failed)
+      }
     }
   }
-  tidyBtn.addEventListener('click', () => { void requestTidy() })
+  return jsx(react.Fragment, null,
+    jsx(primitives.Button, { variant: 'outline', size: 'sm', disabled: busy, onClick: () => { void request() } }, S.tidyRequest),
+    jsx('span', { className: 'mem-tidy-note' }, note ?? (pending === null ? S.tidyHint : S.tidyAlreadyQueued)))
+}
 
-  /** 按服务端 language 切换文案并刷新静态标签（语言随配置，运行期不变）。 */
-  const applyLanguage = (language) => {
-    S = STRINGS[language] ?? STRINGS.en
-    openBtn.textContent = S.open
-    titleLabel.textContent = S.title
-    refreshBtn.title = S.refresh
-    refreshBtn.textContent = S.refresh
-    closeBtn.title = S.close
-    filterInput.placeholder = S.filter
-    tidyBtn.textContent = S.tidyRequest
-    showTidyState(tidyPending, undefined)
-  }
-
-  let entries = []
-  let lastFilter = ''
-  let lastTotal = 0
-  let lastTruncated = false
-
-  const render = () => {
-    const visible = entries.filter((entry) => entry.text.toLowerCase().includes(lastFilter.toLowerCase()))
+/** 抽屉正文：条目浏览（分组 ＋ 过滤）＋ 预算条 ＋ 审计尾 ＋ 提案区 ＋ 三数行。 */
+function PanelContent(props) {
+  const { primitives, rootRef, S, state, onLanguage, onRefresh, onFilter } = props
+  let body
+  if (state.error !== null) {
+    body = jsx('div', { className: 'mem-text' }, S.loadFailed(state.error))
+  } else if (state.fresh === false) {
+    body = jsx('div', { className: 'mem-text' }, S.loading)
+  } else {
+    const visible = state.entries.filter((entry) => entry.text.toLowerCase().includes(state.filter.toLowerCase()))
     const groups = new Map()
     for (const entry of visible) {
       const key = `${entry.track}/${entry.scope}`
@@ -319,126 +377,138 @@ function installPanel(state) {
       if (list === undefined) groups.set(key, [entry])
       else list.push(entry)
     }
-    if (visible.length === 0) {
-      body.innerHTML = `<div class="mem-empty">${S.empty}</div>`
-      return
-    }
-    let html = lastTruncated
-      ? `<div class="mem-empty">${S.truncated(entries.length, lastTotal)}</div>`
-      : ''
+    const children = []
+    if (state.truncated) children.push(jsx('div', { key: 'truncated', className: 'mem-text' }, S.truncated(state.entries.length, state.total)))
     for (const [key, list] of groups) {
-      html += `<div class="mem-group">${key}${S.groupCount(list.length)}</div>`
+      children.push(jsx('div', { key: `g:${key}` }, groupHeading(primitives, key, list.length, S)))
       for (const entry of list) {
-        const agentTag = typeof entry.agentKey === 'string' && entry.agentKey.length > 0 ? ` · agent ${escapeHtml(entry.agentKey)}` : ''
-        html += `<div class="mem-entry"><span class="t">${escapeHtml(entry.text)}</span><span class="m">${escapeHtml(entry.source)}${agentTag} · ${new Date(entry.createdAt).toLocaleString()}</span></div>`
+        const agentTag = typeof entry.agentKey === 'string' && entry.agentKey.length > 0 ? ` · agent ${entry.agentKey}` : ''
+        children.push(jsx('div', { key: entry.id, className: 'mem-entry' },
+          jsx('span', { className: 't' }, entry.text),
+          jsx('span', { className: 'm' }, `${entry.source}${agentTag} · ${formatTime(entry.createdAt)}`)))
       }
     }
-    body.innerHTML = html
-  }
-
-  const renderBudget = (budgets) => {
-    if (!Array.isArray(budgets) || budgets.length === 0) return
-    let html = `<div class="mem-group">${S.budgets}</div>`
-    for (const row of budgets) {
-      const pct = row.limit > 0 ? Math.min(100, Math.round((row.used / row.limit) * 100)) : 0
-      html += `<div class="mem-row">${row.track}/${row.scope}: ${row.used}/${row.limit}<div class="mem-bar"><i style="width:${pct}%"></i></div></div>`
+    if (state.budgets.length > 0) {
+      children.push(jsx('div', { key: 'budgets' }, groupHeading(primitives, S.budgets, state.budgets.length, S),
+        jsx('div', { className: 'mem-rows' }, state.budgets.map((row, index) => {
+          const pct = row.limit > 0 ? Math.min(100, Math.round((row.used / row.limit) * 100)) : 0
+          return jsx('div', { key: index, className: 'mem-text' },
+            `${row.track}/${row.scope}: ${row.used}/${row.limit}`,
+            jsx('div', { className: 'mem-bar' }, jsx('i', { style: { width: `${pct}%` } })))
+        }))))
+      children.push(jsx('div', { key: 'audit' }, groupHeading(primitives, S.audit, '', S), jsx(AuditSection, { primitives, S, state })))
+      children.push(jsx('div', { key: 'proposals' }, groupHeading(primitives, S.proposals, '', S), jsx(ProposalsSection, { primitives, S, state })))
+      children.push(jsx('div', { key: 'stats' }, groupHeading(primitives, S.stats, '', S), jsx(StatsSection, { primitives, S, state })))
     }
-    html += `<div class="mem-group">${S.audit}</div>`
-    html += `<div id="mem-audit-slot"><div class="mem-empty">${S.loading}</div></div>`
-    html += `<div class="mem-group">${S.proposals}</div>`
-    html += `<div id="mem-proposal-slot"><div class="mem-empty">${S.loading}</div></div>`
-    // 可观测三数（收边 §1）：/api/memento/stats 已把三数渲染成文本行，面板照抄即可
-    // （同一份文案给命令面与面板，避免两处措辞漂移）；语言跟随响应里的 language。
-    html += `<div class="mem-group">${S.stats}</div>`
-    html += `<div id="mem-stats-slot"><div class="mem-empty">${S.loading}</div></div>`
-    body.insertAdjacentHTML('beforeend', html)
+    body = visible.length === 0
+      ? jsx('div', { className: 'mem-text' }, S.empty)
+      : jsx(react.Fragment, null, children)
   }
-
-  const renderStats = (payload) => {
-    const slot = document.getElementById('mem-stats-slot')
-    if (slot === null) return
-    if (payload.error !== undefined) {
-      slot.innerHTML = `<div class="mem-empty">${escapeHtml(S.statsFailed(String(payload.error)))}</div>`
-      return
-    }
-    const lines = Array.isArray(payload.lines) ? payload.lines : []
-    if (lines.length === 0) {
-      slot.innerHTML = `<div class="mem-empty">${S.statsEmpty}</div>`
-      return
-    }
-    slot.innerHTML = lines.map((line) => `<div class="mem-stats">${escapeHtml(line)}</div>`).join('')
-  }
-
-  const renderAudit = (rows) => {
-    const slot = document.getElementById('mem-audit-slot')
-    if (slot === null) return
-    if (!Array.isArray(rows) || rows.length === 0) {
-      slot.innerHTML = `<div class="mem-empty">${S.auditEmpty}</div>`
-      return
-    }
-    slot.innerHTML = rows.map((row) =>
-      `<div class="mem-audit">${new Date(row.ts).toLocaleString()} ${escapeHtml(row.action)}${row.track ? ` ${escapeHtml(row.track)}/${escapeHtml(row.scope)}` : ''} · ${escapeHtml(row.outcome ?? '')} · ${escapeHtml(row.source ?? '')}</div>`).join('')
-  }
-
-  const renderProposals = (proposals) => {
-    const slot = document.getElementById('mem-proposal-slot')
-    if (slot === null) return
-    if (!Array.isArray(proposals) || proposals.length === 0) {
-      slot.innerHTML = `<div class="mem-empty">${S.proposalsEmpty}</div>`
-      return
-    }
-    slot.innerHTML = proposals.map((proposal) =>
-      `<div class="mem-audit">[${escapeHtml(proposal.id)}] ${escapeHtml(proposal.track)}/${escapeHtml(proposal.scope)} · ${escapeHtml(proposal.text.length > 160 ? `${proposal.text.slice(0, 160)}…` : proposal.text)}</div>`).join('')
-  }
-
-  const refresh = async () => {
-    try {
-      const response = await fetch('/api/memento/entries?limit=200')
-      if (!response.ok) throw new Error(`entries ${response.status}`)
-      const data = await response.json()
-      if (data.error !== undefined) throw new Error(data.error)
-      applyLanguage(data.language)
-      entries = Array.isArray(data.entries) ? data.entries : []
-      lastTotal = Number.isInteger(data.total) ? data.total : entries.length
-      lastTruncated = data.truncated === true
-      render()
-      renderBudget(data.budgets)
-      void fetch('/api/memento/audit?limit=20')
-        .then((res) => res.json())
-        .then((audit) => renderAudit(audit.rows))
-        .catch(() => renderAudit([]))
-      void fetch('/api/memento/proposals')
-        .then((res) => res.json())
-        .then((data) => renderProposals(data.proposals))
-        .catch(() => renderProposals([]))
-      void fetch('/api/memento/stats')
-        .then((res) => res.json())
-        .then((data) => renderStats(data))
-        .catch((error) => renderStats({ error: String(error && error.message ? error.message : error) }))
-      // 待整理标记的当前状态（面板打开时先照实显示「已排队/未排队」）。
-      void fetch('/api/memento/tidy-request')
-        .then((res) => res.json())
-        .then((data) => { if (data.error === undefined) showTidyState(data.pending ?? null, undefined) })
-        .catch(() => {})
-    } catch (error) {
-      body.innerHTML = `<div class="mem-empty">${S.loadFailed(String(error && error.message ? error.message : error))}</div>`
-    }
-  }
-
-  openBtn.addEventListener('click', () => {
-    drawer.style.display = drawer.style.display === 'none' ? 'flex' : 'none'
-    if (drawer.style.display !== 'none') void refresh()
-  })
-  closeBtn.addEventListener('click', () => { drawer.style.display = 'none' })
-  refreshBtn.addEventListener('click', () => void refresh())
-  filter.addEventListener('input', () => {
-    lastFilter = filter.value
-    render()
-  })
+  return jsx(react.Fragment, null,
+    jsx('div', { className: 'mem-head' },
+      jsx('b', { className: 'mem-head-title' }, S.title),
+      withTooltip(primitives, S.refresh,
+        jsx(primitives.Button, { variant: 'outline', size: 'sm', onClick: onRefresh }, S.refresh)),
+      withTooltip(primitives, S.close,
+        jsx(primitives.Button, { variant: 'outline', size: 'sm', 'aria-label': S.close, onClick: () => onLanguage(null) }, '✕'))),
+    jsx(primitives.Input, {
+      className: 'mem-filter',
+      placeholder: S.filter,
+      defaultValue: state.filter,
+      onInput: (event) => onFilter(event.target.value),
+    }),
+    jsx('div', { className: 'mem-head' },
+      jsx(TidyRow, { primitives, S, onLanguage }),
+      jsx('span', { style: { flex: 1 } }),
+      jsx(primitives.StateDot, { state: state.error !== null ? 'error' : (state.busy ? 'ongoing' : (state.fresh ? 'done' : 'idle')) })),
+    jsx('div', { ref: rootRef, className: 'mem-body' }, body))
 }
 
-function escapeHtml(value) {
-  return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
+/** 入口按钮（官方 Button）；点击开合抽屉（抽屉本体挂在官方 shell.overlay 浮层里）。 */
+function PanelButton(props) {
+  const { primitives, S, onToggle } = props
+  return jsx(primitives.Button, { variant: 'outline', id: 'mem-open', onClick: onToggle }, S.open)
+}
+
+/** 抽屉本体：打开时取一轮数据，之后每次「刷新」再取一轮（行为照旧）。 */
+function Drawer(props) {
+  const { primitives, S, onLanguage, onClose } = props
+  const [counter, setCounter] = react.useState(0)
+  const [state, setState] = react.useState({ fresh: false, busy: false, error: null, entries: [], total: 0, truncated: false, budgets: [], filter: '' })
+  const bodyRef = react.useRef(null)
+  react.useEffect(() => {
+    let alive = true
+    const controller = new AbortController()
+    setState((prev) => ({ ...prev, busy: true }))
+    void (async () => {
+      try {
+        const response = await fetch('/api/memento/entries?limit=200', { signal: controller.signal })
+        if (!response.ok) throw new Error(`entries ${response.status}`)
+        const data = await response.json()
+        if (data.error !== undefined) throw new Error(data.error)
+        if (!alive) return
+        onLanguage(data.language)
+        setState((prev) => ({
+          fresh: true,
+          busy: false,
+          error: null,
+          entries: Array.isArray(data.entries) ? data.entries : [],
+          total: Number.isInteger(data.total) ? data.total : (Array.isArray(data.entries) ? data.entries.length : 0),
+          truncated: data.truncated === true,
+          budgets: Array.isArray(data.budgets) ? data.budgets : [],
+          filter: prev.filter,
+        }))
+      } catch (error) {
+        if (!alive) return
+        setState((prev) => ({ ...prev, busy: false, fresh: true, error: String(error && error.message ? error.message : error) }))
+      }
+    })()
+    return () => { alive = false; controller.abort() }
+  }, [counter, onLanguage])
+  return jsx('div', { id: 'mem-drawer' },
+    jsx(PanelContent, {
+      primitives,
+      rootRef: bodyRef,
+      S,
+      state,
+      onLanguage: (language) => { if (language === null) onClose() },
+      onRefresh: () => setCounter((c) => c + 1),
+      onFilter: (text) => setState((prev) => ({ ...prev, filter: text })),
+    }))
+}
+
+/**
+ * 浮层抽屉挂载：入口按钮 ＋ 抽屉共用一个 react-dom/client 根（createRoot）。
+ * 面板只读（除「整理全库」只登记标记），所有动作仍走 /api/memento/* 路由。
+ */
+function installPanel(state) {
+  if (document.getElementById(PANEL_ID)) return
+  const primitives = getPrimitives()
+  let S = STRINGS[state.language] ?? STRINGS.en
+
+  const style = document.createElement('style')
+  style.textContent = PANEL_LAYOUT_CSS
+
+  const root = document.createElement('div')
+  root.id = PANEL_ID
+  root.appendChild(style)
+  document.body.appendChild(root)
+  // 设置页「显示悬浮窗入口按钮」的即时生效面：整块浮层根节点的显隐。
+  panelOpenButton = root
+
+  // 入口按钮的文字只在挂载时定一次（与迁移前一致：抽屉侧换语言不回写按钮）。
+  const overlay = getReactDomClient().createRoot(root)
+  overlay.render(jsx(PanelButton, { primitives, S, onToggle: state.onToggle }))
+}
+
+/** 时间戳 → 本地时间串（审计行、条目与提案元信息共用同一口径）。 */
+function formatTime(value) {
+  return value === undefined || value === null ? '' : new Date(value).toLocaleString()
+}
+
+/** 官方 Tooltip 包装（悬停提示与 title 同文案；disabled 时不弹泡）。 */
+function withTooltip(primitives, label, element, disabled) {
+  return jsx(primitives.Tooltip, { label, side: 'bottom', disabled: disabled === true }, element)
 }
 
 // ── 宿主设置页（settings.section 一级项，id = yammory-system）──────────────
@@ -802,33 +872,29 @@ function escapeHtml(value) {
       const CARD_CSS = `
 .memsec { max-width: 720px; color: inherit; font-size: 13px; }
 .memsec-title { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
-.memsec-desc { margin: 0 0 8px; font-size: 13px; color: var(--dsw-alias-label-secondary, #8a93a6); }
-.memsec-note { margin: 0 0 8px; font-size: 12px; color: var(--dsw-alias-label-tertiary, #98a2b3); }
-.memsec-group { margin: 20px 0 0; padding-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-secondary, #6f87ad); }
-.memcard-field { display: flex; flex-direction: column; padding: 8px 0; border-top: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.22)); }
+.memsec-desc { margin: 0 0 8px; font-size: 13px; color: var(--dsw-alias-label-secondary); }
+.memsec-note { margin: 0 0 8px; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
+.memsec-group { margin: 20px 0 0; padding-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-secondary); }
+.memcard-field { display: flex; flex-direction: column; padding: 8px 0; border-top: 1px solid var(--dsw-alias-border-l2); }
 .memcard-row { display: flex; flex: 1; flex-wrap: wrap; min-width: 0; align-items: center; gap: 8px; }
 .memcard-label { flex: 1 1 auto; min-width: 0; font-size: 13px; }
-.memcard-input { border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.35)); background: transparent; color: inherit; border-radius: 6px; padding: 4px 8px; font: inherit; min-width: 0; width: 240px; }
-.memcard-input[aria-invalid="true"] { border-color: var(--dsw-alias-label-error, #e5534b); }
+.memcard-input { border: 1px solid var(--dsw-alias-border-l2); background: transparent; color: inherit; border-radius: 6px; padding: 4px 8px; font: inherit; min-width: 0; width: 240px; }
+.memcard-input[aria-invalid="true"] { border-color: var(--dsw-alias-state-error-primary); }
 .memcard-textarea { flex-basis: 100%; width: 100%; min-height: 64px; font: 12px/1.5 ui-monospace, monospace; resize: vertical; }
 .memcard-hint, .memcard-invalid { margin: 2px 0 0; font-size: 12px; }
-.memcard-hint { color: var(--dsw-alias-label-tertiary, #98a2b3); }
-.memcard-invalid { color: var(--dsw-alias-label-error, #e5534b); }
-.memcard-override { font-size: 11px; color: var(--dsw-alias-label-secondary, #98a2b3); white-space: nowrap; }
-.memcard-badge { white-space: nowrap; background: var(--dsw-alias-bg-module-platform, rgba(128, 128, 128, 0.15)); color: var(--dsw-alias-label-secondary, #98a2b3); border-radius: 999px; padding: 1px 8px; font-size: 11px; }
-.memcard-reset { font: inherit; font-size: 12px; color: var(--dsw-alias-label-secondary, #98a2b3); cursor: pointer; background: 0 0; border: none; padding: 0; white-space: nowrap; }
+.memcard-hint { color: var(--dsw-alias-label-tertiary); }
+.memcard-invalid { color: var(--dsw-alias-state-error-primary); }
+.memcard-override { font-size: 11px; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
+.memcard-badge { white-space: nowrap; background: var(--dsw-alias-bg-module-platform); color: var(--dsw-alias-label-secondary); border-radius: 999px; padding: 1px 8px; font-size: 11px; }
+.memcard-reset { font: inherit; font-size: 12px; color: var(--dsw-alias-label-secondary); cursor: pointer; background: 0 0; border: none; padding: 0; white-space: nowrap; }
 .memsec-footer { display: flex; gap: 8px; align-items: center; margin: 0 0 6px; }
 .memsec-spacer { flex: 1; }
-.memsec-dirty { font-size: 12px; color: var(--dsw-alias-label-secondary, #98a2b3); }
-.memsec-failed { font-size: 12px; color: var(--dsw-alias-label-error, #e5534b); }
-.memsec-btn { font: inherit; font-size: 13px; border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.35)); background: transparent; color: inherit; border-radius: 6px; padding: 4px 14px; cursor: pointer; }
+.memsec-dirty { font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.memsec-failed { font-size: 12px; color: var(--dsw-alias-state-error-primary); }
+.memsec-btn { font: inherit; font-size: 13px; border: 1px solid var(--dsw-alias-border-l2); background: transparent; color: inherit; border-radius: 6px; padding: 4px 14px; cursor: pointer; }
 .memsec-btn:disabled { opacity: 0.5; cursor: default; }
-.memswitch { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px; color: var(--dsw-alias-label-secondary, #8a93a6); background: 0 0; border: 1px solid transparent; border-radius: 999px; padding: 2px 10px; cursor: pointer; }
-.memswitch:hover:not(:disabled) { border-color: var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.35)); color: inherit; }
-.memswitch:disabled { cursor: default; opacity: 0.6; }
-.memswitch-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dsw-alias-label-success, #3fb950); }
-.memswitch-off { color: var(--dsw-alias-label-tertiary, #98a2b3); text-decoration: line-through; }
-.memswitch-off .memswitch-dot { background: var(--dsw-alias-label-tertiary, #98a2b3); }
+.memswitch { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.memswitch-off { color: var(--dsw-alias-label-tertiary); text-decoration: line-through; }
 `
 
       /** 单字段控件行（label + input/checkbox/select + override 徽标 + reset + hint/invalid）。 */
@@ -1007,19 +1073,35 @@ function escapeHtml(value) {
         const label = state.phase === 'loading' ? t.loading
           : state.phase === 'unavailable' || state.phase === 'failed' ? t.unavailable
             : state.enabled ? t.on : t.off
-        return jsx('button', {
-          type: 'button',
-          className: `memswitch${state.phase === 'ready' && !state.enabled ? ' memswitch-off' : ''}`,
-          disabled: busy || sessionId === '' || state.phase === 'failed',
+        const ready = state.phase === 'ready'
+        // 控件换成官方 Switch（官方只给控件不给文案，故文字仍由本插件渲染）；
+        // 关态用灰化 ＋ 删除线表达「不注入、不召回、不写入、不观察」。
+        return jsx('span', {
+          className: `memswitch${ready && !state.enabled ? ' memswitch-off' : ''}`,
           title: t.title,
-          'aria-label': `${t.title} — ${label}`,
-          'aria-pressed': state.phase === 'ready' ? state.enabled : undefined,
-          onClick: toggle,
-        }, jsx('span', { className: 'memswitch-dot' }), label)
+        },
+          jsx(getPrimitives().Switch, {
+            checked: ready ? state.enabled : true,
+            disabled: busy || sessionId === '' || state.phase === 'failed',
+            label: `${t.title} — ${label}`,
+            onChange: toggle,
+          }),
+          label)
       }
 
       function apply(ctx) {
-        void bootPanel()
+        let disposeDrawer = null
+        /** 抽屉开合：挂载点与关闭出口都在这里收口（按钮只调这一个开关）。 */
+        const setDrawerOpen = (open) => {
+          if (open) {
+            if (disposeDrawer === null) disposeDrawer = mountDrawer()
+          } else if (disposeDrawer !== null) {
+            disposeDrawer()
+            disposeDrawer = null
+          }
+        }
+        drawerClose.current = () => { setDrawerOpen(false) }
+        void bootPanel({ onToggle: () => { setDrawerOpen(disposeDrawer === null) } })
         if (!styleInstalled && typeof document !== 'undefined') {
           styleInstalled = true
           const tag = document.createElement('style')
@@ -1028,6 +1110,11 @@ function escapeHtml(value) {
           document.head.appendChild(tag)
         }
         registerComposerSwitch(ctx)
+        // 抽屉走官方通栏浮层（shell.overlay）：宿主声明该槽时用它，抽屉渲染进它给的容器。
+        ctx.effect(() => ctx.slots.inject('shell.overlay', () => ctx.slots.register(
+          { name: 'shell.overlay', id: 'yammory-system-drawer', order: 40 },
+          DrawerHost,
+        )), 'yammory-system: shell overlay seat')
         const controller = new YammoryCardController(ctx.settingsScope.bind({ namespace: 'yammory-system' }))
         ctx.effect(() => ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
