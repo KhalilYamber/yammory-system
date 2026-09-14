@@ -580,6 +580,7 @@ function withTooltip(primitives, label, element, disabled) {
           sectionBudgets: 'Warning lines (per track/layer)',
           sectionLimits: 'Query & command limits',
           sectionRecall: 'Recall defaults',
+          sectionRetrieval: 'Vector recall (spec 3.3 · layer B)',
           sectionWeighting: 'Recall weighting (spec 3.3 · layer B)',
           sectionPanelPage: 'Panel page limits',
           sectionProposals: 'Auto-capture proposals',
@@ -601,6 +602,12 @@ function withTooltip(primitives, label, element, disabled) {
           recallSnippetCap: 'snippets per session',
           recallSnippetChars: 'snippet characters',
           recallWindowDays: 'history window (days)',
+          hintRetrievalVector: 'Only engages when a provider that declares itself semantic is registered; the built-in hash provider is a placeholder, so this switch falls back to keyword recall.',
+          choiceAsk: 'Ask',
+          choiceAuto: 'Auto',
+          choiceOff: 'Off',
+          choiceEn: 'English',
+          choiceZh: '中文',
           weightHeat: 'heat bonus (0 = off)',
           weightHeatSaturation: 'recalls that saturate heat',
           weightHeatHalfLifeDays: 'heat half-life (days)',
@@ -640,6 +647,7 @@ function withTooltip(primitives, label, element, disabled) {
           sectionBudgets: '软预警线（每轨道/层）',
           sectionLimits: '查询与命令上限',
           sectionRecall: '召回默认值',
+          sectionRetrieval: '向量召回（规格 3.3 · 层 B）',
           sectionWeighting: '召回加权（规格 3.3 · 层 B）',
           sectionPanelPage: '面板页上限',
           sectionProposals: '自动捕捉提案',
@@ -661,6 +669,12 @@ function withTooltip(primitives, label, element, disabled) {
           recallSnippetCap: '每会话片段数',
           recallSnippetChars: '片段字符数',
           recallWindowDays: '历史窗口（天）',
+          hintRetrievalVector: '只有注册了声明为语义的 embedding provider 时才真正生效；内置是哈希伪嵌入，打开也回落 keyword。',
+          choiceAsk: '询问',
+          choiceAuto: '自动',
+          choiceOff: '拒绝',
+          choiceEn: 'English',
+          choiceZh: '中文',
           weightHeat: '热度加成（0 = 关闭）',
           weightHeatSaturation: '吃满热度的召回次数',
           weightHeatHalfLifeDays: '热度半衰期（天）',
@@ -772,6 +786,22 @@ function withTooltip(primitives, label, element, disabled) {
       ]
       const SPEC_BY_PATH = new Map(FIELD_SPECS.map((spec) => [spec.path, spec]))
       const RELOAD_PATHS = new Set(['snapshotOrder'])
+
+      /** 选择型字段的候选文案键（缺键回落到原始值）。 */
+      const CHOICE_LABELS = {
+        'writePolicy:ask': 'choiceAsk',
+        'writePolicy:auto': 'choiceAuto',
+        'writePolicy:off': 'choiceOff',
+        'language:en': 'choiceEn',
+        'language:zh': 'choiceZh',
+      }
+
+      /** 字段级说明文案（路径 → 文案键）：原先写死在 FieldRow 里的两条分支改成查表。 */
+      const FIELD_HINTS = new Map([
+        ['writePolicies', 'writePoliciesHint'],
+        ['dbPath', 'dbPathHint'],
+        ['retrieval.vector', 'hintRetrievalVector'],
+      ])
 
       /** 草稿文本 → 顶层字段写入计划；无法解析的草稿返回 undefined（阻塞保存）。 */
       function parseDraftText(spec, text, currentValue) {
@@ -945,7 +975,8 @@ function withTooltip(primitives, label, element, disabled) {
         { key: 'sectionLanguage', paths: ['language'] },
         { key: 'sectionBudgets', paths: ['budgets.user.userGlobal', 'budgets.user.workspace', 'budgets.agent.userGlobal', 'budgets.agent.workspace'] },
         { key: 'sectionLimits', paths: ['maxEntriesPerQuery', 'commandListLimit', 'commandAuditLimit'] },
-        { key: 'sectionRecall', paths: ['recall.historyLimitDefault', 'recall.snippetCap', 'recall.snippetChars', 'recall.windowDays', 'retrieval.vector'] },
+        { key: 'sectionRecall', paths: ['recall.historyLimitDefault', 'recall.snippetCap', 'recall.snippetChars', 'recall.windowDays'] },
+        { key: 'sectionRetrieval', paths: ['retrieval.vector'] },
         { key: 'sectionWeighting', paths: ['recall.weighting.heat', 'recall.weighting.heatSaturation', 'recall.weighting.heatHalfLifeDays', 'recall.weighting.freshness', 'recall.weighting.freshnessHalfLifeDays', 'recall.weighting.tagDiscount'] },
         { key: 'sectionPanelPage', paths: ['panelEntriesLimit', 'panelAuditLimit'] },
         { key: 'sectionProposals', paths: ['proposals.enabled', 'proposals.maxChars', 'proposals.maxPending'] },
@@ -959,68 +990,85 @@ function withTooltip(primitives, label, element, disabled) {
 .memsec-title { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
 .memsec-desc { margin: 0 0 8px; font-size: 13px; color: var(--dsw-alias-label-secondary); }
 .memsec-note { margin: 0 0 8px; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
-.memsec-group { margin: 20px 0 0; padding-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-secondary); }
-.memcard-field { display: flex; flex-direction: column; padding: 8px 0; border-top: 1px solid var(--dsw-alias-border-l2); }
-.memcard-row { display: flex; flex: 1; flex-wrap: wrap; min-width: 0; align-items: center; gap: 8px; }
+.memsec-group { margin: 22px 0 0; padding-top: 10px; border-top: 1px solid var(--dsw-alias-border-l2); font-size: 11px; font-weight: 600; letter-spacing: 0.03em; color: var(--dsw-alias-label-tertiary); }
+.memcard-field { display: flex; flex-direction: column; gap: 2px; padding: 9px 0; }
+.memcard-row { display: flex; flex: 1; flex-wrap: wrap; min-width: 0; align-items: center; gap: 10px; }
 .memcard-label { flex: 1 1 auto; min-width: 0; font-size: 13px; }
-.memcard-input { border: 1px solid var(--dsw-alias-border-l2); background: transparent; color: inherit; border-radius: 6px; padding: 4px 8px; font: inherit; min-width: 0; width: 240px; }
-.memcard-input[aria-invalid="true"] { border-color: var(--dsw-alias-state-error-primary); }
-.memcard-textarea { flex-basis: 100%; width: 100%; min-height: 64px; font: 12px/1.5 ui-monospace, monospace; resize: vertical; }
+.memcard-side { flex: none; display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.memcard-badges { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; }
+.memcard-pills { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.memcard-side .memcard-input { width: 220px; }
+.memcard-textarea { flex: 1 1 100%; width: 100%; min-height: 64px; font: 12px/1.5 ui-monospace, monospace; resize: vertical; border: 1px solid var(--dsw-alias-border-l2); background: transparent; color: inherit; border-radius: 6px; padding: 6px 8px; }
+.memcard-textarea[aria-invalid="true"] { border-color: var(--dsw-alias-state-error-primary); }
 .memcard-hint, .memcard-invalid { margin: 2px 0 0; font-size: 12px; }
 .memcard-hint { color: var(--dsw-alias-label-tertiary); }
 .memcard-invalid { color: var(--dsw-alias-state-error-primary); }
-.memcard-override { font-size: 11px; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
-.memcard-badge { white-space: nowrap; background: var(--dsw-alias-bg-module-platform); color: var(--dsw-alias-label-secondary); border-radius: 999px; padding: 1px 8px; font-size: 11px; }
-.memcard-reset { font: inherit; font-size: 12px; color: var(--dsw-alias-label-secondary); cursor: pointer; background: 0 0; border: none; padding: 0; white-space: nowrap; }
-.memsec-footer { display: flex; gap: 8px; align-items: center; margin: 0 0 6px; }
+.memsec-actions { display: flex; align-items: center; gap: 8px; margin: 22px 0 4px; padding-top: 12px; border-top: 1px solid var(--dsw-alias-border-l2); }
 .memsec-spacer { flex: 1; }
 .memsec-dirty { font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .memsec-failed { font-size: 12px; color: var(--dsw-alias-state-error-primary); }
-.memsec-btn { font: inherit; font-size: 13px; border: 1px solid var(--dsw-alias-border-l2); background: transparent; color: inherit; border-radius: 6px; padding: 4px 14px; cursor: pointer; }
-.memsec-btn:disabled { opacity: 0.5; cursor: default; }
 .memswitch { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .memswitch-off { color: var(--dsw-alias-label-tertiary); }
 `
 
-      /** 单字段控件行（label + input/checkbox/select + override 徽标 + reset + hint/invalid）。 */
+      /** 字段行两侧小件：`已覆盖` 与 `⟳ 重载生效`，统一走官方 Tag（quiet = 提示 / neutral = 状态事实）。 */
+      function FieldBadges(props) {
+        const { t, spec, state } = props
+        const primitives = getPrimitives()
+        const badges = []
+        if (state.overridden) badges.push(jsx(primitives.Tag, { key: 'ov', tone: 'neutral' }, t('overridden')))
+        if (RELOAD_PATHS.has(spec.path)) {
+          badges.push(withTooltip(primitives, t('reloadHint'), jsx(primitives.Tag, { key: 'rl', tone: 'quiet' }, '⟳')))
+        }
+        return badges.length === 0 ? null : jsx('span', { className: 'memcard-badges' }, badges)
+      }
+
+      /** 单字段控件行：label ＋ 官方控件（Switch / Input / Pill 组 / textarea）＋ 标记 ＋ reset ＋ hint/invalid。 */
       function FieldRow(props) {
         const { t, spec, state, disabled, onEdit, onReset } = props
+        const primitives = getPrimitives()
         const label = t(spec.key ?? spec.path)
-        const reloadBadge = RELOAD_PATHS.has(spec.path) ? jsx('span', { className: 'memcard-badge', title: t('reloadHint') }, '⟳') : null
         const invalid = spec.kind === 'choice' ? t('invalidPolicy') : spec.kind === 'decimal' ? t('invalidDecimal') : t('invalidNumber')
-        const control = spec.kind === 'bool'
-          ? jsx('input', {
-              type: 'checkbox', disabled,
-              checked: state.text === 'true',
-              onChange: (event) => onEdit(event.target.checked ? 'true' : 'false'),
-            })
-          : spec.kind === 'choice'
-            ? jsx('select', {
-                className: 'memcard-input', disabled, value: state.text,
-                onChange: (event) => onEdit(event.target.value),
-              }, spec.choices.map((choice) => jsx('option', { key: choice, value: choice }, choice)))
-            : spec.kind === 'policies'
-              ? jsx('textarea', {
-                  className: 'memcard-input memcard-textarea', disabled,
-                  value: state.text, 'aria-invalid': state.invalid,
-                  onChange: (event) => onEdit(event.target.value),
-                })
-              : jsx('input', {
-                  type: spec.kind === 'number' ? 'text' : 'text',
-                  inputMode: spec.kind === 'number' ? 'numeric' : spec.kind === 'decimal' ? 'decimal' : undefined,
-                  className: 'memcard-input', disabled,
-                  value: state.text, 'aria-invalid': state.invalid,
-                  onChange: (event) => onEdit(event.target.value),
-                })
+        const hintKey = FIELD_HINTS.get(spec.path)
+        let control
+        if (spec.kind === 'bool') {
+          control = jsx(primitives.Switch, {
+            checked: state.text === 'true',
+            disabled,
+            label,
+            onChange: (next) => onEdit(next ? 'true' : 'false'),
+          })
+        } else if (spec.kind === 'choice') {
+          control = jsx('div', { className: 'memcard-pills' }, spec.choices.map((choice) => {
+            const labelKey = CHOICE_LABELS[`${spec.path}:${choice}`]
+            return jsx(primitives.Pill, {
+              key: choice,
+              active: state.text === choice,
+              disabled,
+              onClick: () => onEdit(choice),
+            }, labelKey === undefined ? choice : t(labelKey))
+          }))
+        } else if (spec.kind === 'policies') {
+          control = jsx('textarea', {
+            className: 'memcard-textarea', disabled,
+            value: state.text, 'aria-invalid': state.invalid,
+            onChange: (event) => onEdit(event.target.value),
+          })
+        } else {
+          control = jsx(primitives.Input, {
+            className: 'memcard-input', disabled,
+            value: state.text, 'aria-invalid': state.invalid,
+            inputMode: spec.kind === 'number' ? 'numeric' : 'decimal',
+            onChange: (event) => onEdit(event.target.value),
+          })
+        }
         return jsx('div', { className: 'memcard-field' },
           jsx('div', { className: 'memcard-row' },
-            jsx('label', { className: 'memcard-label' }, label, state.overridden ? jsx('span', { className: 'memcard-override' }, ` · ${t('overridden')}`) : null, reloadBadge),
-            state.overridden ? jsx('button', { type: 'button', className: 'memcard-reset', disabled, title: t('resetField'), onClick: onReset }, t('reset')) : null,
-            control,
-          ),
-          spec.path === 'writePolicies' ? jsx('p', { className: 'memcard-hint' }, t('writePoliciesHint'))
-            : spec.path === 'dbPath' ? jsx('p', { className: 'memcard-hint' }, t('dbPathHint'))
-              : null,
+            jsx('label', { className: 'memcard-label' }, label, jsx(FieldBadges, { t, spec, state })),
+            jsx('span', { className: 'memcard-side' },
+              state.overridden ? jsx(primitives.Button, { variant: 'ghost', size: 'sm', disabled, onClick: onReset }, t('reset')) : null,
+              control)),
+          hintKey === undefined ? null : jsx('p', { className: 'memcard-hint' }, t(hintKey)),
           state.invalid ? jsx('p', { className: 'memcard-invalid' }, invalid) : null,
         )
       }
@@ -1028,6 +1076,7 @@ function withTooltip(primitives, label, element, disabled) {
       /** 设置页组件（settings.section 渲染入口；hooks share: yammoryCard → useYammoryCard）。 */
       function YammorySection(props) {
         const state = props.useYammoryCard((snapshot) => snapshot)
+        const primitives = getPrimitives()
         const language = state.language === 'zh' ? 'zh' : 'en'
         const t = (key) => CARD_STRINGS[language][key] ?? key
         const blocked = !state.dirty || state.saving || state.invalid
@@ -1035,13 +1084,6 @@ function withTooltip(primitives, label, element, disabled) {
           jsx('h2', { className: 'memsec-title' }, t('title')),
           jsx('p', { className: 'memsec-desc' }, t('description')),
           !state.available || !state.writable ? jsx('p', { className: 'memsec-note' }, t('readOnly')) : null,
-          jsx('div', { className: 'memsec-footer' },
-            state.dirty ? jsx('span', { className: 'memsec-dirty' }, t('unsaved')) : null,
-            state.failed ? jsx('span', { className: 'memsec-failed' }, t('saveFailed')) : null,
-            jsx('span', { className: 'memsec-spacer' }),
-            jsx('button', { type: 'button', className: 'memsec-btn', disabled: !state.dirty || state.saving, onClick: props.discard }, t('discard')),
-            jsx('button', { type: 'button', className: 'memsec-btn', disabled: blocked, onClick: props.save }, state.saving ? t('saving') : t('save')),
-          ),
           state.available
             ? FIELD_GROUPS.map((group) => jsx('div', { key: group.key },
                 jsx('div', { className: 'memsec-group' }, t(group.key)),
@@ -1059,7 +1101,12 @@ function withTooltip(primitives, label, element, disabled) {
                 }),
               ))
             : null,
-        )
+          jsx('div', { className: 'memsec-actions' },
+            state.dirty ? jsx('span', { className: 'memsec-dirty' }, t('unsaved')) : null,
+            state.failed ? jsx('span', { className: 'memsec-failed' }, t('saveFailed')) : null,
+            jsx('span', { className: 'memsec-spacer' }),
+            jsx(primitives.Button, { variant: 'ghost', size: 'sm', disabled: !state.dirty || state.saving, onClick: props.discard }, t('discard')),
+            jsx(primitives.Button, { variant: 'primary', size: 'sm', disabled: blocked, onClick: props.save }, state.saving ? t('saving') : t('save'))))
       }
 
       /** 控制器：scope → 暂存表单 → 设置页快照。保存落盘后同步本页悬浮按钮显隐。 */
