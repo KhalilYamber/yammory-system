@@ -30,9 +30,9 @@ DSH 的本地 skill 提供方按 rank 扫描若干根目录，其中**用户级 
 ```powershell
 # Windows PowerShell
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.dsh\skills" | Out-Null
-Copy-Item -Recurse -Force "D:\GitHub_place\记忆系统\skills\yammory-survey" "$env:USERPROFILE\.dsh\skills\"
-Copy-Item -Recurse -Force "D:\GitHub_place\记忆系统\skills\yammory-observe" "$env:USERPROFILE\.dsh\skills\"
-Copy-Item -Recurse -Force "D:\GitHub_place\记忆系统\skills\yammory-tidy" "$env:USERPROFILE\.dsh\skills\"
+Copy-Item -Recurse -Force "<repo>\skills\yammory-survey" "$env:USERPROFILE\.dsh\skills\"
+Copy-Item -Recurse -Force "<repo>\skills\yammory-observe" "$env:USERPROFILE\.dsh\skills\"
+Copy-Item -Recurse -Force "<repo>\skills\yammory-tidy" "$env:USERPROFILE\.dsh\skills\"
 ```
 
 ```sh
@@ -51,11 +51,11 @@ cp -R /path/to/yammory-system/skills/yammory-tidy ~/.dsh/skills/
 # Windows PowerShell（需管理员权限或开发者模式）
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.dsh\skills" | Out-Null
 New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\skills\yammory-survey" `
-  -Target "D:\GitHub_place\记忆系统\skills\yammory-survey"
+  -Target "<repo>\skills\yammory-survey"
 New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\skills\yammory-observe" `
-  -Target "D:\GitHub_place\记忆系统\skills\yammory-observe"
+  -Target "<repo>\skills\yammory-observe"
 New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\skills\yammory-tidy" `
-  -Target "D:\GitHub_place\记忆系统\skills\yammory-tidy"
+  -Target "<repo>\skills\yammory-tidy"
 ```
 
 ```sh

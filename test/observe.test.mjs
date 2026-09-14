@@ -49,10 +49,10 @@ function session(sessionId, createdAt, events, title) {
 // ── 闸一：授权收窄 ────────────────────────────────────────────────────────────
 
 test('闸一：有 cwd 时只读 cwd 精确相等的会话（cwd 过滤 AND 时间窗）', () => {
-  const scope = sessionScope({ cwd: 'D:\\GitHub_place\\记忆系统', sessionId: 's1', days: 14, now: NOW })
+  const scope = sessionScope({ cwd: 'D:\\work\\proj', sessionId: 's1', days: 14, now: NOW })
   assert.equal(scope.selfOnly, false)
   assert.deepEqual(scope.filters, [
-    { kind: 'cwd', values: ['D:\\GitHub_place\\记忆系统'] },
+    { kind: 'cwd', values: ['D:\\work\\proj'] },
     { kind: 'created-at', from: NOW - 14 * DAY },
   ])
 })
