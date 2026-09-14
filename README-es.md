@@ -88,7 +88,13 @@ Todos los parámetros son campos Schemastery `Config` (modificables desde cordis
 | `observe.perSession` | `12` | Mensajes muestreados por sesión, repartidos de forma uniforme para conservar tanto la apertura como las correcciones posteriores (tope duro 20) |
 | `observe.messageChars` | `400` | Tope de caracteres por mensaje antes de truncar con puntos suspensivos (tope duro 800) |
 | `observe.totalChars` | `12000` | Presupuesto de caracteres de todo el fragmento; el escaneo se detiene ahí e informa lo que no pudo cubrir (tope duro 30000) |
-| `retrieval.vector` | `false` | Interruptor de recuperación semántica: `true` activa la recuperación vectorial de `memory_recall` (incrustación hash falsa) cuando hay un proveedor de incrustación; en caso contrario se mantiene el recuperador keyword sin dependencias (tokenización CJK en bigramas, coincidencia por cualquier token, orden por relevancia) |
+| `recall.weighting.heat` | `0.3` | Tope del bonus de calor (multiplicativo; `0` lo apaga). El calor = recalls (con saturación) × decaimiento por semivida desde el último recall: una memoria debe seguir siendo recuperada para conservar su calor |
+| `recall.weighting.heatSaturation` | `10` | Recalls que saturan el bonus de calor |
+| `recall.weighting.heatHalfLifeDays` | `14` | Semivida del calor en días (una entrada sin recalls recientes se enfría) |
+| `recall.weighting.freshness` | `0.2` | Tope del bonus de frescura (multiplicativo; `0` lo apaga) |
+| `recall.weighting.freshnessHalfLifeDays` | `30` | Semivida de la frescura en días |
+| `recall.weighting.tagDiscount` | `0.5` | Peso de un token cuando coincide solo en `tags` (una coincidencia en el cuerpo vale `1`) |
+| `retrieval.vector` | `false` | Interruptor de recuperación semántica: `true` solo cambia a recuperación vectorial **cuando hay registrado un proveedor de incrustación realmente semántico** — uno de hash/falso no basta a propósito, pues no modela significado y dejaría la recuperación CJK en cero en silencio. Si no, se mantiene el recuperador keyword sin dependencias (bigramas CJK, coincidencia por cualquier token, ponderación calor/frescura, orden por relevancia) |
 | `panelEntriesLimit` | `200` | Tamaño de página de entradas del panel web |
 | `panelAuditLimit` | `20` | Filas de auditoría del panel web por defecto |
 | `auditRetentionDays` | `0` | Retención de auditoría (0 = conservar para siempre) |

@@ -87,7 +87,13 @@ All tunables are Schemastery `Config` fields (changeable from cordis.yml). Inval
 | `observe.perSession` | `12` | Messages sampled per session, spread evenly so the opening and the later corrections both survive (hard-capped at 20) |
 | `observe.messageChars` | `400` | Per-message character cap before truncation with an ellipsis (hard-capped at 800) |
 | `observe.totalChars` | `12000` | Character budget for the whole slice; the scan stops there and reports what it could not cover (hard-capped at 30000) |
-| `retrieval.vector` | `false` | Semantic recall switch: `true` enables `memory_recall` vector recall (fake hash embedding) when an embedding provider is available; otherwise the zero-dependency keyword retriever (CJK bigram tokenizing, any-token match, relevance ranking) stays in place |
+| `recall.weighting.heat` | `0.3` | Heat bonus ceiling (multiplicative; `0` turns it off). Heat = recalls (saturating) × half-life decay since the last recall, so a memory has to keep being recalled to keep its heat |
+| `recall.weighting.heatSaturation` | `10` | Recalls that saturate the heat bonus |
+| `recall.weighting.heatHalfLifeDays` | `14` | Heat half-life in days (an entry not recalled for a while goes cold) |
+| `recall.weighting.freshness` | `0.2` | Freshness bonus ceiling (multiplicative; `0` turns it off) |
+| `recall.weighting.freshnessHalfLifeDays` | `30` | Freshness half-life in days |
+| `recall.weighting.tagDiscount` | `0.5` | Weight a token scores when it matches only `tags` (a body match scores `1`) |
+| `retrieval.vector` | `false` | Semantic recall switch: `true` swaps in vector recall **only when a genuinely semantic embedding provider is registered** — a hash/fake provider is deliberately not enough, since it models no meaning and would silently zero CJK recall. Otherwise the zero-dependency keyword retriever stays in place (CJK bigram tokenizing, any-token match, heat/freshness weighting, relevance ranking) |
 | `panelEntriesLimit` | `200` | Web panel entries page size |
 | `panelAuditLimit` | `20` | Web panel audit rows by default |
 | `auditRetentionDays` | `0` | Audit retention (0 = keep forever) |

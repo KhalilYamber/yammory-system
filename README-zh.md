@@ -88,7 +88,13 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 | `observe.perSession` | `12` | 每个会话采样几条发言，均匀分布，好让开场与中后段的改口都留得下（硬上限 20） |
 | `observe.messageChars` | `400` | 单条发言超过多少字符即截断加省略号（硬上限 800） |
 | `observe.totalChars` | `12000` | 整段切片的字符预算；到顶即停并报出未覆盖范围（硬上限 30000） |
-| `retrieval.vector` | `false` | 语义召回开关：`true` 且探测到嵌入 provider 时 `memory_recall` 走向量召回（伪嵌入），否则保持零依赖 keyword 检索器（中文二字分词、任一词元命中、相关度排序） |
+| `recall.weighting.heat` | `0.3` | 热度加成上限（乘性；`0` = 关闭）。热度 = 召回次数（封顶）× 距上次召回的半衰期衰减——记忆要靠持续被召回才保得住热度 |
+| `recall.weighting.heatSaturation` | `10` | 吃满热度加成所需的召回次数 |
+| `recall.weighting.heatHalfLifeDays` | `14` | 热度半衰期（天）：久未被召回即失温 |
+| `recall.weighting.freshness` | `0.2` | 新旧加成上限（乘性；`0` = 关闭） |
+| `recall.weighting.freshnessHalfLifeDays` | `30` | 新旧半衰期（天） |
+| `recall.weighting.tagDiscount` | `0.5` | 词元只在 `tags` 命中时的权重（正文命中记 `1`） |
+| `retrieval.vector` | `false` | 语义召回开关：`true` **且注册了真语义嵌入 provider** 时才换装向量召回——伪嵌入（哈希袋）刻意不算数，它不做语义建模、会让中文召回静默归零；否则保持零依赖 keyword 检索器（中文二字分词、任一词元命中、热度/新旧加权、相关度排序） |
 | `panelEntriesLimit` | `200` | Web 面板条目分页大小 |
 | `panelAuditLimit` | `20` | Web 面板默认审计行数 |
 | `auditRetentionDays` | `0` | 审计保留天数（0 = 永久保留） |

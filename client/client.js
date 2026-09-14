@@ -549,6 +549,7 @@ function withTooltip(primitives, label, element, disabled) {
           sectionBudgets: 'Warning lines (per track/layer)',
           sectionLimits: 'Query & command limits',
           sectionRecall: 'Recall defaults',
+          sectionWeighting: 'Recall weighting (spec 3.3 · layer B)',
           sectionPanelPage: 'Panel page limits',
           sectionProposals: 'Auto-capture proposals',
           sectionStorage: 'Storage & audit retention',
@@ -569,6 +570,12 @@ function withTooltip(primitives, label, element, disabled) {
           recallSnippetCap: 'snippets per session',
           recallSnippetChars: 'snippet characters',
           recallWindowDays: 'history window (days)',
+          weightHeat: 'heat bonus (0 = off)',
+          weightHeatSaturation: 'recalls that saturate heat',
+          weightHeatHalfLifeDays: 'heat half-life (days)',
+          weightFreshness: 'freshness bonus',
+          weightFreshnessHalfLifeDays: 'freshness half-life (days)',
+          weightTagDiscount: 'tag-only hit discount',
           panelEntriesLimit: 'entries page limit',
           panelAuditLimit: 'audit page limit',
           proposalsEnabled: 'Generate proposals after compaction',
@@ -590,6 +597,7 @@ function withTooltip(primitives, label, element, disabled) {
           saveFailed: 'Save failed — drafts kept for correction.',
           readOnly: 'Read-only (settings service unavailable).',
           invalidNumber: 'Must be a whole number.',
+          invalidDecimal: 'Must be a number.',
           invalidPolicy: 'Must be ask, auto or off.',
         },
         zh: {
@@ -601,6 +609,7 @@ function withTooltip(primitives, label, element, disabled) {
           sectionBudgets: '软预警线（每轨道/层）',
           sectionLimits: '查询与命令上限',
           sectionRecall: '召回默认值',
+          sectionWeighting: '召回加权（规格 3.3 · 层 B）',
           sectionPanelPage: '面板页上限',
           sectionProposals: '自动捕捉提案',
           sectionStorage: '存储与审计保留',
@@ -621,6 +630,12 @@ function withTooltip(primitives, label, element, disabled) {
           recallSnippetCap: '每会话片段数',
           recallSnippetChars: '片段字符数',
           recallWindowDays: '历史窗口（天）',
+          weightHeat: '热度加成（0 = 关闭）',
+          weightHeatSaturation: '吃满热度的召回次数',
+          weightHeatHalfLifeDays: '热度半衰期（天）',
+          weightFreshness: '新旧加成',
+          weightFreshnessHalfLifeDays: '新旧半衰期（天）',
+          weightTagDiscount: '仅标签命中的折扣',
           panelEntriesLimit: '条目单页上限',
           panelAuditLimit: '审计单页上限',
           proposalsEnabled: '压缩结束后生成提案',
@@ -642,6 +657,7 @@ function withTooltip(primitives, label, element, disabled) {
           saveFailed: '保存失败——草稿已保留，可修正后重试。',
           readOnly: '只读（设置服务不可用）。',
           invalidNumber: '必须是整数。',
+          invalidDecimal: '必须是数字。',
           invalidPolicy: '必须是 ask、auto 或 off。',
         },
       }
@@ -707,6 +723,12 @@ function withTooltip(primitives, label, element, disabled) {
         { path: 'recall.snippetCap', kind: 'number', key: 'recallSnippetCap' },
         { path: 'recall.snippetChars', kind: 'number', key: 'recallSnippetChars' },
         { path: 'recall.windowDays', kind: 'number', key: 'recallWindowDays' },
+        { path: 'recall.weighting.heat', kind: 'decimal', key: 'weightHeat' },
+        { path: 'recall.weighting.heatSaturation', kind: 'decimal', key: 'weightHeatSaturation' },
+        { path: 'recall.weighting.heatHalfLifeDays', kind: 'decimal', key: 'weightHeatHalfLifeDays' },
+        { path: 'recall.weighting.freshness', kind: 'decimal', key: 'weightFreshness' },
+        { path: 'recall.weighting.freshnessHalfLifeDays', kind: 'decimal', key: 'weightFreshnessHalfLifeDays' },
+        { path: 'recall.weighting.tagDiscount', kind: 'decimal', key: 'weightTagDiscount' },
         { path: 'panelEntriesLimit', kind: 'number', key: 'panelEntriesLimit' },
         { path: 'panelAuditLimit', kind: 'number', key: 'panelAuditLimit' },
         { path: 'proposals.enabled', kind: 'bool', key: 'proposalsEnabled' },
@@ -729,6 +751,11 @@ function withTooltip(primitives, label, element, disabled) {
         }
         if (spec.kind === 'choice') {
           return spec.choices.includes(text) ? { ok: true, value: text } : { ok: false }
+        }
+        if (spec.kind === 'decimal') {
+          const trimmed = text.trim()
+          const parsed = Number(trimmed)
+          return trimmed !== '' && Number.isFinite(parsed) ? { ok: true, value: parsed } : { ok: false }
         }
         if (spec.kind === 'number') {
           const trimmed = text.trim()
@@ -888,6 +915,7 @@ function withTooltip(primitives, label, element, disabled) {
         { key: 'sectionBudgets', paths: ['budgets.user.userGlobal', 'budgets.user.workspace', 'budgets.agent.userGlobal', 'budgets.agent.workspace'] },
         { key: 'sectionLimits', paths: ['maxEntriesPerQuery', 'commandListLimit', 'commandAuditLimit'] },
         { key: 'sectionRecall', paths: ['recall.historyLimitDefault', 'recall.snippetCap', 'recall.snippetChars', 'recall.windowDays', 'retrieval.vector'] },
+        { key: 'sectionWeighting', paths: ['recall.weighting.heat', 'recall.weighting.heatSaturation', 'recall.weighting.heatHalfLifeDays', 'recall.weighting.freshness', 'recall.weighting.freshnessHalfLifeDays', 'recall.weighting.tagDiscount'] },
         { key: 'sectionPanelPage', paths: ['panelEntriesLimit', 'panelAuditLimit'] },
         { key: 'sectionProposals', paths: ['proposals.enabled', 'proposals.maxChars', 'proposals.maxPending'] },
         { key: 'sectionStorage', paths: ['dbPath', 'auditRetentionDays'] },
@@ -928,7 +956,7 @@ function withTooltip(primitives, label, element, disabled) {
         const { t, spec, state, disabled, onEdit, onReset } = props
         const label = t(spec.key ?? spec.path)
         const reloadBadge = RELOAD_PATHS.has(spec.path) ? jsx('span', { className: 'memcard-badge', title: t('reloadHint') }, '⟳') : null
-        const invalid = spec.kind === 'choice' ? t('invalidPolicy') : t('invalidNumber')
+        const invalid = spec.kind === 'choice' ? t('invalidPolicy') : spec.kind === 'decimal' ? t('invalidDecimal') : t('invalidNumber')
         const control = spec.kind === 'bool'
           ? jsx('input', {
               type: 'checkbox', disabled,
@@ -948,7 +976,7 @@ function withTooltip(primitives, label, element, disabled) {
                 })
               : jsx('input', {
                   type: spec.kind === 'number' ? 'text' : 'text',
-                  inputMode: spec.kind === 'number' ? 'numeric' : undefined,
+                  inputMode: spec.kind === 'number' ? 'numeric' : spec.kind === 'decimal' ? 'decimal' : undefined,
                   className: 'memcard-input', disabled,
                   value: state.text, 'aria-invalid': state.invalid,
                   onChange: (event) => onEdit(event.target.value),

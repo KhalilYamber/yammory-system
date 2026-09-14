@@ -102,6 +102,53 @@ test('KeywordRetriever：空查询零命中 / 无关联零命中 / 不截断 / �
   assert.deepEqual(many.map((item) => item.id), before, '排序不改写入参数组')
 })
 
+test('KeywordRetriever：热度进主分 = 量 × 衰减，久未被召回即失温', () => {
+  const retriever = new KeywordRetriever()
+  const now = Date.UTC(2026, 0, 31)
+  const base = { text: '用户偏好：回复用中文', tags: [], updatedAt: now }
+  const entries = [
+    { id: 'stale-hot', recallCount: 50, lastRecalled: now - 200 * 86400000, ...base },
+    { id: 'live-warm', recallCount: 6, lastRecalled: now - 1 * 86400000, ...base },
+  ]
+  assert.deepEqual(
+    retriever.retrieve('用户偏好', entries, { now }).map((e) => e.id),
+    ['live-warm', 'stale-hot'],
+    '累计召回 50 次但半年未召回 → 失温；近一天内的 6 次 → 保持热度',
+  )
+  const noStamp = [{ id: 'no-stamp', recallCount: 50, ...base }, { id: 'plain', ...base }]
+  assert.deepEqual(
+    retriever.retrieve('用户偏好', noStamp, { now }).map((e) => e.id),
+    ['no-stamp', 'plain'],
+    '缺上次召回时间戳不算热（退回 rankOrder 的召回次数序）',
+  )
+})
+
+test('KeywordRetriever：新旧进主分——同样相关的新条目浮上来', () => {
+  const retriever = new KeywordRetriever()
+  const now = Date.UTC(2026, 0, 31)
+  const entries = [
+    entry('old', '用户偏好：回复用中文', 0, now - 300 * 86400000),
+    entry('new', '用户偏好：回复用中文', 0, now),
+  ]
+  assert.deepEqual(retriever.retrieve('用户偏好', entries, { now }).map((e) => e.id), ['new', 'old'])
+})
+
+test('KeywordRetriever：标签面也参与匹配（折权），正文命中优先', () => {
+  const retriever = new KeywordRetriever()
+  const now = Date.UTC(2026, 0, 31)
+  const entries = [
+    { id: 'tag', text: '一些别的记录', tags: ['用户偏好'], recallCount: 0, updatedAt: now },
+    { id: 'body', text: '用户偏好：回复用中文', tags: [], recallCount: 0, updatedAt: now },
+  ]
+  assert.deepEqual(retriever.retrieve('用户偏好', entries, { now }).map((e) => e.id), ['body', 'tag'], '只在标签里命中的条目也能召回，但排在正文命中之后')
+})
+
+test('KeywordRetriever：无 tags 的条目与旧实现逐字一致（向后兼容）', () => {
+  const retriever = new KeywordRetriever()
+  const entries = [entry('x', '用户偏好abc', 0, 0), entry('y', 'abc用户偏好', 0, 0)]
+  assert.deepEqual(retriever.retrieve('用户偏好回复', entries).map((e) => e.id), ['x', 'y'])
+})
+
 test('SubstringRetriever：大小写不敏感子串过滤 + 召回频次排序（不截断）', () => {
   const retriever = new SubstringRetriever()
   assert.equal(retriever.id, 'substring')
@@ -137,9 +184,15 @@ test('VectorRetriever：空候选直接返回空；缺 embedding 响亮失败', 
   assert.throws(() => new VectorRetriever({ embedding: null }), (error) => error instanceof InvalidInputError)
 })
 
-test('detectVectorBackend：无 embedding 不可用（降级），有 embedding 可用', () => {
+test('detectVectorBackend：无 provider 不可用；伪嵌入不计入可用；语义 provider 可用', () => {
   assert.deepEqual(detectVectorBackend(), { available: false, sqliteVec: false, reason: 'no embedding provider available' })
-  assert.deepEqual(detectVectorBackend({ embedding: new FakeEmbeddingProvider() }), { available: true, sqliteVec: false })
+  assert.deepEqual(
+    detectVectorBackend({ embedding: new FakeEmbeddingProvider() }),
+    { available: false, sqliteVec: false, reason: 'embedding provider is not semantic' },
+    '伪嵌入 semantic=false，不得计入可用性（否则中文召回会被静默关掉）',
+  )
+  const semantic = { id: 'real', name: 'Real', description: 'semantic', dimensions: 8, semantic: true, embed: (texts) => texts.map(() => Array.from({ length: 8 }, () => 0)) }
+  assert.deepEqual(detectVectorBackend({ embedding: semantic }), { available: true, sqliteVec: false })
 })
 
 test('RetrievalProviderRegistry：register 可逆 / list 排序 / get / resolve / 冲突', () => {
@@ -189,7 +242,7 @@ function teardown(mounted) {
   rmSync(mounted.dir, { recursive: true, force: true })
 }
 
-test('retrieval 接线：vector 开关控制 memoryRetrieval/memoryEmbedding 注册面', (t) => {
+test('retrieval 接线：只有伪嵌入时 vector=true 也回落 keyword（不静默关掉中文召回）', (t) => {
   const mounted = mount({ retrieval: { vector: true } })
   t.after(() => teardown(mounted))
   const { mock } = mounted
@@ -198,8 +251,9 @@ test('retrieval 接线：vector 开关控制 memoryRetrieval/memoryEmbedding 注
   assert.ok(embeddings, 'memoryEmbedding 服务已提供')
   assert.ok(retrievers, 'memoryRetrieval 服务已提供')
   assert.ok(embeddings.get('fake-hash'), '默认伪嵌入 provider 已注册')
+  assert.equal(embeddings.firstSemantic(), undefined, '伪嵌入声明 semantic=false，不算语义 provider')
   assert.ok(retrievers.get('substring'), '内置 substring 检索器已注册')
-  assert.ok(retrievers.get('vector'), 'vector=true 时 vector 检索器已注册')
+  assert.equal(retrievers.get('vector'), undefined, '只有伪嵌入时不装 vector 检索器（回落 keyword）')
 })
 
 test('retrieval 接线：vector=false（默认）不注册 vector 检索器', (t) => {
@@ -209,19 +263,23 @@ test('retrieval 接线：vector=false（默认）不注册 vector 检索器', (t
   assert.equal(retrievers.get('vector'), undefined)
 })
 
-test('memory_recall：vector=true 语义召回（无精确子串仍命中 token 重叠条目）', async (t) => {
+test('memory_recall：vector=true 但只有伪嵌入 → 走 keyword，全无关联仍零命中', async (t) => {
   const mounted = mount({ retrieval: { vector: true } })
   t.after(() => teardown(mounted))
   const service = mounted.mock.services.get('memory')
   const session = makeSession()
   const write = { agent: makeAgent(session) }
-  await service.add({ track: 'user', scope: 'user-global', text: 'favorite drink is lapsang souchong' }, write)
-  await service.add({ track: 'user', scope: 'user-global', text: 'quantum gravity is hard' }, write)
+  await service.add({ track: 'user', scope: 'user-global', text: '用户偏好：回复用中文' }, write)
+  await service.add({ track: 'user', scope: 'user-global', text: '项目约定：测试先于实现' }, write)
   const tool = mounted.mock.tools.find((t) => t.name === 'memory_recall')
-  const result = await tool.execute({ query: 'tea lapsang' }, makeExec({ agent: makeAgent(session) }))
-  assert.equal(result.ok, true)
-  assert.ok(result.memory.total >= 1, '语义召回命中 token 重叠条目')
-  assert.equal(result.memory.entries[0].text, 'favorite drink is lapsang souchong')
+  const hit = await tool.execute({ query: '偏好' }, makeExec({ agent: makeAgent(session) }))
+  assert.equal(hit.ok, true)
+  assert.ok(hit.memory.total >= 1, '中文短词仍召回')
+  assert.equal(hit.memory.entries[0].text, '用户偏好：回复用中文')
+  // 伪嵌入若接管，VectorRetriever 会「全量返回、只排序」——全无关联也会吐出一堆条目。
+  // 这条断言正是那种静默降级的探测器：走 keyword 时它必须为零命中。
+  const miss = await tool.execute({ query: '量子引力' }, makeExec({ agent: makeAgent(session) }))
+  assert.equal(miss.memory.total, 0, '全无关联则零命中（被伪嵌入接管时这里会返回全部条目）')
 })
 
 test('memory_recall：默认 keyword 主路径（命中任一词元即可召回，不要求整串）', async (t) => {

@@ -88,7 +88,13 @@ Todos os parâmetros são campos Schemastery `Config` (alteráveis pelo cordis.y
 | `observe.perSession` | `12` | Mensagens amostradas por sessão, distribuídas uniformemente para preservar tanto a abertura quanto as correções posteriores (teto rígido 20) |
 | `observe.messageChars` | `400` | Teto de caracteres por mensagem antes de truncar com reticências (teto rígido 800) |
 | `observe.totalChars` | `12000` | Orçamento de caracteres de todo o trecho; a varredura para aí e informa o que não conseguiu cobrir (teto rígido 30000) |
-| `retrieval.vector` | `false` | Interruptor de recuperação semântica: `true` ativa a recuperação vetorial do `memory_recall` (embedding de hash falso) quando há um provedor de embedding; caso contrário permanece o recuperador keyword sem dependências (tokenização CJK em bigramas, correspondência por qualquer token, ordenação por relevância) |
+| `recall.weighting.heat` | `0.3` | Teto do bônus de calor (multiplicativo; `0` o desliga). Calor = recalls (com saturação) × decaimento por meia-vida desde o último recall: uma memória precisa continuar sendo recuperada para manter o calor |
+| `recall.weighting.heatSaturation` | `10` | Recalls que saturam o bônus de calor |
+| `recall.weighting.heatHalfLifeDays` | `14` | Meia-vida do calor em dias (uma entrada sem recalls recentes esfria) |
+| `recall.weighting.freshness` | `0.2` | Teto do bônus de frescor (multiplicativo; `0` o desliga) |
+| `recall.weighting.freshnessHalfLifeDays` | `30` | Meia-vida do frescor em dias |
+| `recall.weighting.tagDiscount` | `0.5` | Peso de um token quando coincide apenas em `tags` (uma coincidência no corpo vale `1`) |
+| `retrieval.vector` | `false` | Interruptor de recuperação semântica: `true` só troca para recuperação vetorial **quando há um provedor de embedding realmente semântico registrado** — um de hash/falso de propósito não basta, pois não modela significado e zeraria a recuperação CJK em silêncio. Caso contrário, permanece o recuperador keyword sem dependências (bigramas CJK, correspondência por qualquer token, ponderação calor/frescor, ordenação por relevância) |
 | `panelEntriesLimit` | `200` | Tamanho de página de entradas do painel web |
 | `panelAuditLimit` | `20` | Linhas de auditoria do painel web por padrão |
 | `auditRetentionDays` | `0` | Retenção de auditoria (0 = manter para sempre) |

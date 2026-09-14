@@ -68,7 +68,7 @@ import {
   sessionScope,
 } from './lib/observe.mjs'
 import { EmbeddingProviderRegistry, FakeEmbeddingProvider } from './lib/embedding.mjs'
-import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, VectorRetriever, detectVectorBackend } from './lib/retrieval.mjs'
+import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, VectorRetriever, detectVectorBackend, RETRIEVAL_WEIGHTS } from './lib/retrieval.mjs'
 
 /**
  * @typedef {import('./types.js').MemoryEntry} MemoryEntry
@@ -132,7 +132,7 @@ import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, Vector
  * @property {number} [maxEntriesPerQuery]
  * @property {number} [commandListLimit]
  * @property {number} [commandAuditLimit]
- * @property {{historyLimitDefault?: number, snippetCap?: number, snippetChars?: number, windowDays?: number}} [recall]
+ * @property {{historyLimitDefault?: number, snippetCap?: number, snippetChars?: number, windowDays?: number, weighting?: {heat?: number, heatSaturation?: number, heatHalfLifeDays?: number, freshness?: number, freshnessHalfLifeDays?: number, tagDiscount?: number}}} [recall]
  * @property {{days?: number, sessions?: number, perSession?: number, messageChars?: number, totalChars?: number}} [observe]
  * @property {{vector?: boolean}} [retrieval]
  * @property {number} [panelEntriesLimit]
@@ -393,8 +393,8 @@ function statsLines(stats, language) {
  * @property {number} [maxEntriesPerQuery] query 默认返回条目上限（显式 limit 可超出，Provider 硬钳 1000；热生效）。
  * @property {number} [commandListLimit] /memory list|query 单次渲染条目上限（默认 50；热生效）。
  * @property {number} [commandAuditLimit] /memory audit 单次渲染审计行上限（默认 10；热生效）。
- * @property {{historyLimitDefault?: number, snippetCap?: number, snippetChars?: number, windowDays?: number}} [recall]
- *   memory_recall 历史段默认值（默认 8/5/300/30；热生效）。
+ * @property {{historyLimitDefault?: number, snippetCap?: number, snippetChars?: number, windowDays?: number, weighting?: {heat?: number, heatSaturation?: number, heatHalfLifeDays?: number, freshness?: number, freshnessHalfLifeDays?: number, tagDiscount?: number}}} [recall]
+ *   memory_recall 历史段默认值（默认 8/5/300/30；热生效）。`weighting` 为检索加权表（规格 3.3·层 B，默认见 `RETRIEVAL_WEIGHTS`；热生效）。
  * @property {{days?: number, sessions?: number, perSession?: number, messageChars?: number, totalChars?: number}} [observe]
  *   memory_observe scan 的默认窗口与预算（模型入参在 Provider 层夹到 OBSERVE_LIMITS；热生效）。
  * @property {{vector?: boolean}} [retrieval] 语义召回开关（默认 false：keyword 主路径；变更时拆旧装新检索器，即时生效）。
@@ -429,6 +429,15 @@ const SHARED_CONFIG_FIELDS = {
     snippetCap: Schema.number().default(5),
     snippetChars: Schema.number().default(300),
     windowDays: Schema.number().default(30),
+    // 检索加权（规格 3.3·层 B）：默认即 RETRIEVAL_WEIGHTS，设置页可改、热生效。
+    weighting: Schema.object({
+      heat: Schema.number().default(RETRIEVAL_WEIGHTS.heat),
+      heatSaturation: Schema.number().default(RETRIEVAL_WEIGHTS.heatSaturation),
+      heatHalfLifeDays: Schema.number().default(RETRIEVAL_WEIGHTS.heatHalfLifeDays),
+      freshness: Schema.number().default(RETRIEVAL_WEIGHTS.freshness),
+      freshnessHalfLifeDays: Schema.number().default(RETRIEVAL_WEIGHTS.freshnessHalfLifeDays),
+      tagDiscount: Schema.number().default(RETRIEVAL_WEIGHTS.tagDiscount),
+    }),
   }),
   observe: Schema.object({
     days: Schema.number().default(DEFAULT_OBSERVE.days),
@@ -1875,7 +1884,7 @@ export function renderMemoryObserveResult(/** @type {object} */ _args, /** @type
  * @property {number} maxEntriesPerQuery
  * @property {number} commandListLimit
  * @property {number} commandAuditLimit
- * @property {{historyLimitDefault: number, snippetCap: number, snippetChars: number, windowDays: number}} recall
+ * @property {{historyLimitDefault: number, snippetCap: number, snippetChars: number, windowDays: number, weighting: {heat: number, heatSaturation: number, heatHalfLifeDays: number, freshness: number, freshnessHalfLifeDays: number, tagDiscount: number}}} recall
  * @property {{days: number, sessions: number, perSession: number, messageChars: number, totalChars: number}} observe
  * @property {{vector: boolean}} retrieval
  * @property {number} panelEntriesLimit
@@ -1916,6 +1925,14 @@ function resolveComposed(config) {
       snippetCap: config.recall?.snippetCap ?? 5,
       snippetChars: config.recall?.snippetChars ?? 300,
       windowDays: config.recall?.windowDays ?? 30,
+      weighting: {
+        heat: config.recall?.weighting?.heat ?? RETRIEVAL_WEIGHTS.heat,
+        heatSaturation: config.recall?.weighting?.heatSaturation ?? RETRIEVAL_WEIGHTS.heatSaturation,
+        heatHalfLifeDays: config.recall?.weighting?.heatHalfLifeDays ?? RETRIEVAL_WEIGHTS.heatHalfLifeDays,
+        freshness: config.recall?.weighting?.freshness ?? RETRIEVAL_WEIGHTS.freshness,
+        freshnessHalfLifeDays: config.recall?.weighting?.freshnessHalfLifeDays ?? RETRIEVAL_WEIGHTS.freshnessHalfLifeDays,
+        tagDiscount: config.recall?.weighting?.tagDiscount ?? RETRIEVAL_WEIGHTS.tagDiscount,
+      },
     },
     observe: {
       days: config.observe?.days ?? DEFAULT_OBSERVE.days,
@@ -1965,10 +1982,19 @@ function validateMemoryConfig(values) {
   if (!Number.isInteger(values.commandAuditLimit) || values.commandAuditLimit <= 0) {
     throw new InvalidInputError('yammory_system config: commandAuditLimit must be a positive integer')
   }
-  for (const [key, value] of Object.entries(values.recall)) {
+  const { weighting, ...recallCounts } = values.recall
+  for (const [key, value] of Object.entries(recallCounts)) {
     if (!Number.isInteger(value) || value <= 0) {
       throw new InvalidInputError(`yammory_system config: recall.${key} must be a positive integer`)
     }
+  }
+  for (const [key, value] of Object.entries(weighting)) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+      throw new InvalidInputError(`yammory_system config: recall.weighting.${key} must be a non-negative finite number`)
+    }
+  }
+  if (weighting.heatHalfLifeDays <= 0 || weighting.freshnessHalfLifeDays <= 0) {
+    throw new InvalidInputError('yammory_system config: recall.weighting half-lives must be greater than 0')
   }
   for (const [key, value] of Object.entries(values.observe)) {
     if (!Number.isInteger(value) || value <= 0) {
@@ -2016,7 +2042,7 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
   validateMemoryConfig(resolved)
   // 运行期可变值容器：settings onChange 维护；服务缺失时保持组合值。
   // F2 层 A：检索器默认非空（keyword）——memory_recall 的记忆段恒走检索器路径。
-  const keywordRetriever = new KeywordRetriever()
+  let keywordRetriever = new KeywordRetriever({ weights: resolved.recall.weighting })
   /** @type {MemoryRuntimeValues} */
   const live = { ...resolved, retriever: keywordRetriever }
   /** @type {MemoryService | undefined} */
@@ -2088,6 +2114,13 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
           }
         }
         applied.push('retrieval.vector')
+      }
+      if (weightingChanged(next.recall.weighting, live.recall.weighting)) {
+        // recall.weighting：加权表是检索器的构造参数，故重建 keyword 检索器（vector 在用则不动它）。
+        const wasKeyword = live.retriever === keywordRetriever
+        keywordRetriever = new KeywordRetriever({ weights: next.recall.weighting })
+        if (wasKeyword) live.retriever = keywordRetriever
+        applied.push('recall.weighting')
       }
       if (next.snapshotOrder !== live.snapshotOrder) {
         // snapshotOrder：systemPrompt section 注册期固定，无法热重挂——响亮留痕。
@@ -2330,14 +2363,32 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
 }
 
 /**
- * 构造 vector 检索器：探测到 embedding provider 才构造并返回；否则返回 null
- * （vector 是可选后端，缺 embedding 不构成配置错误）。注册由调用方经
+ * 加权表是否变了（逐键比；缺任一侧即视为变了）。
+ * @param {{heat: number, heatSaturation: number, heatHalfLifeDays: number, freshness: number, freshnessHalfLifeDays: number, tagDiscount: number} | undefined} next - 新表。
+ * @param {{heat: number, heatSaturation: number, heatHalfLifeDays: number, freshness: number, freshnessHalfLifeDays: number, tagDiscount: number} | undefined} current - 当前表。
+ * @returns {boolean} 变了为 true。
+ */
+function weightingChanged(next, current) {
+  if (next === undefined || current === undefined) return true
+  return next.heat !== current.heat
+    || next.heatSaturation !== current.heatSaturation
+    || next.heatHalfLifeDays !== current.heatHalfLifeDays
+    || next.freshness !== current.freshness
+    || next.freshnessHalfLifeDays !== current.freshnessHalfLifeDays
+    || next.tagDiscount !== current.tagDiscount
+}
+
+/**
+ * 构造 vector 检索器：探测到**语义**嵌入 provider 才构造并返回；否则返回 null
+ * （vector 是可选后端，缺语义 provider 不构成配置错误——回落 keyword）。注册由调用方经
  * ctx.effect 管理——settings 回调需要在运行期拆旧装新。
  * @param {import('./lib/embedding.mjs').EmbeddingProviderRegistry} embeddings - 嵌入注册表。
  * @returns {import('./lib/retrieval.mjs').RetrievalProvider | null} vector 检索器或 null（降级）。
  */
 function buildVectorRetriever(embeddings) {
-  const embedding = embeddings.get('fake-hash')
+  // 只认声明为语义的 provider（规格 3.3·层 B 收口）：伪嵌入对中文几乎必零命中，
+  // 放它进来等于用一个名为「语义召回」的开关**静默关掉召回**——那正是本项目的红线。
+  const embedding = embeddings.firstSemantic()
   const probe = detectVectorBackend({ embedding })
   if (!probe.available) return null
   return new VectorRetriever({ embedding })
@@ -3156,7 +3207,7 @@ function recallViaRetriever(service, retriever, query, limit, opts) {
     workspaceKey,
     opts.agentKey,
   )
-  const ranked = /** @type {MemoryEntry[]} */ (retriever.retrieve(query, entries))
+  const ranked = /** @type {MemoryEntry[]} */ (retriever.retrieve(query, entries, { now: Date.now() }))
   const shown = ranked.slice(0, limit)
   service.store.bumpRecall(shown.map((entry) => entry.id))
   if (opts.sessionId !== undefined) {

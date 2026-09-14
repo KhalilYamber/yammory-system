@@ -76,6 +76,26 @@ test('FakeEmbeddingProvider：embed 非数组响亮失败；维度可覆盖', ()
   assert.throws(() => provider.embed('not-an-array'), (error) => error instanceof InvalidInputError)
 })
 
+test('EmbeddingProviderRegistry：firstSemantic 只挑声明为语义的 provider', () => {
+  const registry = new EmbeddingProviderRegistry()
+  assert.equal(registry.firstSemantic(), undefined, '空表没有语义 provider')
+  registry.register(new FakeEmbeddingProvider())
+  assert.equal(registry.firstSemantic(), undefined, '伪嵌入 semantic=false，不算语义 provider')
+  const real = { id: 'real-embed', name: 'Real', description: 'semantic provider', dimensions: 8, semantic: true, embed: (texts) => texts.map(() => Array.from({ length: 8 }, () => 0)) }
+  const dispose = registry.register(real)
+  assert.equal(registry.firstSemantic(), real, '声明为语义的 provider 被选中')
+  dispose()
+  assert.equal(registry.firstSemantic(), undefined)
+})
+
+test('EmbeddingProviderRegistry：semantic 非布尔响亮失败', () => {
+  const registry = new EmbeddingProviderRegistry()
+  assert.throws(
+    () => registry.register({ id: 'bad', name: 'x', description: 'x', dimensions: 8, semantic: 'yes', embed: () => [] }),
+    (error) => error instanceof InvalidInputError,
+  )
+})
+
 test('EmbeddingProviderRegistry：register 可逆 / list 排序 / get', () => {
   const registry = new EmbeddingProviderRegistry()
   const provider = new FakeEmbeddingProvider({ id: 'test-hash' })

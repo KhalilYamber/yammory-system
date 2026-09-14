@@ -206,28 +206,41 @@ gate → 预算复审 → 落盘 → 审计的完整流水线、唯一子串定�
 
 - **检索 seam**（`ctx.memoryRetrieval`，`lib/retrieval.mjs`）：`RetrievalProvider` 契约 +
   `RetrievalProviderRegistry`（register 可逆 / list / get / resolve）。默认主路径是
-  `KeywordRetriever`（F2 层 A，零依赖：CJK 相邻二字 bigram ＋ 拉丁整词切出词元 → 命中任一
-  词元即召回 → 相关度 = 0.5×覆盖率 ＋ 0.3×词元长度权重 ＋ 0.2 整串精确加成，`min(1, …)` 封顶
-  → 相关度 DESC，平手退 `rankOrder`）；`SubstringRetriever` 是整串字面命中的对照件
+  `KeywordRetriever`（F2 层 A ＋ 层 B 零依赖半边，零依赖：CJK 相邻二字 bigram ＋ 拉丁整词切出词元
+  → 命中正文、或只在 `tags` 命中（折权 `tagDiscount`）即召回 → 相关度 = 0.5×覆盖率 ＋
+  0.3×词元长度权重 ＋ 0.2 整串精确加成，`min(1, …)` 封顶 → 再加权 **热度**（召回次数封顶 ×
+  距上次召回的半衰期衰减）与 **新旧**（`updatedAt` 半衰期衰减）→ 排序 = 加权分 DESC →
+  相关度 DESC → `rankOrder`。加权表 `recall.weighting` 是 Config 字段（设置页可改、热生效，
+  改后重建检索器）；缺 `lastRecalled`／`updatedAt` 一律取基线（不加成）——把「没时间戳」当成
+  「最新」会倒转旧口径）；`SubstringRetriever` 是整串字面命中的对照件
   （语义与 `store.queryEntries` 的 instr 一致），仍注册供对照、MCP 与第三方显式选用；
   `VectorRetriever` 是可选后端，消费嵌入 provider 做内存内暴力余弦排序（小语料，与决策 10 一致）。
 - **嵌入 seam**（`ctx.memoryEmbedding`，`lib/embedding.mjs`）：`EmbeddingProvider` 契约 +
   `EmbeddingProviderRegistry`。默认 `FakeEmbeddingProvider` 是确定性的 token 哈希分桶计数 +
-  L2 归一化（固定 256 维单位向量）——它不做语义建模，只验证 seam 接线与余弦召回路径可复现；
-  真实嵌入由可选 provider 注册（本地模型 / peer），本仓库不引入 sqlite-vec / ONNX / 本地模型。
+  L2 归一化（固定 256 维单位向量）——它不做语义建模，只验证 seam 接线与余弦召回路径可复现，
+  且**显式声明 `semantic: false`**；真实嵌入由可选 provider 注册（本地模型 / peer，缺省视为语义），
+  本仓库不引入 sqlite-vec / ONNX / 本地模型。
 - **Consumer 接线**：`memory_recall` 的记忆段恒走检索器路径（`live.retriever` 初值即
   `KeywordRetriever`，非空；可见集 = `visibleEntries` + 检索器排序 + `store.bumpRecall` +
-  `recalled` 审计）。`Config.retrieval.vector`（默认 `false`）开启且探测到嵌入 provider 时换装
-  `VectorRetriever`；vector 关闭或探测失败回落 `KeywordRetriever`（不再回落 null / `service.query`）。
+  `recalled` 审计）。`Config.retrieval.vector`（默认 `false`）开启且探测到**声明为语义**的嵌入
+  provider（`semantic !== false`，取 id 升序首名）时换装 `VectorRetriever`；vector 关闭、无 provider、
+  或只有伪嵌入时一律回落 `KeywordRetriever`（不再回落 null / `service.query`）。伪嵌入**刻意不算可用**：
+  它按「连续字母/数字段」切词，中文整句即一段，拿它做语义召回等于用一个名为「语义召回」的开关
+  **静默关掉中文召回**——这正是本仓最不想要的那种失效。
   keyword 检索器**不进注册表**（`live.retriever` 持单例），`retrievers.get('keyword')` 为空属预期。
-- **探测 → 使用 → 优雅降级**：`detectVectorBackend` 只要求 embedding provider 可用；sqlite-vec 是
+- **探测 → 使用 → 优雅降级**：`detectVectorBackend` 要求 provider 存在**且声明为语义**（伪嵌入返回
+  `available: false` ＋ `reason: 'embedding provider is not semantic'`）；sqlite-vec 是
   可选 loadable 扩展、恒不在本仓库打包（`sqliteVec: false`），P0 向量召回走内存内暴力余弦。
-  缺 embedding / vector 关闭时优雅降级回 keyword，绝不响亮失败（可选后端缺失不是配置错误）。
+  缺语义 provider / vector 关闭时优雅降级回 keyword，绝不响亮失败（可选后端缺失不是配置错误）。
 - **层 A 的已知边界**（层 B 再议，见 `docs/F2检索升级方案.md`）：词元按「连续字母/数字段」切，
   CJK 与拉丁同段书写（无空格，如「用户偏好abc」）时整段走 bigram，拉丁部分不再以整词形态成为
   词元；相邻二字滑窗会产生跨词 bigram（「用户偏好英文」切出「好英」），因此长查询的排序由
   覆盖率与整串加成共同主导。召回面是旧路径的超集（放宽为「命中任一词元」），代价是好坏参半：
   多词查询从零命中变为可召回，代价是弱关联条目也会占位（如 `mode` 命中 WAL 条目）。
+- **层 B 的零依赖半边（2026-09-14）**：加权（相关度 × 热度 × 新旧；热度带半衰期衰减以断「被召回→分更高→更常被
+  召回」的增强回路）＋ 匹配面扩到 `tags`（折权）＋ 六个加权值经 Config `recall.weighting` 下发（设置页可改、
+  热生效）＋ `retrieval.vector` 收口。真语义嵌入仍缺「嵌入源」——本机 DSH 没有可用的嵌入端点，
+  `retrieval.vector` 因此在只有伪嵌入时等于没开（刻意的：比「开了更糟」强）。见 `docs/检索加权方案.md`。
 
 ### 17. 观察通道（S4b）：读历史 → 让当前会话的模型推断 → 过审批门落库
 
