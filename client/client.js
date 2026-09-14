@@ -625,6 +625,7 @@ function withTooltip(primitives, label, element, disabled) {
           auditRetentionDays: 'Audit retention (days, 0 = unlimited)',
           retrievalVector: 'Vector recall (when an embedding provider exists)',
           reloadHint: 'Applied after DSH reload',
+          helpLabel: 'What this setting does',
           overridden: 'Overridden',
           reset: 'Reset',
           resetField: 'Reset field',
@@ -692,6 +693,7 @@ function withTooltip(primitives, label, element, disabled) {
           auditRetentionDays: '审计保留天数（0 = 不限）',
           retrievalVector: '向量召回（存在 embedding provider 时）',
           reloadHint: 'DSH 重载后生效',
+          helpLabel: '这一项是做什么的',
           overridden: '已覆盖',
           reset: '重置',
           resetField: '重置该字段',
@@ -802,6 +804,137 @@ function withTooltip(primitives, label, element, disabled) {
         ['dbPath', 'dbPathHint'],
         ['retrieval.vector', 'hintRetrievalVector'],
       ])
+
+      /** 每个设置项的大白话说明（点问号展开）。与 FIELD_SPECS 同处：两种语言相邻，便于对照维护。 */
+      const FIELD_NOTES = new Map([
+        ['writePolicy', {
+          en: 'Whether a memory write asks first. `ask` prompts every time, `auto` writes straight through (the audit row is still kept), `off` refuses. The model can neither see nor change this value.',
+          zh: '模型要把一条记忆写进库里时，先问过您还是直接放行。ask＝每次弹审批；auto＝不弹、直接落库（审计照留）；off＝一律拒绝。这一项模型既看不见也改不了。',
+        }],
+        ['writePolicies', {
+          en: 'Per-bucket overrides for the global policy, one per line: `user/workspace=auto` or `source:<name>=off`. Anything unlisted falls back to the global policy; an unknown key is rejected on save.',
+          zh: '给某一类记忆单独定策略，用来覆盖上面的全局值。每行一条：user/workspace=auto 或 source:<来源名>=off。没写到的照旧走全局策略；写错键保存时会被拦下。',
+        }],
+        ['panel.enabled', {
+          en: 'Shows or hides the floating “Memory” button in the bottom-right corner. Hiding it removes the entry point only; the plugin and this settings card keep working.',
+          zh: '右下角那枚「记忆」按钮的显隐。关掉只是入口不在，设置页这张卡片照旧，插件本身也照常工作。',
+        }],
+        ['language', {
+          en: 'Language for the panel, snapshot wording and command output. Tool descriptions are fixed when the plugin loads, so they do not follow this.',
+          zh: '面板、快照文案与命令输出用哪种语言。工具描述在插件加载时就定下了，改这一项不会动它。',
+        }],
+        ['budgets.user.userGlobal', {
+          en: 'The warning line for this bucket’s character count. Passing it never blocks a write; it only says on the panel, in the snapshot header and in the audit that a tidy is due. Each of the four buckets keeps its own tally.',
+          zh: '这一格的字数软线。写满也不拦写，超线只在面板、快照头与审计里提示您该整理了。四个格子各算各的账。',
+        }],
+        ['budgets.user.workspace', {
+          en: 'The warning line for this bucket’s character count. Passing it never blocks a write; it only says on the panel, in the snapshot header and in the audit that a tidy is due. Each of the four buckets keeps its own tally.',
+          zh: '这一格的字数软线。写满也不拦写，超线只在面板、快照头与审计里提示您该整理了。四个格子各算各的账。',
+        }],
+        ['budgets.agent.userGlobal', {
+          en: 'The warning line for this bucket’s character count. Passing it never blocks a write; it only says on the panel, in the snapshot header and in the audit that a tidy is due. Each of the four buckets keeps its own tally.',
+          zh: '这一格的字数软线。写满也不拦写，超线只在面板、快照头与审计里提示您该整理了。四个格子各算各的账。',
+        }],
+        ['budgets.agent.workspace', {
+          en: 'The warning line for this bucket’s character count. Passing it never blocks a write; it only says on the panel, in the snapshot header and in the audit that a tidy is due. Each of the four buckets keeps its own tally.',
+          zh: '这一格的字数软线。写满也不拦写，超线只在面板、快照头与审计里提示您该整理了。四个格子各算各的账。',
+        }],
+        ['maxEntriesPerQuery', {
+          en: 'How many entries `memory_recall` returns by default. An explicit limit overrides it; the provider still clamps at 1000.',
+          zh: 'memory_recall 一次默认带回多少条。调用时显式给 limit 可以突破它；Provider 层另有 1000 条的硬钳制。',
+        }],
+        ['commandListLimit', {
+          en: 'How many rows `/memory list` and `/memory query` print at once. Display only; the store is untouched.',
+          zh: '/memory list、/memory query 一屏最多渲染多少条。只影响显示，不动库里的东西。',
+        }],
+        ['commandAuditLimit', {
+          en: 'How many audit rows `/memory audit` prints at once.',
+          zh: '/memory audit 一屏最多显示多少行审计。',
+        }],
+        ['recall.historyLimitDefault', {
+          en: 'How many recent sessions a recall scans. More sessions find older preferences; they also cost more.',
+          zh: '按需召回时，往最近的会话历史里翻几个会话。翻得越多越可能捞到旧偏好，也越慢。',
+        }],
+        ['recall.snippetCap', {
+          en: 'How many candidate snippets each session contributes.',
+          zh: '每个会话最多摘几段候选出来。',
+        }],
+        ['recall.snippetChars', {
+          en: 'Characters kept per snippet, so a long message cannot blow up the context.',
+          zh: '每段截到多少字符（截断是为了不把上下文撑爆）。',
+        }],
+        ['recall.windowDays', {
+          en: 'Only the last N days are scanned. Older history stays in the store but stops being recalled.',
+          zh: '只回看最近多少天的历史。更早的留着，但不再参与召回。',
+        }],
+        ['retrieval.vector', {
+          en: 'The semantic-recall switch. It only engages when a provider that declares itself semantic is registered; the built-in provider is a hash placeholder, so today this switch still falls back to keyword recall.',
+          zh: '语义召回开关。只有注册了「声明自己是语义」的嵌入 provider 时才真正生效；内置那个是哈希伪嵌入，所以现在打开也照样回落关键词检索。',
+        }],
+        ['recall.weighting.heat', {
+          en: 'How much being recalled often lifts an entry. Score = relevance × (1 + heat bonus × heat factor). Zero means heat is ignored.',
+          zh: '常用的记忆该不该往上浮。最终分数＝相关度 ×（1 ＋ 热度加成 × 热度因子）。设 0 就是不管热度。',
+        }],
+        ['recall.weighting.heatSaturation', {
+          en: 'How many recalls count as fully hot. Past this the bonus stops growing.',
+          zh: '被召回多少次算「够热」，到这个数热度加成吃满；再被召回也不会更高。',
+        }],
+        ['recall.weighting.heatHalfLifeDays', {
+          en: 'Heat decays. After this many days without a recall it halves, and halves again after each further stretch. Heat has to be kept up to survive.',
+          zh: '热度会失温。这么多天没被召回，热度减半；再过这么久，再减半。所以热度要靠持续被召回维持。',
+        }],
+        ['recall.weighting.freshness', {
+          en: 'How much a freshly written entry lifts. Zero ignores recency.',
+          zh: '新写进来的记忆该不该往上浮一点。0 = 完全不看新旧。',
+        }],
+        ['recall.weighting.freshnessHalfLifeDays', {
+          en: 'The freshness bonus halves every this many days. A smaller number means only recent writes stand out.',
+          zh: '新旧加成也衰减：过了这么多天，加成减半。天数越小，越只看最近写的。',
+        }],
+        ['recall.weighting.tagDiscount', {
+          en: 'How much a hit that lands only in the tags counts (the body does not mention it). 1 = same as a body hit, 0 = not a hit at all.',
+          zh: '检索词只在标签里命中、正文没提到时，算它几成。1 ＝ 与正文命中同权，0 ＝ 完全不算命中。',
+        }],
+        ['panelEntriesLimit', {
+          en: 'How many entries the drawer lists at once; the rest are only counted.',
+          zh: '面板抽屉一次最多列出多少条记忆（超出只计数）。',
+        }],
+        ['panelAuditLimit', {
+          en: 'How many rows the drawer’s “Recent audit” section shows by default.',
+          zh: '抽屉里「最近审计」默认显示多少行。',
+        }],
+        ['proposals.enabled', {
+          en: 'After a session is compacted, propose what might be worth remembering. Turning it off stops new proposals.',
+          zh: '会话被压缩之后，顺手生成「这条要不要写进记忆」的提案让人过目。关掉就不再攒提案。',
+        }],
+        ['proposals.maxChars', {
+          en: 'Character cap for one proposal; longer text is shortened.',
+          zh: '单条提案最多多少字符，超了会被截。',
+        }],
+        ['proposals.maxPending', {
+          en: 'How many undecided proposals are kept. Once full, no new ones are generated until some are decided.',
+          zh: '最多攒几条没处理的提案。攒满了就不再生成新的，直到您处理掉一些。',
+        }],
+        ['dbPath', {
+          en: 'Where the memory database lives. Empty = the default ($DSH_HOME/dsh-memento/memory.db). Changing it switches to another database and reopens immediately.',
+          zh: '记忆库文件放在哪。留空＝默认位置（$DSH_HOME/dsh-memento/memory.db）。改它等于换一个库，保存后立即重开。',
+        }],
+        ['auditRetentionDays', {
+          en: 'How long audit rows are kept; 0 = forever. The audit is the only proof that everything the model saw was logged, so a short retention costs you the trail.',
+          zh: '审计行留多少天，0 ＝ 永久留着。审计是「模型看到的一切都落了盘」的唯一凭据，删早了就没法回溯。',
+        }],
+        ['snapshotOrder', {
+          en: 'Where the warm-up block sits in the system prompt; more negative is earlier (default −50). Takes effect after a DSH reload.',
+          zh: '预热段插在系统提示里的相对位置。负值越靠前（默认 -50）。这一项要重载 DSH 才生效。',
+        }],
+      ])
+
+      /** 取某字段的大白话说明（缺省英文）；没有说明的字段不渲染问号。 */
+      function noteFor(path, language) {
+        const entry = FIELD_NOTES.get(path)
+        if (entry === undefined) return null
+        return language === 'zh' ? entry.zh : entry.en
+      }
 
       /** 草稿文本 → 顶层字段写入计划；无法解析的草稿返回 undefined（阻塞保存）。 */
       function parseDraftText(spec, text, currentValue) {
@@ -1003,6 +1136,9 @@ function withTooltip(primitives, label, element, disabled) {
 .memcard-hint, .memcard-invalid { margin: 2px 0 0; font-size: 12px; }
 .memcard-hint { color: var(--dsw-alias-label-tertiary); }
 .memcard-invalid { color: var(--dsw-alias-state-error-primary); }
+.memcard-label .memcard-help { flex: none; width: 22px; height: 22px; padding: 0; margin-left: 6px; border-radius: 50%; vertical-align: middle; color: var(--dsw-alias-label-tertiary); }
+.memcard-label .memcard-help:hover:not(:disabled) { color: var(--dsw-alias-label-primary); }
+.memcard-note { margin: 6px 0 2px; padding: 8px 10px; border-radius: 8px; background: var(--dsw-alias-bg-module-platform); color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 1.7; }
 .memsec-actions { display: flex; align-items: center; gap: 8px; margin: 22px 0 4px; padding-top: 12px; border-top: 1px solid var(--dsw-alias-border-l2); }
 .memsec-spacer { flex: 1; }
 .memsec-dirty { font-size: 12px; color: var(--dsw-alias-label-secondary); }
@@ -1023,10 +1159,11 @@ function withTooltip(primitives, label, element, disabled) {
         return badges.length === 0 ? null : jsx('span', { className: 'memcard-badges' }, badges)
       }
 
-      /** 单字段控件行：label ＋ 官方控件（Switch / Input / Pill 组 / textarea）＋ 标记 ＋ reset ＋ hint/invalid。 */
+      /** 单字段控件行：label ＋ 官方控件（Switch / Input / Pill 组 / textarea）＋ 标记 ＋ reset ＋ hint/invalid ＋ 可展开说明卡。 */
       function FieldRow(props) {
-        const { t, spec, state, disabled, onEdit, onReset } = props
+        const { t, spec, state, disabled, onEdit, onReset, note } = props
         const primitives = getPrimitives()
+        const [noteOpen, setNoteOpen] = react.useState(false)
         const label = t(spec.key ?? spec.path)
         const invalid = spec.kind === 'choice' ? t('invalidPolicy') : spec.kind === 'decimal' ? t('invalidDecimal') : t('invalidNumber')
         const hintKey = FIELD_HINTS.get(spec.path)
@@ -1064,12 +1201,25 @@ function withTooltip(primitives, label, element, disabled) {
         }
         return jsx('div', { className: 'memcard-field' },
           jsx('div', { className: 'memcard-row' },
-            jsx('label', { className: 'memcard-label' }, label, jsx(FieldBadges, { t, spec, state })),
+            jsx('label', { className: 'memcard-label' }, label,
+              note === null
+                ? null
+                : jsx(primitives.Button, {
+                    className: 'memcard-help',
+                    variant: 'ghost',
+                    size: 'sm',
+                    icon: jsx(primitives.IconQuestionOutline14, { size: 14 }),
+                    'aria-label': t('helpLabel'),
+                    'aria-expanded': noteOpen,
+                    onClick: (event) => { event.preventDefault(); event.stopPropagation(); setNoteOpen(!noteOpen) },
+                  }),
+              jsx(FieldBadges, { t, spec, state })),
             jsx('span', { className: 'memcard-side' },
               state.overridden ? jsx(primitives.Button, { variant: 'ghost', size: 'sm', disabled, onClick: onReset }, t('reset')) : null,
               control)),
           hintKey === undefined ? null : jsx('p', { className: 'memcard-hint' }, t(hintKey)),
           state.invalid ? jsx('p', { className: 'memcard-invalid' }, invalid) : null,
+          noteOpen && note !== null ? jsx('p', { className: 'memcard-note' }, note) : null,
         )
       }
 
@@ -1091,6 +1241,7 @@ function withTooltip(primitives, label, element, disabled) {
                   const spec = SPEC_BY_PATH.get(path)
                   return jsx(FieldRow, {
                     key: path, t, spec, disabled: !state.writable,
+                    note: noteFor(path, language),
                     state: state.fields[path],
                     onEdit: (text) => props.edit(path, text),
                     onReset: () => {
