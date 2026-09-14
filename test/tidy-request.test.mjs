@@ -419,8 +419,8 @@ test('收边面板：三数行照抄 stats 响应的 lines；「整理全库」�
   assert.equal(app.dom.window.plugin.id, 'yammory_system', 'client 半侧按插件名注册唯一 factory')
   assert.deepEqual(
     app.slots.injected,
-    ['conversation.composer.dock', 'shell.overlay', 'settings.section'],
-    '开关钮在 composer dock、抽屉挂官方通栏浮层、设置页仍是一级项',
+    ['conversation.session.header.actions', 'shell.overlay', 'settings.section'],
+    '开关钮在会话标题栏、抽屉挂官方通栏浮层、设置页仍是一级项',
   )
   assert.equal(app.slots.registered[1].name, 'shell.overlay')
   assert.equal(app.slots.registered[1].id, 'yammory-system-drawer')

@@ -136,7 +136,7 @@ memory 工具(add)
     - **注入拦截在预热段回调**，且**开关优先于会话内冻结**：开关关掉时删除该 Session 的 WeakMap 冻结快照并返回空串——已冻结的段立刻失效，后续 assemble 一律空段，且不落 `snapshot` 审计（关了就不再留痕）。已进历史轮次的文本不追溯清除（那是本期明确不做的边界）。
     - **读侧拦截**：`memory_recall` 与 `memory` 工具的 `query` 动作属模型面读记忆，关则 `SESSION_MEMORY_OFF`，不检索、不 `bumpRecall`、不落 `recalled` 审计。管理面只读子命令（`/memory list|query|budgets|audit|adapters|export|proposals`）**不受影响**——它们是用户动作，开关管的是模型与会话，不是用户的检查权。
     - **观察通道（规格 3.6）**：当前会话关闭 → `memory_observe.scan` 直接拒（「当下」半边）；选区先把 `disabledSessionIds` 命中的历史会话滤掉再截断（「历史」半边），被滤条数计入账单 `scanned.skippedOff`——少看了几个会话必须让人看见。
-    - **开关状态零会话事件**：决策 4 的自适应门不变，`/memory session` 与面板切换只落插件审计表（`session-switch`，`outcome='on'|'off'`，`text: null`）。UI 注册在 `conversation.composer.dock`（session scope，`sessionId` 取 standard props），`GET`/`POST /api/memento/session` 两条能力由**一条** `connection.fetch` 路由按 method 分派承载（注册表以 path 为键），与面板路由同栅栏（决策 9 的只读纪律不管这个开关：它改的是「本会话要不要记忆」，不是记忆内容）。
+    - **开关状态零会话事件**：决策 4 的自适应门不变，`/memory session` 与面板切换只落插件审计表（`session-switch`，`outcome='on'|'off'`，`text: null`）。UI 注册在 `conversation.session.header.actions`（session scope，`sessionId` 取 standard props；挂会话标题栏，Agent 预设占 order -10 的负序带、本钮取 0），`GET`/`POST /api/memento/session` 两条能力由**一条** `connection.fetch` 路由按 method 分派承载（注册表以 path 为键），与面板路由同栅栏（决策 9 的只读纪律不管这个开关：它改的是「本会话要不要记忆」，不是记忆内容）。
     - **不新增 Config 项**：守「策略集中、不做开关」纪律；开关是会话级用户动作，不是部署策略。
 
 ## V3 协同（F12/F13，接口已就位，文档对齐）

@@ -239,6 +239,31 @@ const PANEL_LAYOUT_CSS = `
 .mem-audit { margin: 6px 0; padding: 4px 8px; border-left: 2px solid var(--dsw-alias-brand-primary); color: var(--dsw-alias-label-tertiary); font-size: 12px; }
 `
 
+/**
+ * 面板样式表只注入一次，且**必须打上 `data-plugin` 标记**。
+ *
+ * DSH 的模块装载器有一条规矩：无主的 `<style>` 标签会被认给「正在装载的那个插件」
+ * （HMR 记账）；而 HMR 换场时按 `data-plugin` 清场。于是不签名的样式表会被邻居插件的
+ * 一次热更新一并删掉——面板的定位与层级随之整套失效，抽屉会塌成一摊正文铺在界面上。
+ * `CARD_CSS` 走的是同一条签名的路（见 `apply`）。
+ */
+let panelStylesInstalled = false
+function installPanelStyles() {
+  if (panelStylesInstalled || typeof document === 'undefined') return
+  panelStylesInstalled = true
+  const tag = document.createElement('style')
+  tag.dataset.plugin = 'yammory_system'
+  tag.dataset.pluginCss = 'yammory_system/panel.css'
+  tag.textContent = PANEL_LAYOUT_CSS
+  document.head.appendChild(tag)
+}
+
+/** 抽屉的定位与层级（内联一份作保险：样式表再出意外，面板也不塌；观感仍归官方控件与令牌）。 */
+const DRAWER_LAYOUT_STYLE = {
+  position: 'fixed', top: 0, right: 0, bottom: 0, width: '460px', maxWidth: '92vw',
+  display: 'flex', flexDirection: 'column', zIndex: 2147483000,
+}
+
 /** 分组小标题：轨道/层 ＋ 计数（计数用官方 Tag；计数未知时不渲染 Tag）。 */
 function groupHeading(primitives, key, count, S) {
   const badge = Number.isInteger(count) ? jsx(primitives.Tag, { tone: 'neutral' }, S.groupCount(count)) : null
@@ -427,7 +452,9 @@ function PanelContent(props) {
 /** 入口按钮（官方 Button）；点击开合抽屉（抽屉本体挂在官方 shell.overlay 浮层里）。 */
 function PanelButton(props) {
   const { primitives, S, onToggle } = props
-  return jsx(primitives.Button, { variant: 'outline', id: 'mem-open', onClick: onToggle }, S.open)
+  // 定位与层级内联一份（样式的第二层保险；控件观感仍由官方 Button 承担）。
+  const style = { position: 'fixed', right: '16px', bottom: '56px', zIndex: 2147483000 }
+  return jsx(primitives.Button, { variant: 'outline', id: 'mem-open', style, onClick: onToggle }, S.open)
 }
 
 /** 抽屉本体：打开时取一轮数据，之后每次「刷新」再取一轮（行为照旧）。 */
@@ -465,7 +492,7 @@ function Drawer(props) {
     })()
     return () => { alive = false; controller.abort() }
   }, [counter, onLanguage])
-  return jsx('div', { id: 'mem-drawer' },
+  return jsx('div', { id: 'mem-drawer', style: DRAWER_LAYOUT_STYLE },
     jsx(PanelContent, {
       primitives,
       rootRef: bodyRef,
@@ -483,15 +510,14 @@ function Drawer(props) {
  */
 function installPanel(state) {
   if (document.getElementById(PANEL_ID)) return
+  // 样式先落盘并签名（见 installPanelStyles）；再取官方原语，免得 require 抛错时连样式都没落。
+  installPanelStyles()
   const primitives = getPrimitives()
   let S = STRINGS[state.language] ?? STRINGS.en
 
-  const style = document.createElement('style')
-  style.textContent = PANEL_LAYOUT_CSS
-
   const root = document.createElement('div')
   root.id = PANEL_ID
-  root.appendChild(style)
+  root.setAttribute('style', 'position: fixed; z-index: 2147483000;')
   document.body.appendChild(root)
   // 设置页「显示悬浮窗入口按钮」的即时生效面：整块浮层根节点的显隐。
   panelOpenButton = root
@@ -1029,26 +1055,28 @@ function withTooltip(primitives, label, element, disabled) {
       }
 
       /**
-       * 会话开关钮（conversation.composer.dock，session scope）：这个会话的记忆开关。
+       * 会话开关钮（conversation.session.header.actions，session scope）：这个会话的记忆开关。
+       * 挂在会话标题栏、Agent 预设的右后（预设占 order -10 的负序带，本钮取 0）；
+       * 原先的 conversation.composer.dock 官方定位是「输入框之下的环境条目」，故不取。
        * 注册被拒或拿不到 sessionId 时降级为只读显示，绝不因 UI 把插件带崩（方案 §6）。
        * @param {object} ctx - 客户端插件上下文。
        */
-      function registerComposerSwitch(ctx) {
+      function registerHeaderSwitch(ctx) {
         const slots = ctx.slots
         if (slots === undefined || slots === null) return
         try {
-          ctx.effect(() => slots.inject('conversation.composer.dock', () => slots.register({
-            name: 'conversation.composer.dock',
+          ctx.effect(() => slots.inject('conversation.session.header.actions', () => slots.register({
+            name: 'conversation.session.header.actions',
             id: 'yammory-session-switch',
-            order: 40,
-          }, SessionSwitch)), 'yammory-system: composer session switch')
+            order: 0,
+          }, SessionSwitch)), 'yammory-system: header session switch')
         } catch {
           // 宿主拒绝该 slot：仅缺一个开关钮，命令面与拦截链不受影响。
           return
         }
       }
 
-      /** 会话记忆开关按钮（会话内点一下即切；文案随宿主面板语言，缺省 en）。 */
+      /** 会话记忆开关按钮（渲染在会话标题栏；点一下即切；文案随宿主面板语言，缺省 en）。 */
       function SessionSwitch(props) {
         const sessionId = typeof props?.sessionId === 'string' && props.sessionId.length > 0 ? props.sessionId : ''
         const [state, setState] = react.useState({ phase: sessionId === '' ? 'unavailable' : 'loading', enabled: true, language: 'en' })
@@ -1109,7 +1137,7 @@ function withTooltip(primitives, label, element, disabled) {
           tag.textContent = CARD_CSS
           document.head.appendChild(tag)
         }
-        registerComposerSwitch(ctx)
+        registerHeaderSwitch(ctx)
         // 抽屉走官方通栏浮层（shell.overlay）：宿主声明该槽时用它，抽屉渲染进它给的容器。
         ctx.effect(() => ctx.slots.inject('shell.overlay', () => ctx.slots.register(
           { name: 'shell.overlay', id: 'yammory-system-drawer', order: 40 },

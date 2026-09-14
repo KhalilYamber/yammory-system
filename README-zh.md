@@ -108,7 +108,7 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 | `yammory-observe` | skill | 用户主动发起的行为观察，把五个仅观察面（思维方式与思辨 / 人格特质 / 情绪模式与心理强度 / 自我认知 / 决策与行动风格）经 `memory_observe` 落库。源文件：`skills/yammory-observe/` |
 | `yammory-tidy` | skill | 用户主动发起的记忆整理：读只读计划、把讲同一件事的条目并成一条、旧条目降级留痕（不删、不跨桶）。源文件：`skills/yammory-tidy/`；判据表在 `references/merge-rules.md` |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `restore <id...>` · `arbitrate <id...>` · `tidy [--days=N]` · `stats` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` · `observe [--days=N]` · `session [on|off]` |
-| session switch | composer dock | 输入框下方的会话记忆开关（`conversation.composer.dock`，session scope）：显示当前状态并点击切换，走 `GET`/`POST /api/memento/session`（与面板路由同一条 `connection.fetch` 信任栅栏） |
+| session switch | session header | 会话标题栏里的会话记忆开关，紧挨 Agent 预设（`conversation.session.header.actions`，session scope）：显示当前状态并点击切换，走 `GET`/`POST /api/memento/session`（与面板路由同一条 `connection.fetch` 信任栅栏） |
 | web panel | client drawer | 对记忆内容只读：浏览条目、搜索、预算条、可观测三数、审计尾部；另有一个用户动作按钮，只登记一条全库整理标记；悬浮入口按钮可隐藏（`panel.enabled`） |
 | settings section | DSH 设置侧栏 → `yammory-system` | 免改文件编辑除 `enabled` 外的全部配置字段；即时/重载生效时机在页面内标注 |
 

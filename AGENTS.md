@@ -30,7 +30,7 @@ lib/retrieval.mjs    可插拔检索 Provider seam：keyword 主路径（分词�
 lib/embedding.mjs    嵌入 Provider seam：确定性伪嵌入（零 DSH 依赖，仅 node: 内置模块）
 lib/mcp.mjs          stdio MCP server 导出：只读工具面 memory_search / memory_stats（零 DSH 依赖）
 bin/mcp-server.mjs   MCP 可执行入口（零 DSH 依赖）
-client/client.js     Web 面板（零构建单模块：React ＋ 官方控件库 `@deepseek-ai/dsh-client-ui-primitives`，抽屉挂官方 `shell.overlay` 浮层；对记忆内容只读；en/zh 随 language 配置；经 dsh.client 注入）+ 会话开关钮（`conversation.composer.dock`，session scope，官方 Switch）+ 「整理全库」排队按钮（只登记 `tidy_requests` 标记，不调模型、不碰条目）
+client/client.js     Web 面板（零构建单模块：React ＋ 官方控件库 `@deepseek-ai/dsh-client-ui-primitives`，抽屉挂官方 `shell.overlay` 浮层；对记忆内容只读；en/zh 随 language 配置；经 dsh.client 注入）+ 会话开关钮（`conversation.session.header.actions`，session scope，官方 Switch；挂会话标题栏、Agent 预设旁）+ 「整理全库」排队按钮（只登记 `tidy_requests` 标记，不调模型、不碰条目）
 scripts/             机械门：verify-readmes.mjs（五语一致性）、check-coverage.mjs（覆盖率）、verify-self-contained.mjs（拒绝仓库外依赖）、verify-artifacts.mjs（制品齐全+语法+导入）、loader-runner.mjs（真实 Loader composition）
 cordis.patch.yml     bundle 声明（insert yammory_system）
 package.json         npm 元数据；files 白名单 = 发布内容（含 docs/ 协议三件套与一致性套件）
