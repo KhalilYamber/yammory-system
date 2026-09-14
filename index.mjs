@@ -51,7 +51,7 @@ import {
 } from './lib/errors.mjs'
 import { validateBudgets, budgetReport, budgetLimits, checkBudget } from './lib/budget.mjs'
 import { buildWriteReason, isMemoryWriteRequest, applyWritePolicy, normalizeWritePolicy, resolveWritePolicy, validateWritePolicies, parseWriteReason } from './lib/gate.mjs'
-import { MemoryProtocolCore, PROTOCOL_ID, PROTOCOL_VERSION, PROTOCOL_URI, trustWriteGate, normalizeTags, validateMemoryEntry, validateExportEnvelope, validateAuditRow, MAX_TAGS_PER_ENTRY, MAX_TAG_LENGTH, PANEL_SOURCE } from './lib/protocol.mjs'
+import { MemoryProtocolCore, PROTOCOL_ID, PROTOCOL_VERSION, PROTOCOL_URI, trustWriteGate, normalizeTags, normalizeFacet, normalizeLevel, validateMemoryEntry, validateExportEnvelope, validateAuditRow, MAX_TAGS_PER_ENTRY, MAX_TAG_LENGTH, PANEL_SOURCE } from './lib/protocol.mjs'
 import { MemoryAdapterRegistry } from './lib/registry.mjs'
 import { REFERENCE_ADAPTERS } from './lib/adapters.mjs'
 import { renderSnapshot, renderWarmup, visibleEntries, visibleProposals } from './lib/snapshot.mjs'
@@ -2616,6 +2616,9 @@ async function runMemoryCommand(ctx, service, invocation, live) {
           text: entry.text,
           source: entry.source,
           tags: entry.tags,
+          // 画像坐标随条目一起导出（红队②中 4）：漏掉 facet/level 的往返会把坐标静默抹平。
+          facet: entry.facet,
+          level: entry.level,
           version: entry.version,
           createdAt: entry.createdAt,
           updatedAt: entry.updatedAt,
@@ -2657,7 +2660,7 @@ async function runMemoryCommand(ctx, service, invocation, live) {
       const entries = []
       for (const raw of rawEntries) {
         if (raw === null || typeof raw !== 'object') return { kind: 'error', text: text.importBadEntry }
-        const entry = /** @type {{track?: unknown, scope?: unknown, text?: unknown, source?: unknown, workspaceKey?: unknown, agentKey?: unknown}} */ (raw)
+        const entry = /** @type {{track?: unknown, scope?: unknown, text?: unknown, source?: unknown, workspaceKey?: unknown, agentKey?: unknown, tags?: unknown, facet?: unknown, level?: unknown}} */ (raw)
         if (typeof entry.track !== 'string' || typeof entry.scope !== 'string' || typeof entry.text !== 'string' || entry.text.length === 0) {
           return { kind: 'error', text: text.importBadEntry }
         }
@@ -2666,6 +2669,11 @@ async function runMemoryCommand(ctx, service, invocation, live) {
           scope: entry.scope,
           text: entry.text,
           ...(typeof entry.source === 'string' && entry.source.length > 0 ? { source: entry.source } : {}),
+          // 标签与画像坐标照搬（红队②中 4）：三个字段都过 normalize*，非法值在落盘前响亮
+          // 拒绝（抛出即整批不写，绝不静默丢字段或静默塞脏值）；旧文档缺字段时保持缺省。
+          ...(entry.tags === undefined ? {} : { tags: normalizeTags(entry.tags) }),
+          ...(entry.facet === undefined ? {} : { facet: normalizeFacet(entry.facet) }),
+          ...(entry.level === undefined ? {} : { level: normalizeLevel(entry.level) }),
           // 刻意不透传导入载荷的 workspaceKey/agentKey：导入条目回落到调用者会话的工作区/agent，
           // 否则一条 /memory import 就能把记忆种进别的工作区（下次开会话即进 system prompt）。
         })
@@ -3375,7 +3383,18 @@ export function registerWebRoutes(ctx, service, options) {
           }
           if (!validSwitchSessionId(input.sessionId)) return panelJson(400, { error: 'sessionId must be a non-empty string of at most 200 characters' })
           const sessionId = /** @type {string} */ (input.sessionId)
-          const enabled = service.store.sessionSetEnabled(sessionId, input.enabled === true)
+          // 红队②中 2：enabled 必须是严格布尔。旧实现只认 `=== true`，字符串 "true" / 0 / {}
+          // 会被静默当成 false 落库（用户以为开了、库里记的是关）——非布尔一律 400，
+          // 不落库、不回显假值。
+          if (typeof input.enabled !== 'boolean') return panelJson(400, { error: 'enabled must be a boolean' })
+          // 红队②中 3 的退化档：connection.fetch 的 handler 只拿到 Request，没有任何服务端
+          // 可校验的会话归属（headers 由页面自己写，同源页面可伪造；DSH 的 browser-auth 是
+          // 进程级凭据，不区分会话）。这里的纵深防御是把 id 钉在真实会话上：查不到的 id
+          // 一律 400，挡掉「凭空造一个 id 去关灯」。sessionQuery 未装配时如实放行（见文档登记）。
+          if (await unknownSwitchSession(ctx, sessionId)) {
+            return panelJson(400, { error: `unknown session ${JSON.stringify(sessionId)}: no session with that id is known to this deployment` })
+          }
+          const enabled = service.store.sessionSetEnabled(sessionId, input.enabled)
           service.store.auditAppend({
             action: 'session-switch',
             track: null,
@@ -3383,7 +3402,9 @@ export function registerWebRoutes(ctx, service, options) {
             entryId: null,
             text: null,
             outcome: enabled ? 'on' : 'off',
-            source: DEFAULT_SOURCE,
+            // 来源写实（红队②中 3）：这条路由只服务面板按钮，审计归属按面板记，
+            // 与命令面（/memory session，source=dsh-memento）区分开。
+            source: PANEL_SOURCE,
             sessionId,
           })
           return panelJson(200, { sessionId, enabled, language: service.language })
@@ -3444,6 +3465,30 @@ function shortSessionId(/** @type {string} */ sessionId) {
 /** 会话开关路由的 sessionId 校验（非空字符串且 ≤ 200 字符，否则 400）。 */
 function validSwitchSessionId(/** @type {unknown} */ value) {
   return typeof value === 'string' && value.length > 0 && value.length <= MAX_SWITCH_SESSION_ID
+}
+
+/**
+ * 会话开关路由的会话存在性校验（红队②中 3 的退化档）：这个 id 是否指向一个真实会话。
+ *
+ * 调研结论（以 DSH 源码为准）：`connection.fetch` 的 exact route handler 签名是
+ * `(request: Request) => Promise<Response>`，分发链（`client-connection` 的
+ * `createSharedFetchHandler`）只按 path 匹配后把 Request 原样递给 handler，**不注入任何
+ * 会话上下文**；Request 上的 headers 又全部由页面自己写，同源页面可以伪造任意值。
+ * DSH 的 browser-auth 是进程级凭据（区分「是不是本进程的浏览器」），不区分会话。
+ * 故没有服务端可校验的会话归属。
+ *
+ * 这一档能做的是把 id 钉在真实会话上：查 session-query 的逻辑会话语料，查不到即拒，
+ * 挡掉「凭空造一个 id 去关灯」。sessionQuery 未装配时返回 false（放行）——这是
+ * 「无从校验」，不是「校验通过」，在 ARCHITECTURE.md 与 v2 规格里如实登记。
+ * @param {import('@deepseek-ai/cordis').Context} ctx - Cordis 上下文。
+ * @param {string} sessionId - 请求声明的会话 id。
+ * @returns {Promise<boolean>} 该 id 确实查不到时为 true（查询故障照常抛出，由路由转 500）。
+ */
+async function unknownSwitchSession(ctx, sessionId) {
+  const sessionQuery = /** @type {SessionQueryLike | null | undefined} */ (ctx.get('sessionQuery'))
+  if (sessionQuery === undefined || sessionQuery === null || typeof sessionQuery.filterSessions !== 'function') return false
+  const records = await sessionQuery.filterSessions([{ kind: 'id', values: [sessionId] }])
+  return !Array.isArray(records) || records.length === 0
 }
 
 /** 面板 JSON 响应（WHATWG Response）。 */
