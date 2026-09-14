@@ -447,7 +447,9 @@ test('收边面板：三数行照抄 stats 响应的 lines；「整理全库」�
   // ④ 三数行照抄响应里的 lines（不再拼 innerHTML，改为渲染出的文本）。
   assert.equal(drawer.textContent.includes('① 重复率：0.00%'), true, '三数行照抄响应里的 lines')
   assert.equal(drawer.textContent.includes('③ 注入量'), true)
-  assert.equal(drawer.textContent.includes('user/user-global: 12/2000'), true, '预算条照抄预算数')
+  assert.equal(drawer.textContent.includes('user/user-global'), true, '预算条照抄预算方名')
+  assert.equal(drawer.textContent.includes('12 / 2000'), true, '预算条照抄预算数')
+  assert.equal(findByClass(drawer, 'mem-count').textContent, '共 1 条', '过滤计数行按可见/总数出数')
 
   // ⑤「整理全库」按钮：点一下只登记一条标记，就地回显。
   const tidyBtn = app.dom.document.getElementById('ui-button')

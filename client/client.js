@@ -48,10 +48,14 @@ const STRINGS = {
     refresh: 'Refresh',
     close: 'Close',
     filter: 'Filter entries by text…',
-    empty: 'Memory is empty (or nothing matches the filter). Use the memory tool to write (approval happens in the built-in approval UI).',
+    empty: 'Memory is empty. Write with the memory tool (approval happens in the built-in approval UI).',
+    emptyFiltered: 'No entry matches the filter.',
     truncated: (shown, total) => `Showing the first ${shown} of ${total} entries — narrow the filter to see more.`,
     groupCount: (n) => `(${n})`,
+    count: (shown, total) => (shown === total ? `${total} entries` : `${shown} of ${total} entries match the filter`),
     budgets: 'Warning-line usage',
+    budgetOver: 'over the line',
+    budgetHint: (used, limit) => `${used} of ${limit} characters — the line only warns; writes are never refused.`,
     audit: 'Recent audit',
     loading: 'Loading…',
     auditEmpty: 'Audit is empty',
@@ -74,10 +78,14 @@ const STRINGS = {
     refresh: '刷新',
     close: '关闭',
     filter: '按文本过滤条目…',
-    empty: '记忆为空（或没有匹配当前过滤）。写操作请用 memory 工具（审批在 DS 内置审批 UI 完成）。',
+    empty: '记忆为空。写操作请用 memory 工具（审批在 DSH 内置审批 UI 完成）。',
+    emptyFiltered: '没有条目匹配当前过滤。',
     truncated: (shown, total) => `仅显示前 ${shown} 条，共 ${total} 条——用过滤框缩小范围。`,
     groupCount: (n) => `（${n} 条）`,
+    count: (shown, total) => (shown === total ? `共 ${total} 条` : `匹配 ${shown} / ${total} 条`),
     budgets: '预警线用量',
+    budgetOver: '已越线',
+    budgetHint: (used, limit) => `已用 ${used} 字符 / 预警线 ${limit} 字符——越线只提示，不拦写。`,
     audit: '最近审计',
     loading: '加载中…',
     auditEmpty: '审计为空',
@@ -224,19 +232,31 @@ const PANEL_LAYOUT_CSS = `
 #mem-open { position: fixed; right: 16px; bottom: 56px; z-index: 2147483000; box-shadow: var(--dsw-elevation-prominent); }
 #mem-drawer { position: fixed; right: 0; top: 0; bottom: 0; width: 460px; max-width: 92vw; display: flex; flex-direction: column;
   background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); border-left: 1px solid var(--dsw-alias-border-l2); box-shadow: var(--dsw-elevation-panel); }
-.mem-head { padding: 10px 12px; border-bottom: 1px solid var(--dsw-alias-border-l2); display: flex; gap: 8px; align-items: center; }
-.mem-head-title { flex: 1; font-weight: 600; }
-.mem-filter { display: flex; margin: 8px 12px; }
+.mem-head { padding: 10px 12px; border-bottom: 1px solid var(--dsw-alias-border-l2); display: flex; gap: 6px; align-items: center; }
+.mem-head-title { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-filter { margin: 10px 12px 6px; }
+.mem-count { margin: 0 12px 8px; color: var(--dsw-alias-label-tertiary); font-size: 11px; font-variant-numeric: tabular-nums; }
 .mem-body { flex: 1; overflow: auto; padding: 0 12px 12px; }
-.mem-bar { height: 6px; margin: 6px 0 2px; background: var(--dsw-alias-bg-module-platform); border-radius: 3px; overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); }
+.mem-group-title { display: flex; align-items: center; margin: 14px 0 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; color: var(--dsw-alias-label-tertiary); }
+.mem-body > div + div > .mem-group-title { margin-top: 18px; }
+.mem-rows { display: flex; flex-direction: column; gap: 4px; }
+.mem-entry { padding: 7px 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
+.mem-entry:last-child { border-bottom: none; }
+.mem-entry .t { display: block; line-height: 1.55; overflow-wrap: anywhere; }
+.mem-entry .m { display: block; margin-top: 2px; color: var(--dsw-alias-label-tertiary); font-size: 11px; }
+.mem-text { margin: 4px 0; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.mem-budget { margin: 0 0 8px; }
+.mem-budget-head { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+.mem-budget-name { flex: 1; min-width: 0; color: var(--dsw-alias-label-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-budget-num { font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-tertiary); }
+.mem-budget-over .mem-budget-num { color: var(--dsw-alias-state-warn-primary); }
+.mem-bar { height: 4px; margin: 5px 0 0; background: var(--dsw-alias-bg-module-platform); border-radius: 2px; overflow: hidden; }
 .mem-bar i { display: block; height: 100%; background: var(--dsw-alias-brand-primary); }
-.mem-rows { display: flex; flex-direction: column; gap: 6px; }
-.mem-entry { padding: 6px 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-layer-2); }
-.mem-entry .t { display: block; color: var(--dsw-alias-label-primary); }
-.mem-entry .m { display: block; color: var(--dsw-alias-label-tertiary); font-size: 11px; }
-.mem-text { margin: 6px 0; color: var(--dsw-alias-label-tertiary); font-size: 12px; }
-.mem-tidy-note { flex: 1 1 100%; color: var(--dsw-alias-label-tertiary); font-size: 12px; }
-.mem-audit { margin: 6px 0; padding: 4px 8px; border-left: 2px solid var(--dsw-alias-brand-primary); color: var(--dsw-alias-label-tertiary); font-size: 12px; }
+.mem-budget-over .mem-bar i { background: var(--dsw-alias-state-warn-primary); }
+.mem-tidy { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--dsw-alias-border-l2); }
+.mem-tidy-row { display: flex; align-items: center; gap: 8px; }
+.mem-tidy-btn { flex: none; white-space: nowrap; }
+.mem-tidy-note { margin: 0; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
 `
 
 /**
@@ -267,7 +287,7 @@ const DRAWER_LAYOUT_STYLE = {
 /** 分组小标题：轨道/层 ＋ 计数（计数用官方 Tag；计数未知时不渲染 Tag）。 */
 function groupHeading(primitives, key, count, S) {
   const badge = Number.isInteger(count) ? jsx(primitives.Tag, { tone: 'neutral' }, S.groupCount(count)) : null
-  return jsx('div', { className: 'mem-head-title', style: { margin: '10px 0 4px' } },
+  return jsx('div', { className: 'mem-group-title' },
     jsx('span', { style: { marginRight: badge === null ? 0 : 6 } }, key),
     badge)
 }
@@ -380,21 +400,24 @@ function TidyRow(props) {
       }
     }
   }
-  return jsx(react.Fragment, null,
-    jsx(primitives.Button, { variant: 'outline', size: 'sm', disabled: busy, onClick: () => { void request() } }, S.tidyRequest),
-    jsx('span', { className: 'mem-tidy-note' }, note ?? (pending === null ? S.tidyHint : S.tidyAlreadyQueued)))
+  return jsx('div', { className: 'mem-tidy' },
+    jsx('div', { className: 'mem-tidy-row' },
+      jsx(primitives.Button, { className: 'mem-tidy-btn', variant: 'outline', size: 'sm', disabled: busy, onClick: () => { void request() } }, S.tidyRequest)),
+    jsx('p', { className: 'mem-tidy-note' }, note ?? (pending === null ? S.tidyHint : S.tidyAlreadyQueued)))
 }
 
 /** 抽屉正文：条目浏览（分组 ＋ 过滤）＋ 预算条 ＋ 审计尾 ＋ 提案区 ＋ 三数行。 */
 function PanelContent(props) {
   const { primitives, rootRef, S, state, onLanguage, onRefresh, onFilter } = props
+  // 计数行与正文共用同一份过滤结果，故提前算一次（上限为面板条目页上限，成本可忽略）。
+  const visible = state.entries.filter((entry) => entry.text.toLowerCase().includes(state.filter.toLowerCase()))
+  const countLine = state.fresh === true && state.error === null ? S.count(visible.length, state.entries.length) : null
   let body
   if (state.error !== null) {
     body = jsx('div', { className: 'mem-text' }, S.loadFailed(state.error))
   } else if (state.fresh === false) {
     body = jsx('div', { className: 'mem-text' }, S.loading)
   } else {
-    const visible = state.entries.filter((entry) => entry.text.toLowerCase().includes(state.filter.toLowerCase()))
     const groups = new Map()
     for (const entry of visible) {
       const key = `${entry.track}/${entry.scope}`
@@ -408,7 +431,7 @@ function PanelContent(props) {
       children.push(jsx('div', { key: `g:${key}` }, groupHeading(primitives, key, list.length, S)))
       for (const entry of list) {
         const agentTag = typeof entry.agentKey === 'string' && entry.agentKey.length > 0 ? ` · agent ${entry.agentKey}` : ''
-        children.push(jsx('div', { key: entry.id, className: 'mem-entry' },
+        children.push(jsx('div', { key: entry.id, className: 'mem-entry', title: entry.text },
           jsx('span', { className: 't' }, entry.text),
           jsx('span', { className: 'm' }, `${entry.source}${agentTag} · ${formatTime(entry.createdAt)}`)))
       }
@@ -416,9 +439,13 @@ function PanelContent(props) {
     if (state.budgets.length > 0) {
       children.push(jsx('div', { key: 'budgets' }, groupHeading(primitives, S.budgets, state.budgets.length, S),
         jsx('div', { className: 'mem-rows' }, state.budgets.map((row, index) => {
+          const over = row.limit > 0 && row.used > row.limit
           const pct = row.limit > 0 ? Math.min(100, Math.round((row.used / row.limit) * 100)) : 0
-          return jsx('div', { key: index, className: 'mem-text' },
-            `${row.track}/${row.scope}: ${row.used}/${row.limit}`,
+          return jsx('div', { key: index, className: `mem-budget${over ? ' mem-budget-over' : ''}`, title: S.budgetHint(row.used, row.limit) },
+            jsx('div', { className: 'mem-budget-head' },
+              jsx('span', { className: 'mem-budget-name' }, `${row.track}/${row.scope}`),
+              jsx('span', { className: 'mem-budget-num' }, `${row.used} / ${row.limit}`),
+              over ? jsx(primitives.Tag, { tone: 'warning' }, S.budgetOver) : null),
             jsx('div', { className: 'mem-bar' }, jsx('i', { style: { width: `${pct}%` } })))
         }))))
       children.push(jsx('div', { key: 'audit' }, groupHeading(primitives, S.audit, '', S), jsx(AuditSection, { primitives, S, state })))
@@ -426,27 +453,25 @@ function PanelContent(props) {
       children.push(jsx('div', { key: 'stats' }, groupHeading(primitives, S.stats, '', S), jsx(StatsSection, { primitives, S, state })))
     }
     body = visible.length === 0
-      ? jsx('div', { className: 'mem-text' }, S.empty)
+      ? jsx('div', { className: 'mem-text' }, state.filter.trim() === '' ? S.empty : S.emptyFiltered)
       : jsx(react.Fragment, null, children)
   }
   return jsx(react.Fragment, null,
     jsx('div', { className: 'mem-head' },
       jsx('b', { className: 'mem-head-title' }, S.title),
-      withTooltip(primitives, S.refresh,
-        jsx(primitives.Button, { variant: 'outline', size: 'sm', onClick: onRefresh }, S.refresh)),
+      jsx(primitives.StateDot, { state: state.error !== null ? 'error' : (state.busy ? 'ongoing' : (state.fresh ? 'done' : 'idle')) }),
+      jsx(primitives.Button, { variant: 'ghost', size: 'sm', onClick: onRefresh }, S.refresh),
       withTooltip(primitives, S.close,
-        jsx(primitives.Button, { variant: 'outline', size: 'sm', 'aria-label': S.close, onClick: () => onLanguage(null) }, '✕'))),
+        jsx(primitives.Button, { variant: 'ghost', size: 'sm', 'aria-label': S.close, onClick: () => onLanguage(null) }, '✕'))),
     jsx(primitives.Input, {
       className: 'mem-filter',
       placeholder: S.filter,
       defaultValue: state.filter,
       onInput: (event) => onFilter(event.target.value),
     }),
-    jsx('div', { className: 'mem-head' },
-      jsx(TidyRow, { primitives, S, onLanguage }),
-      jsx('span', { style: { flex: 1 } }),
-      jsx(primitives.StateDot, { state: state.error !== null ? 'error' : (state.busy ? 'ongoing' : (state.fresh ? 'done' : 'idle')) })),
-    jsx('div', { ref: rootRef, className: 'mem-body' }, body))
+    countLine === null ? null : jsx('div', { className: 'mem-count' }, countLine),
+    jsx('div', { ref: rootRef, className: 'mem-body' }, body),
+    jsx(TidyRow, { primitives, S, onLanguage }))
 }
 
 /** 入口按钮（官方 Button）；点击开合抽屉（抽屉本体挂在官方 shell.overlay 浮层里）。 */
@@ -492,6 +517,12 @@ function Drawer(props) {
     })()
     return () => { alive = false; controller.abort() }
   }, [counter, onLanguage])
+  // Esc 关抽屉：面板是 460px 浮层，盖住正文，键盘出口不该缺。
+  react.useEffect(() => {
+    const onKeyDown = (event) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKeyDown)
+    return () => { window.removeEventListener('keydown', onKeyDown) }
+  }, [onClose])
   return jsx('div', { id: 'mem-drawer', style: DRAWER_LAYOUT_STYLE },
     jsx(PanelContent, {
       primitives,
@@ -948,7 +979,7 @@ function withTooltip(primitives, label, element, disabled) {
 .memsec-btn { font: inherit; font-size: 13px; border: 1px solid var(--dsw-alias-border-l2); background: transparent; color: inherit; border-radius: 6px; padding: 4px 14px; cursor: pointer; }
 .memsec-btn:disabled { opacity: 0.5; cursor: default; }
 .memswitch { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px; color: var(--dsw-alias-label-secondary); }
-.memswitch-off { color: var(--dsw-alias-label-tertiary); text-decoration: line-through; }
+.memswitch-off { color: var(--dsw-alias-label-tertiary); }
 `
 
       /** 单字段控件行（label + input/checkbox/select + override 徽标 + reset + hint/invalid）。 */
@@ -1131,10 +1162,9 @@ function withTooltip(primitives, label, element, disabled) {
             : state.enabled ? t.on : t.off
         const ready = state.phase === 'ready'
         // 控件换成官方 Switch（官方只给控件不给文案，故文字仍由本插件渲染）；
-        // 关态用灰化 ＋ 删除线表达「不注入、不召回、不写入、不观察」。
-        return jsx('span', {
+        // 关态只做弱色（删除线会把「记忆」二字划掉，读起来像坏了而不是已关）；提示走官方 Tooltip。
+        return withTooltip(getPrimitives(), t.title, jsx('span', {
           className: `memswitch${ready && !state.enabled ? ' memswitch-off' : ''}`,
-          title: t.title,
         },
           jsx(getPrimitives().Switch, {
             checked: ready ? state.enabled : true,
@@ -1142,7 +1172,7 @@ function withTooltip(primitives, label, element, disabled) {
             label: `${t.title} — ${label}`,
             onChange: toggle,
           }),
-          label)
+          label))
       }
 
       function apply(ctx) {
