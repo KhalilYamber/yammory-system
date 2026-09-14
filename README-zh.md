@@ -35,7 +35,7 @@
 - **模型可见 ⟺ 已记录。** 注入的快照逐字进入 `system/message`；每次写都能从 `approval/asked` + `approval/decided` + 插件自有审计表重建。
 - **有界且诚实。** 每轨每层软预警线（默认 user 2000 / agent 4000）。越线绝不拦写——只提示这一格值得整合。绝不截断、绝不自动压缩。
 - **会话级开关。** 每个会话一个自己的记忆开关（插件自有 SQLite 表，schema v6；默认开）。关掉即四件同时停：**注入停**（该会话的冻结预热块立刻作废）、**召回禁**（`SESSION_MEMORY_OFF`）、**写入停**（与审批门同层拦截）、**观察不碰**（本会话不扫，历史选区也不选它）。管理面只读（`/memory list` / `budgets` / `audit` / `export`）照常可用。用 `/memory session on|off` 或输入框下方的开关切换；开关状态本身绝不进会话日志，审计行 `text` 恒为 `null`。
-- **整理与度量。** 模型驱动的整理把「在讲同一件事」的条目并成一条带 `merged` 标的条目，旧条目降级为 `superseded`——仍在库里，退出每个会话的可见集，绝不物理删。它不跨桶（`track × scope × agentKey`，workspace 层再加 `workspaceKey`），也绝不自动跑：`agent/turn-stopping` 上挂的只读检查只提示积压过线（一行 `tidy-due` 审计 ＋ 下个会话预热段末行一句）。`/memory stats` 打印可观测三数（重复率 / 召回命中率 / 注入量）；成功率刻意留白，因为本仓库没有「注入之后对方是否真听懂了」这条信号源。
+- **整理与度量。** 模型驱动的整理把「在讲同一件事」的条目并成一条带 `merged` 标的条目，旧条目降级为 `superseded`——仍在库里，退出每个会话的可见集，绝不物理删。它不跨桶（`track × scope × agentKey`，workspace 层再加 `workspaceKey`），也绝不自动跑：`agent/turn-stopping` 上挂的只读检查只提示积压过线（一行 `tidy-due` 审计 ＋ 下个会话预热段末行一句）。`/memory stats` 打印可观测三数（重复率 / 召回命中率 / 注入量），抽屉面板里同样有这三行；成功率刻意留白，因为本仓库没有「注入之后对方是否真听懂了」这条信号源。面板上的**整理全库**按钮是排队，不是动作：它按同一套审批策略只写一行标记（`tidy_requests`，schema v7），下次会话的预热段请模型跑一次全库整理，等真的有整理落写时标记转 `done`——面板这边一条都不会合并。
 
 - **治理：把降级走回来，把冲突按面裁决。** `restore` 把一次降级走反方向（`superseded → active`，`version` 不动，重新进入每个会话的可见集），它是脱离降级态的唯一出口。`arbitrate` 处理「同一条事实、两个来源」：在**一个面**上裁决，方向由固定表决定——能力听观察、意愿听自陈，其余五面**两条都留**并各打 `gap` 标（落差本身即证据）。表即方向，所以没有反向参数可传；同组内保留 `updatedAt` 最新者。两者与所有写路径同门：同一审批门、同一会话开关、同一桶内边界；审计也逐条留痕——`restore` 每条一行，`arbitrate` 每次降级一行（`text` 恒为 `null`，只记 id）、打标一行 `arbitrate-tag`，收尾一行 `arbitrate` 摘要写清保留了谁、降级了谁、理由是什么。
 
@@ -46,8 +46,6 @@
 ```sh
 # 1. install the bundle into your profile
 dsh plugin --profile web add "github:KhalilYamber/yammory-system#main"
-
-# or from npm (published releases)
 
 # 2. restart and verify the row
 dsh --profile web --dump-config | grep -A3 'id: yammory_system'
@@ -111,7 +109,7 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 | `yammory-tidy` | skill | 用户主动发起的记忆整理：读只读计划、把讲同一件事的条目并成一条、旧条目降级留痕（不删、不跨桶）。源文件：`skills/yammory-tidy/`；判据表在 `references/merge-rules.md` |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `restore <id...>` · `arbitrate <id...>` · `tidy [--days=N]` · `stats` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` · `observe [--days=N]` · `session [on|off]` |
 | session switch | composer dock | 输入框下方的会话记忆开关（`conversation.composer.dock`，session scope）：显示当前状态并点击切换，走 `GET`/`POST /api/memento/session`（与面板路由同一条 `connection.fetch` 信任栅栏） |
-| web panel | client drawer | 只读：浏览条目、搜索、预算条、审计尾部；悬浮入口按钮可隐藏（`panel.enabled`） |
+| web panel | client drawer | 对记忆内容只读：浏览条目、搜索、预算条、可观测三数、审计尾部；另有一个用户动作按钮，只登记一条全库整理标记；悬浮入口按钮可隐藏（`panel.enabled`） |
 | settings section | DSH 设置侧栏 → `yammory-system` | 免改文件编辑除 `enabled` 外的全部配置字段；即时/重载生效时机在页面内标注 |
 
 ## MCP server
@@ -129,7 +127,8 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 
 ```sh
 node bin/mcp-server.mjs
-# 或 npm 安装后：npx yammory_system-mcp
+# 或从 GitHub 渠道装好之后：npx yammory_system-mcp
+#（本仓库尚未发布到 npm 注册表；上面的 -p github:… 就是取包来源）
 ```
 
 数据库路径取自 `$DSH_MEMENTO_DB_PATH`（绝对路径，或相对 `$DSH_HOME`）；默认为 `$DSH_HOME/dsh-memento/memory.db`。
@@ -141,7 +140,7 @@ Claude Desktop（`claude_desktop_config.json`）配置示例：
   "mcpServers": {
     "yammory_system": {
       "command": "npx",
-      "args": ["-y", "yammory_system-mcp"],
+      "args": ["-y", "-p", "github:KhalilYamber/yammory-system", "yammory_system-mcp"],
       "env": {
         "DSH_MEMENTO_DB_PATH": "/home/you/.dsh/dsh-memento/memory.db"
       }
@@ -156,6 +155,9 @@ Claude Desktop（`claude_desktop_config.json`）配置示例：
 
 | Plugin | 是什么 | yammory_system 的差异 |
 |---|---|---|
+| dsh-mneme | 自进化记忆，功能面宽 | 只做小语料画像：靠「按用户水平说话」差异化，不靠加功能 |
+| dsh-meow-memory | 七层库、BM25 检索 | 不做检索工程：分领域水位表 ＋ 分面裁决 |
+| dsh-persona-memory | 画像注入 | 多一层：常驻画像之上再带**分领域知识水位**与**分面裁决** |
 | dsh-memory-evolve | 记忆仓库 / 进化循环 | 类型化服务接缝、审批门与会话日志审计；无仓库野心 |
 | dsh-mnemon | 记忆存储助手 | 协议 + 门 + 审计，而非又一个 store |
 | dsh-kb-sieve | 知识库筛选 | 无检索工程：小语料子串搜索，经 `session_search`/`sessionQuery` 跨会话召回 |
@@ -164,7 +166,9 @@ Claude Desktop（`claude_desktop_config.json`）配置示例：
 | dsh-external/Recall | 外部 agent 记忆 | 本地优先、零网络、走 DSH 自有审批接缝 |
 | Official MCP memory examples | DSH 宣称的"memory = 外部 MCP"立场 | **原生第一方**补充：同目标、无外部服务器；两者共存 |
 
-名称是 **`yammory_system`**（已发布到 npm 与 GitHub）。不是 `dsh-recall`（易与 dsh-external/Recall 混淆），也不是已删除的旧名 `dsh-memory`。
+今天真正立得住的差异是上表最后两条：**带分领域知识水位的七面画像**（在任何检索发生之前就决定助手该用什么口吻说话），以及**分面裁决**（同一条事实有两个来源时怎么收场——能力听观察、意愿听自陈，其余五面两条都留、各打一个 `gap` 标）。
+
+名称是 **`yammory_system`**（走 GitHub 渠道安装；尚未发布到 npm 注册表）。不是 `dsh-recall`（易与 dsh-external/Recall 混淆），也不是已删除的旧名 `dsh-memory`。
 
 ## dsh-memory-protocol v1
 
@@ -228,7 +232,7 @@ Claude Desktop（`claude_desktop_config.json`）配置示例：
 
 ```sh
 npm install              # node ^22.19 || >=24
-npm test                 # node --test: 141 tests
+npm test                 # node --test: 347 tests
 npm run lint             # oxlint
 npm run test:conformance # dsh-memory-protocol v1 conformance suite
 npm run typecheck        # tsc --checkJs gate

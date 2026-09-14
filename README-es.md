@@ -35,7 +35,7 @@
 - **Visible para el modelo ⟺ registrado.** La instantánea inyectada llega textualmente a `system/message`; cada escritura es reconstruible a partir de `approval/asked` + `approval/decided` + la propia tabla de auditoría del plugin.
 - **Acotada y honesta.** Líneas de aviso suaves por pista y por capa (por defecto usuario 2000 / agente 4000). Cruzar una nunca bloquea una escritura: solo indica que esa capa merece consolidarse. Nunca se trunca, nunca se compacta automáticamente.
 - **Interruptor por sesión.** Cada sesión tiene su propio interruptor de memoria (tabla SQLite propia del plugin, esquema v6; activado por defecto). Apagado detiene cuatro cosas a la vez: la inyección (el bloque de precalentamiento congelado se descarta de inmediato), el recuerdo (`SESSION_MEMORY_OFF`), la escritura (se rechaza en la misma capa que la puerta de aprobación) y la observación (la sesión no se escanea y tampoco se elige como historial). Las lecturas de gestión (`/memory list` / `budgets` / `audit` / `export`) siguen disponibles. Se cambia con `/memory session on|off` o con el interruptor del compositor; el estado del interruptor nunca entra en el registro de sesión y sus filas de auditoría llevan `text: null`.
-- **Orden y medida.** Una pasada de orden dirigida por el modelo fusiona las entradas que dicen lo mismo en una sola con la etiqueta `merged` y degrada las antiguas a `superseded`: siguen en disco, fuera de la vista de toda sesión, nunca se borran. Nunca cruza cubos (`track × scope × agentKey`, más `workspaceKey` en la capa workspace) ni arranca por su cuenta: una comprobación de solo lectura en `agent/turn-stopping` solo avisa de que el atraso superó la línea (una fila de auditoría `tidy-due` y una línea al final del siguiente bloque de precalentamiento). `/memory stats` informa de los tres números observables (tasa de repetición, tasa de acierto de recuerdo, volumen inyectado); la tasa de éxito se deja en blanco a propósito, porque este repositorio no tiene fuente de señal para «¿el bloque inyectado llegó a entenderse?».
+- **Orden y medida.** Una pasada de orden dirigida por el modelo fusiona las entradas que dicen lo mismo en una sola con la etiqueta `merged` y degrada las antiguas a `superseded`: siguen en disco, fuera de la vista de toda sesión, nunca se borran. Nunca cruza cubos (`track × scope × agentKey`, más `workspaceKey` en la capa workspace) ni arranca por su cuenta: una comprobación de solo lectura en `agent/turn-stopping` solo avisa de que el atraso superó la línea (una fila de auditoría `tidy-due` y una línea al final del siguiente bloque de precalentamiento). `/memory stats` informa de los tres números observables (tasa de repetición, tasa de acierto de recuerdo, volumen inyectado), y el panel muestra esas mismas tres líneas; la tasa de éxito se deja en blanco a propósito, porque este repositorio no tiene fuente de señal para «¿el bloque inyectado llegó a entenderse?». El botón **Ordenar toda la biblioteca** del panel es una cola, no una acción: escribe una sola fila de marca (`tidy_requests`, schema v7) bajo la misma política de aprobación, el precalentamiento de la siguiente sesión pide al modelo una pasada completa, y la marca pasa a `done` cuando aterriza una escritura de orden: nada se fusiona desde el panel.
 
 - **Gobernar la memoria: deshacer una degradación y arbitrar un conflicto por faceta.** `restore` recorre la degradación al revés (`superseded → active`, `version` intacta, de vuelta en la vista de toda sesión) y es la única salida del estado degradado. `arbitrate` resuelve el caso de un hecho con dos fuentes: decide sobre **una sola faceta** y la dirección sale de una tabla fija — la capacidad sigue a la observación, la preferencia sigue al autoinforme, y las otras cinco facetas conservan **ambas** entradas y etiquetan cada una con `gap` (la brecha es la evidencia). La tabla es la dirección, así que no hay argumento inverso que pasar, y dentro de un grupo se conserva la entrada actualizada más recientemente. Ambas acciones pasan por la misma puerta de aprobación, el mismo interruptor por sesión y las mismas reglas de cubo que cualquier otra escritura, y ambas dejan rastro de auditoría: `restore` por entrada, `arbitrate` por degradación (`text: null`, solo ids), `arbitrate-tag` por etiqueta y un resumen final `arbitrate` que dice a quién se conservó, a quién se degradó y por qué.
 
@@ -46,8 +46,6 @@ Dos pistas × dos capas × clave por agente: una pista `user` (hechos sobre el u
 ```sh
 # 1. install the bundle into your profile
 dsh plugin --profile web add "github:KhalilYamber/yammory-system#main"
-
-# or from npm (published releases)
 
 # 2. restart and verify the row
 dsh --profile web --dump-config | grep -A3 'id: yammory_system'
@@ -111,7 +109,7 @@ Todos los parámetros son campos Schemastery `Config` (modificables desde cordis
 | `yammory-tidy` | skill | Orden de memoria iniciado por el usuario: lee el plan de solo lectura, fusiona lo que dice lo mismo y degrada las entradas antiguas (se conservan, nunca se borran), sin cruzar cubos. Código fuente: `skills/yammory-tidy/`; reglas de juicio en `references/merge-rules.md` |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `restore <id...>` · `arbitrate <id...>` · `tidy [--days=N]` · `stats` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` · `observe [--days=N]` · `session [on|off]` |
 | session switch | composer dock | Interruptor de memoria por sesión bajo el compositor (`conversation.composer.dock`, ámbito de sesión): muestra el estado y lo cambia mediante `GET`/`POST /api/memento/session` (la misma valla de confianza `connection.fetch` que las rutas del panel) |
-| web panel | client drawer | Solo lectura: explorar entradas, buscar, barras de presupuesto, cola de auditoría; el botón flotante puede ocultarse (`panel.enabled`) |
+| web panel | client drawer | Solo lectura para el contenido: explorar entradas, buscar, barras de presupuesto, los tres números observables, cola de auditoría; un botón de acción del usuario solo encola una limpieza de toda la biblioteca; el botón flotante puede ocultarse (`panel.enabled`) |
 | settings section | Barra lateral de ajustes de DSH → `yammory-system` | Edita todos los campos de configuración (salvo `enabled`) sin tocar archivos; el momento de aplicación (en vivo o tras recarga) se indica en la página |
 
 ## MCP server
@@ -129,7 +127,8 @@ Ejecución directa:
 
 ```sh
 node bin/mcp-server.mjs
-# o, tras npm install: npx yammory_system-mcp
+# o, tras instalar el paquete desde el canal de GitHub: npx yammory_system-mcp
+# (este repositorio aún no está en el registro npm; el spec -p github:… de arriba es la fuente)
 ```
 
 La ruta de la base de datos es `$DSH_MEMENTO_DB_PATH` (absoluta, o relativa a `$DSH_HOME`); por defecto `$DSH_HOME/dsh-memento/memory.db`.
@@ -141,7 +140,7 @@ Ejemplo para Claude Desktop (`claude_desktop_config.json`):
   "mcpServers": {
     "yammory_system": {
       "command": "npx",
-      "args": ["-y", "yammory_system-mcp"],
+      "args": ["-y", "-p", "github:KhalilYamber/yammory-system", "yammory_system-mcp"],
       "env": {
         "DSH_MEMENTO_DB_PATH": "/home/you/.dsh/dsh-memento/memory.db"
       }
@@ -156,6 +155,9 @@ El servidor es de solo lectura: sin red, sin escrituras, sin puerta de aprobaci�
 
 | Plugin | Qué es | La diferencia de yammory_system |
 |---|---|---|
+| dsh-mneme | memoria auto-evolutiva con una superficie de funciones amplia | solo perfil de corpus pequeño: compite hablando al nivel medido del usuario, no ampliando funciones |
+| dsh-meow-memory | almacén de siete capas con recuperación BM25 | sin ingeniería de recuperación: tabla de nivel por dominio más arbitraje por facetas |
+| dsh-persona-memory | inyección de persona en el prompt | una capa más: **nivel de conocimiento por dominio** y **arbitraje por facetas** sobre el perfil permanente |
 | dsh-memory-evolve | almacén de memoria / bucles de evolución | una costura de servicio tipada, puerta de aprobación y auditoría de registro de sesión; sin ambición de almacén |
 | dsh-mnemon | ayudante de almacén de memoria | protocolo + puerta + auditoría, no otro almacén |
 | dsh-kb-sieve | tamizado de base de conocimiento | sin ingeniería de recuperación: búsqueda por subcadena en corpus pequeño, recall entre sesiones vía `session_search`/`sessionQuery` |
@@ -164,7 +166,9 @@ El servidor es de solo lectura: sin red, sin escrituras, sin puerta de aprobaci�
 | dsh-external/Recall | memoria de agente externa | local primero, cero red, usa la propia costura de aprobación de DSH |
 | Official MCP memory examples | la posición declarada de DSH de "memoria = MCP externo" | el complemento **nativo de primera parte**: mismo objetivo, sin servidor externo; ambos coexisten |
 
-El nombre es **`yammory_system`** (publicado en npm y GitHub). No `dsh-recall` (confundible con dsh-external/Recall), no el nombre heredado eliminado `dsh-memory`.
+Las dos diferencias que se sostienen hoy son el último par de la tabla: un **perfil de siete facetas con nivel de conocimiento por dominio** (decide con qué registro habla el asistente, antes de cualquier recuperación) y el **arbitraje por facetas** (decide cómo se resuelve un hecho con dos fuentes: la capacidad sigue a la observación, la preferencia al autorreporte, y las otras cinco facetas conservan ambas y marcan `gap` en cada una).
+
+El nombre es **`yammory_system`** (instalado desde el canal de GitHub; aún no está en el registro npm). No `dsh-recall` (confundible con dsh-external/Recall), no el nombre heredado eliminado `dsh-memory`.
 
 ## dsh-memory-protocol v1
 
@@ -228,7 +232,7 @@ Y las partes deliberadamente rechazadas: la auto-resumación oculta hacia estado
 
 ```sh
 npm install              # node ^22.19 || >=24
-npm test                 # node --test: 141 tests
+npm test                 # node --test: 347 tests
 npm run lint             # oxlint
 npm run test:conformance # dsh-memory-protocol v1 conformance suite
 npm run typecheck        # tsc --checkJs gate

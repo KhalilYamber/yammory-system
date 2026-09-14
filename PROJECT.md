@@ -64,15 +64,17 @@ AI 不知道用户的知识水位，就按自己的水位说话——术语、�
 | **F6 · 整理机（v1 增量版）** | `supersede` 降级不删 ＋ `merged` 打标 ＋ 桶内不跨 ＋ 分批 ＋ 审计摘要；`/memory tidy` ＋ `yammory-tidy` skill；触发只提示不自动跑 | ✅ 测试 318/318 · 门链 8/8 |
 | **F7 · 可观测三数** | `/memory stats`：重复率 / 召回命中率 / 注入量；第三数的成功率标注「需反馈通道，待定义」 | ✅ 随 F6 同批 |
 | **S5 · 治理** | soft delete 的回滚（`restore`：`superseded → active`，单向、走审批门与审计）＋ **分面裁决**（`arbitrate`：方向由 `ARBITRATION_BY_FACET` 表定——能力听观察 / 意愿听自陈 / 其余五面 coexist 各打 `gap` 标）；`docs/S5治理方案.md` | ✅ 测试 335/335 · 门链 8/8 |
+| **收边 · 面板两处 ＋ 门牌** | 抽屉「可观测三数」行（读 `/api/memento/stats` 的 `lines`，措辞与命令面同源）＋「整理全库」排队按钮（新表 `tidy_requests`，schema v7：登记 → 下次会话预热段末行请模型跑 → 跑到由 `supersede` 清标记）；五语 README 的「How it's different」对齐当下生态，npm 宣称改 GitHub 渠道；`docs/收边方案.md` | ✅ 测试 347/347 · 门链 8/8 |
 
 **待办**：
 
-- **F6 v2（全库整理）**：规格 3.5.9 要的**面板手动按钮 ＋ 排队登记 ＋ 空闲时跑 ＋ 回执**，v1 刻意留出；另含双向让路与 S6 Dream 并入。
+- **F6 v2（全库整理）**：规格 3.5.9 的**面板手动按钮 ＋ 排队登记 ＋ 回执**已随「收边」落地；**剩下的只有「空闲时自动跑」**——它会在会话日志之外发生，撞「模型可见 ⟺ 落盘」，故不做（口径见 ARCHITECTURE 决策 21）。另含双向让路与 S6 Dream 并入。
 - **S5 v2（置信门槛）**：多高的把握才允许覆盖，需要真实观察数据攒够才定得出线；S5 先做结构化的共存与裁决（方向表 ＋ 落差标），不引入数值门槛。
 - **F7 第三数**：「注入量-成功率」里的成功率没有信号源，需一条用户侧反馈通道，未定。
-- **UI 补全**：面板的三数行与「整理全库」按钮（`/api/memento/stats` 数据面已就绪）。
+- ~~UI 补全~~：**已闭合（0914 收边）**——面板抽屉的三数行与「整理全库」按钮都已上线。
+- **真机手验**：重启 DSH 装载新码，把 F5 / F6 / F7 / S5 / 收边逐项过一遍（host 代码改动需重启才装载）。
 - **H1**：拆 `index.mjs`（已 3300+ 行）。
-- **分发门牌**：GitHub 仓库描述与 `dsh-plugin` 等 topics、npm 发布口径、README「How it's different」对齐当下生态。
+- **分发门牌**：README「How it's different」与 npm 口径已随「收边」对齐；剩下 GitHub 仓库描述与 `dsh-plugin` 等 topics（`gh repo edit`）与「是否真发布 npm」的决定。
 
 **身份**：项目已由 `dsh-memento` 更名为 `yammory_system`；出处与 Apache-2.0 归属保留；仓库指向 <https://github.com/KhalilYamber/yammory-system>；数据面（库目录 / 环境变量 / 路由）为兼容旧数据**保持不变**。
 

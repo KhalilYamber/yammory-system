@@ -5,9 +5,11 @@
 // 执行时经 window.__ModuleLoader__.load 注册唯一 factory（id = 插件名，与
 // 宿主 graph row 一致；同文件多个 load 会产生永远不被物化的孤儿 factory）。
 // apply 挂载两块表面：浮层抽屉面板 + 宿主设置弹窗的一级设置项。
-// 面板只读：条目浏览/搜索/预算条/审计尾，全部走本插件自注册的
+// 面板只读：条目浏览/搜索/预算条/审计尾/可观测三数，全部走本插件自注册的
 // /api/memento/* JSON 路由（只走公开 API）。写与审批在 DSH 内置审批 UI 完成，
-// 面板不产生任何模型可见内容、不做任何审批决策。
+// 面板不产生任何模型可见内容、不做任何审批决策。唯一的非只读动作是「整理全库」
+// 按钮（收边 §2）：它只登记一条待整理标记，不调模型、不改任何条目——整理本身
+// 仍由模型在会话内显式跑（审计红线）。
 // 面板文案随 Config.language（en/zh）切换，语言来自 entries 路由响应。
 // 设置页经 ctx.settingsScope 读/写用户层（settings.yaml），暂存—保存语义
 // 与宿主内置卡片一致；factory 的 require 由宿主模块系统提供（react 为平台
@@ -55,6 +57,15 @@ const STRINGS = {
     auditEmpty: 'Audit is empty',
     proposals: 'Pending proposals',
     proposalsEmpty: 'No pending proposals (generated after session compaction; decide via /memory proposals approve|dismiss)',
+    stats: 'The three numbers',
+    statsEmpty: 'The stats route returned nothing.',
+    statsFailed: (message) => `Numbers unavailable: ${message}`,
+    tidyRequest: 'Tidy the whole library',
+    tidyHint: 'Queues one marker: the next session is asked to run the tidy — nothing is merged from here.',
+    tidyQueued: 'Queued. The next session will ask the model to tidy the whole library.',
+    tidyAlreadyQueued: 'Already queued — no duplicate marker.',
+    tidyBusy: 'Queueing…',
+    tidyFailed: (message) => `Not queued: ${message}`,
     loadFailed: (message) => `Load failed: ${message} (panel is read-only; make sure the Web profile has yammory_system loaded)`,
   },
   zh: {
@@ -72,6 +83,15 @@ const STRINGS = {
     auditEmpty: '审计为空',
     proposals: '待审批提案',
     proposalsEmpty: '暂无待审批提案（会话压缩后自动生成；用 /memory proposals approve|dismiss 处理）',
+    stats: '可观测三数',
+    statsEmpty: 'stats 路由没有返回内容。',
+    statsFailed: (message) => `三数不可用：${message}`,
+    tidyRequest: '整理全库',
+    tidyHint: '只登记一条待整理标记：下次会话会请模型跑整理——这里不会合并任何条目。',
+    tidyQueued: '已登记。下次会话会请模型整理全库。',
+    tidyAlreadyQueued: '已在队列里了，不重复登记。',
+    tidyBusy: '登记中…',
+    tidyFailed: (message) => `未登记：${message}`,
     loadFailed: (message) => `加载失败：${message}（面板只读；请确认 Web profile 已装载 yammory_system）`,
   },
 }
@@ -177,6 +197,12 @@ function installPanel(state) {
 .mem-bar { height: 6px; margin: 6px 0 2px; background: #0b1120; border-radius: 3px; overflow: hidden; border: 1px solid #24344d; }
 .mem-bar i { display: block; height: 100%; background: #3f6fae; }
 .mem-row { margin: 6px 0; color: #9fb4d4; }
+.mem-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 12px 8px; }
+.mem-btn { background: #1c2a42; color: #cfe1f7; border: 1px solid #2f4466; border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
+.mem-btn:hover:not(:disabled) { background: #27395a; }
+.mem-btn:disabled { opacity: .6; cursor: default; }
+.mem-tidy-note { flex: 1 1 100%; color: #8fa8cc; font-size: 12px; }
+.mem-stats { margin: 6px 0; color: #9fb4d4; font-size: 12px; }
 .mem-audit { margin: 6px 0; padding: 4px 8px; border-left: 2px solid #3f6fae; color: #9fb4d4; font-size: 12px; }
 .mem-empty { color: #8fa8cc; margin: 10px 0; }
 `
@@ -197,6 +223,7 @@ function installPanel(state) {
       <button id="mem-close" title="${S.close}">✕</button>
     </div>
     <input id="mem-filter" placeholder="${S.filter}" />
+    <div id="mem-actions"></div>
     <div id="mem-body"></div>
   `
   root.appendChild(openBtn)
@@ -211,6 +238,59 @@ function installPanel(state) {
   const refreshBtn = document.getElementById('mem-refresh')
   const closeBtn = document.getElementById('mem-close')
   const filterInput = document.getElementById('mem-filter')
+  const actions = document.getElementById('mem-actions')
+
+  // 「整理全库」按钮（收边 §2）：动作栏挂在抽屉固定位置（记忆体每次重渲染都不碰它）。
+  // 点击只登记一条待整理标记（POST /api/memento/tidy-request）——不调模型、不合并条目；
+  // 整理由模型在下次会话里显式跑。按钮面因此不含任何写记忆的入口。
+  const tidyBtn = document.createElement('button')
+  tidyBtn.id = 'mem-tidy-request'
+  tidyBtn.className = 'mem-btn'
+  tidyBtn.textContent = S.tidyRequest
+  const tidyNote = document.createElement('span')
+  tidyNote.id = 'mem-tidy-note'
+  tidyNote.className = 'mem-tidy-note'
+  tidyNote.textContent = S.tidyHint
+  if (actions !== null) {
+    actions.appendChild(tidyBtn)
+    actions.appendChild(tidyNote)
+  }
+  let tidyBusy = false
+  let tidyPending = null
+
+  /** 待整理标记的展示态：无标记 = 说明文案；有标记 = 按「本次是否新建」分别回显。 */
+  const showTidyState = (pending, created) => {
+    tidyPending = pending
+    if (tidyBusy) return
+    tidyNote.textContent = pending === null
+      ? S.tidyHint
+      : created === true ? S.tidyQueued : S.tidyAlreadyQueued
+  }
+
+  const requestTidy = async () => {
+    if (tidyBusy) return
+    tidyBusy = true
+    tidyBtn.disabled = true
+    tidyNote.textContent = S.tidyBusy
+    try {
+      const response = await fetch('/api/memento/tidy-request', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      })
+      const data = await response.json()
+      if (!response.ok || data.error !== undefined) throw new Error(data.error === undefined ? `tidy-request ${response.status}` : data.error)
+      applyLanguage(data.language)
+      tidyBusy = false
+      showTidyState(data.pending ?? null, data.created === true)
+    } catch (error) {
+      tidyNote.textContent = S.tidyFailed(String(error && error.message ? error.message : error))
+    } finally {
+      tidyBusy = false
+      tidyBtn.disabled = false
+    }
+  }
+  tidyBtn.addEventListener('click', () => { void requestTidy() })
 
   /** 按服务端 language 切换文案并刷新静态标签（语言随配置，运行期不变）。 */
   const applyLanguage = (language) => {
@@ -221,6 +301,8 @@ function installPanel(state) {
     refreshBtn.textContent = S.refresh
     closeBtn.title = S.close
     filterInput.placeholder = S.filter
+    tidyBtn.textContent = S.tidyRequest
+    showTidyState(tidyPending, undefined)
   }
 
   let entries = []
@@ -265,7 +347,26 @@ function installPanel(state) {
     html += `<div id="mem-audit-slot"><div class="mem-empty">${S.loading}</div></div>`
     html += `<div class="mem-group">${S.proposals}</div>`
     html += `<div id="mem-proposal-slot"><div class="mem-empty">${S.loading}</div></div>`
+    // 可观测三数（收边 §1）：/api/memento/stats 已把三数渲染成文本行，面板照抄即可
+    // （同一份文案给命令面与面板，避免两处措辞漂移）；语言跟随响应里的 language。
+    html += `<div class="mem-group">${S.stats}</div>`
+    html += `<div id="mem-stats-slot"><div class="mem-empty">${S.loading}</div></div>`
     body.insertAdjacentHTML('beforeend', html)
+  }
+
+  const renderStats = (payload) => {
+    const slot = document.getElementById('mem-stats-slot')
+    if (slot === null) return
+    if (payload.error !== undefined) {
+      slot.innerHTML = `<div class="mem-empty">${escapeHtml(S.statsFailed(String(payload.error)))}</div>`
+      return
+    }
+    const lines = Array.isArray(payload.lines) ? payload.lines : []
+    if (lines.length === 0) {
+      slot.innerHTML = `<div class="mem-empty">${S.statsEmpty}</div>`
+      return
+    }
+    slot.innerHTML = lines.map((line) => `<div class="mem-stats">${escapeHtml(line)}</div>`).join('')
   }
 
   const renderAudit = (rows) => {
@@ -310,6 +411,15 @@ function installPanel(state) {
         .then((res) => res.json())
         .then((data) => renderProposals(data.proposals))
         .catch(() => renderProposals([]))
+      void fetch('/api/memento/stats')
+        .then((res) => res.json())
+        .then((data) => renderStats(data))
+        .catch((error) => renderStats({ error: String(error && error.message ? error.message : error) }))
+      // 待整理标记的当前状态（面板打开时先照实显示「已排队/未排队」）。
+      void fetch('/api/memento/tidy-request')
+        .then((res) => res.json())
+        .then((data) => { if (data.error === undefined) showTidyState(data.pending ?? null, undefined) })
+        .catch(() => {})
     } catch (error) {
       body.innerHTML = `<div class="mem-empty">${S.loadFailed(String(error && error.message ? error.message : error))}</div>`
     }

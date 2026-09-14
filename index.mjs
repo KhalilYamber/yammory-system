@@ -51,7 +51,7 @@ import {
 } from './lib/errors.mjs'
 import { validateBudgets, budgetReport, budgetLimits, checkBudget } from './lib/budget.mjs'
 import { buildWriteReason, isMemoryWriteRequest, applyWritePolicy, normalizeWritePolicy, resolveWritePolicy, validateWritePolicies, parseWriteReason } from './lib/gate.mjs'
-import { MemoryProtocolCore, PROTOCOL_ID, PROTOCOL_VERSION, PROTOCOL_URI, trustWriteGate, normalizeTags, validateMemoryEntry, validateExportEnvelope, validateAuditRow, MAX_TAGS_PER_ENTRY, MAX_TAG_LENGTH } from './lib/protocol.mjs'
+import { MemoryProtocolCore, PROTOCOL_ID, PROTOCOL_VERSION, PROTOCOL_URI, trustWriteGate, normalizeTags, validateMemoryEntry, validateExportEnvelope, validateAuditRow, MAX_TAGS_PER_ENTRY, MAX_TAG_LENGTH, PANEL_SOURCE } from './lib/protocol.mjs'
 import { MemoryAdapterRegistry } from './lib/registry.mjs'
 import { REFERENCE_ADAPTERS } from './lib/adapters.mjs'
 import { renderSnapshot, renderWarmup, visibleEntries, visibleProposals } from './lib/snapshot.mjs'
@@ -105,6 +105,10 @@ import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, Vector
  * @property {(sessionId: unknown) => boolean} sessionEnabled
  * @property {(sessionId: unknown, enabled: unknown) => boolean} sessionSetEnabled
  * @property {() => string[]} disabledSessionIds
+ * @property {() => {id: string, createdAt: number, status: string} | null} tidyRequestPending
+ * @property {() => {request: {id: string, createdAt: number, status: string}, created: boolean}} tidyRequestAdd
+ * @property {() => {id: string, createdAt: number, status: string} | null} tidyRequestClear
+ * @property {(limit?: number) => Array<{id: string, createdAt: number, status: string}>} tidyRequestList
  * @property {() => void} close
  * @typedef {{request: (req: object) => Promise<string>, overrideOf?: (session: unknown) => string | undefined, config?: {policy?: string}}} ApprovalLike
  * @typedef {object} ServiceDeps
@@ -294,6 +298,16 @@ const TIDY_TEXT = {
 export const WARMUP_TIDY_HINT = {
   en: (/** @type {{count: number, chars: number}} */ b) => `Memory is due for a tidy: ${b.count} entr${b.count === 1 ? 'y' : 'ies'} / ${b.chars} chars changed since the last consolidation. Say "tidy my memory" and the model will merge what says the same thing (old entries are superseded, never deleted); /memory tidy prints the plan.`,
   zh: (/** @type {{count: number, chars: number}} */ b) => `记忆该整理了：自上次整理以来 ${b.count} 条 / ${b.chars} 字符。说「整理一下记忆」，模型会把讲同一件事的合并（旧条目降级留痕，不物理删）；/memory tidy 可先看计划。`,
+}
+
+/**
+ * 预热段末行的「用户点过全库整理」提示（收边 §2）：面板按钮登记的待整理标记存在时
+ * 追加一句，请模型在本会话跑一次全库 tidy。它只提示，绝不自动跑——整理必须由模型在
+ * 会话内显式落写（审计红线），跑完 supersede 会清掉标记、下一会话这里就不再出现。
+ */
+export const WARMUP_TIDY_REQUEST = {
+  en: 'The user asked for a whole-library tidy from the panel. Run one memory tidy over the whole library now: read the plan (`memory action=tidy`, or `/memory tidy`) and then merge what says the same thing with `memory action=supersede`. This is a queued request, not an automatic pass — the entry-merge judgement is yours.',
+  zh: '用户点过全库整理，请跑一次 memory tidy（全库）：先看计划（`memory action=tidy` 或 `/memory tidy`），再用 `memory action=supersede` 把讲同一件事的合并。这是排队式请求，不会自动执行——哪几条讲同一件事由您判断。',
 }
 
 /**
@@ -2244,6 +2258,13 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
         if (backlog.due && frozen.length > 0) {
           frozen = `${frozen}\n\n${(WARMUP_TIDY_HINT[live.language] ?? WARMUP_TIDY_HINT.en)(backlog)}`
         }
+        // 收边 §2：用户点过的「整理全库」标记存在时，在同一处（末行）追加排队提示。
+        // 这一行不受「空块不硬塞」限制——它是用户点过的动作，模型必须看见；块因此非空时
+        // 也照常落 snapshot 审计行（模型可见 ⟺ 落盘）。
+        const queuedTidy = store.tidyRequestPending()
+        if (queuedTidy !== null) {
+          frozen = `${frozen}${frozen.length > 0 ? '\n\n' : ''}${WARMUP_TIDY_REQUEST[live.language] ?? WARMUP_TIDY_REQUEST.en}`
+        }
         snapshots.set(session, frozen)
         store.auditAppend({
           action: 'snapshot',
@@ -3237,11 +3258,11 @@ export function renderMemoryRecallResult(/** @type {object} */ _args, /** @type 
 }
 
 /**
- * 注册面板 JSON 路由（F9，只读；webServer 缺失的 profile 自动跳过）。
- * 写操作（含审批）不进面板路由：审批在 DSH 内置审批 UI 完成，面板只做
- * 条目浏览/搜索/预算条/审计尾。路由随插件生命周期自动撤销。
- * options 传 live（热字段：panelEntriesLimit/panelAuditLimit/panel/language 随
- * 设置变更即时生效）。
+ * 注册面板 JSON 路由（F9；webServer 缺失的 profile 自动跳过）。
+ * 除「整理全库」登记（收边 §2，用户动作、只写一条待整理标记）外全部只读：审批决策
+ * 在 DSH 内置审批 UI 完成，面板不做任何审批决策、也不改记忆条目。路由随插件生命周期
+ * 自动撤销。options 传 live（热字段：panelEntriesLimit/panelAuditLimit/panel/language
+ * 随设置变更即时生效）。
  * @param {import('@deepseek-ai/cordis').Context} ctx - Cordis 上下文。
  * @param {MemoryService} service - ctx.memory。
  * @param {{panelEntriesLimit: number, panelAuditLimit: number, panel: {enabled: boolean}, language: 'en'|'zh'}} options - 运行期可变值容器。
@@ -3371,6 +3392,43 @@ export function registerWebRoutes(ctx, service, options) {
         }
       },
     }))
+    // 收边 §2（规格 3.5.9 的排队式按钮）：GET 读待整理标记，POST 登记一条。
+    // 面板按钮是**用户动作**，不是模型回合：connection.fetch 路由没有会话上下文，故写
+    // 上下文用不含 session 的占位 agent，走 turn 外 gate（与 /memory 命令同一条
+    // approval/request waterfall 与同一套 writePolicy）。只写标记——不调模型、不碰条目；
+    // 「整理全库」本身仍由模型在会话内显式跑（审计红线），跑完 supersede 清掉标记。
+    routeDisposers.push(connection.fetch.register({
+      path: '/api/memento/tidy-request',
+      methods: ['GET', 'POST'],
+      requestBody: 'buffered',
+      fetch: async (/** @type {Request} */ request) => {
+        try {
+          if (request.method === 'GET') {
+            return panelJson(200, { pending: service.store.tidyRequestPending(), language: service.language })
+          }
+          /** @type {unknown} */
+          let body
+          try {
+            body = await request.json()
+          } catch {
+            return panelJson(400, { error: 'body must be an empty JSON object {}' })
+          }
+          const input = /** @type {{[key: string]: unknown}} */ (body)
+          if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+            return panelJson(400, { error: 'body must be an empty JSON object {}' })
+          }
+          // 按钮不带任何参数：多余字段一律 400（同 /api/memento/session 的严格度）。
+          if (Object.keys(input).length !== 0) {
+            return panelJson(400, { error: 'body must be an empty JSON object {} (the button carries no arguments)' })
+          }
+          const write = { agent: PANEL_AGENT, gate: makeCommandGate(ctx, { agent: PANEL_AGENT }) }
+          const result = await service.requestTidy({ source: PANEL_SOURCE }, write)
+          return panelJson(200, { pending: result.request, created: result.created, language: service.language })
+        } catch (error) {
+          return panelJson(500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    }))
     // 路由随插件生命周期撤销：fiber 卸载时逆序执行全部 disposer。
     ctx.effect(() => () => {
       for (const dispose of routeDisposers.splice(0).reverse()) void dispose?.()
@@ -3392,6 +3450,16 @@ function validSwitchSessionId(/** @type {unknown} */ value) {
 function panelJson(/** @type {number} */ status, /** @type {unknown} */ value) {
   return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json; charset=utf-8' } })
 }
+
+/**
+ * 面板动作的写上下文占位 agent（收边 §2）：浏览器按钮不来自任何会话，connection.fetch
+ * 路由也没有会话上下文，所以这里是一个**不含 session** 的占位对象——审计行的 sessionId
+ * 因此恒为 null（如实记「这个动作不属于任何会话」，不编造归属）。审批走与 /memory 命令
+ * 同一条 turn 外 gate（approval/request waterfall ＋ 同一套 writePolicy），审批服务那条
+ * 「必须有 open turn」的路不参与。
+ * @type {{session?: MemorySessionLike | null}}
+ */
+const PANEL_AGENT = {}
 
 export { MemoryError, InvalidInputError, BudgetExceededError, EntryNotFoundError, AmbiguousMatchError, StaleWriteError, WriteDeniedError, NoAgentError, ProposalNotFoundError, AdapterNotFoundError, AdapterPayloadError, SessionMemoryOffError }
 export { buildWriteReason, isMemoryWriteRequest, applyWritePolicy, normalizeWritePolicy, resolveWritePolicy, validateWritePolicies, parseWriteReason }

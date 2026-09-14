@@ -34,7 +34,7 @@
 - **Model-visible ⟺ logged.** The injected snapshot lands verbatim in `system/message`; every write is reconstructable from `approval/asked` + `approval/decided` + the plugin's own audit table.
 - **Bounded and honest.** Soft per-track/per-layer warning lines (default user 2000 / agent 4000). Crossing one never blocks a write — it only flags that the layer is worth consolidating. Never truncated, never auto-compacted.
 - **Per-session switch.** Every session has its own memory switch (plugin-owned SQLite table, schema v6; default on). Off means injection stops (the frozen warm-up block is dropped at once), recall is refused (`SESSION_MEMORY_OFF`), writes are refused at the same layer as the approval gate, and the observation channel neither scans the session nor selects it as history. Management reads (`/memory list` / `budgets` / `audit` / `export`) stay available. Toggle with `/memory session on|off` or the composer switch; the switch state itself never enters the session log, and its audit rows carry `text: null`.
-- **Tidy and measure.** A model-driven tidy pass merges entries that say the same thing into one `merged`-tagged entry and demotes the old ones to `superseded` — kept on disk, out of every session's view, never deleted. It never crosses buckets (`track × scope × agentKey`, plus `workspaceKey` on the workspace layer) and never starts by itself: a read-only `agent/turn-stopping` check only flags that the backlog crossed the line (one `tidy-due` audit row plus a line at the end of the next warm-up block). `/memory stats` reports the three observability numbers (repetition rate, recall hit rate, injection volume); the success rate is deliberately left blank, because this repo has no signal source for "did the injected block actually land".
+- **Tidy and measure.** A model-driven tidy pass merges entries that say the same thing into one `merged`-tagged entry and demotes the old ones to `superseded` — kept on disk, out of every session's view, never deleted. It never crosses buckets (`track × scope × agentKey`, plus `workspaceKey` on the workspace layer) and never starts by itself: a read-only `agent/turn-stopping` check only flags that the backlog crossed the line (one `tidy-due` audit row plus a line at the end of the next warm-up block). `/memory stats` reports the three observability numbers (repetition rate, recall hit rate, injection volume) in the drawer too; the success rate is deliberately left blank, because this repo has no signal source for "did the injected block actually land". The panel's **Tidy the whole library** button is a queue, not an action: it writes one marker row (`tidy_requests`, schema v7) behind the same approval policy, the next session's warm-up asks the model to run a whole-library tidy, and the marker turns `done` when a tidy write lands — nothing is merged from the panel.
 
 - **Govern the memory: roll a demotion back, arbitrate a conflict by facet.** `restore` walks a demotion the other way (`superseded → active`, `version` untouched, back into every session's view) and is the only route out of the demoted state. `arbitrate` settles the case where one fact carries two sources: it decides on **one facet**, and the direction comes from a fixed table — ability follows the observation, preference follows the self-report, and the other five facets keep **both** entries and tag each `gap` (the gap itself is the evidence). The table is the direction, so there is no reverse argument to pass, and inside a group the most recently updated entry is the one kept. Both actions ride the same approval gate, the same per-session switch and the same bucket rules as every other write, and both leave an audit trail: `restore` per entry, `arbitrate` per demotion (`text: null`, ids only), `arbitrate-tag` per tag, and one closing `arbitrate` summary naming who was kept, who was demoted and why.
 
@@ -108,7 +108,7 @@ All tunables are Schemastery `Config` fields (changeable from cordis.yml). Inval
 | `yammory-tidy` | skill | User-initiated memory tidy: reads the read-only plan, merges what says the same thing, demotes the old entries (kept, never deleted), never crosses buckets. Source: `skills/yammory-tidy/`; judgement rules in `references/merge-rules.md` |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `restore <id...>` · `arbitrate <id...>` · `tidy [--days=N]` · `stats` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` · `observe [--days=N]` · `session [on|off]` |
 | session switch | composer dock | Per-session memory switch on the composer (`conversation.composer.dock`, session scope): shows the current state and toggles it through `GET`/`POST /api/memento/session` (the route rides the same `connection.fetch` trust fence as the panel routes) |
-| web panel | client drawer | Read-only: browse entries, search, budget bars, audit tail; the floating entry button can be hidden (`panel.enabled`) |
+| web panel | client drawer | Read-only for memory content: browse entries, search, budget bars, the three observability numbers, audit tail; one user-action button queues a whole-library tidy (marker only); the floating entry button can be hidden (`panel.enabled`) |
 | settings section | DSH settings sidebar → `yammory-system` | Edit every config field (except `enabled`) without touching files; live vs reload-required timing is marked on the page |
 
 ## MCP server
@@ -126,7 +126,7 @@ Run it directly:
 
 ```sh
 node bin/mcp-server.mjs
-# or, after npm install: npx yammory_system-mcp
+# or, once the package is installed from the GitHub channel: npx yammory_system-mcp
 ```
 
 The database path is `$DSH_MEMENTO_DB_PATH` (absolute, or relative to `$DSH_HOME`); it defaults to `$DSH_HOME/dsh-memento/memory.db`.
@@ -138,7 +138,7 @@ Claude Desktop (`claude_desktop_config.json`) example:
   "mcpServers": {
     "yammory_system": {
       "command": "npx",
-      "args": ["-y", "yammory_system-mcp"],
+      "args": ["-y", "-p", "github:KhalilYamber/yammory-system", "yammory_system-mcp"],
       "env": {
         "DSH_MEMENTO_DB_PATH": "/home/you/.dsh/dsh-memento/memory.db"
       }
@@ -147,12 +147,17 @@ Claude Desktop (`claude_desktop_config.json`) example:
 }
 ```
 
+`npx` resolves the package from the GitHub channel here (this repo is not on the npm registry yet), so the `-p github:…` spec is what fetches it.
+
 The server is read-only: no network, no writes, no approval gate — search and stats only.
 
 ## How it's different
 
 | Plugin | What it is | yammory_system's difference |
 |---|---|---|
+| dsh-mneme | self-evolving memory with a broad feature surface | small-corpus profile only: it competes by speaking at the user's measured level, not by widening features |
+| dsh-meow-memory | seven-layer store with BM25 retrieval | no retrieval engineering: a per-domain level table plus facet arbitration |
+| dsh-persona-memory | persona injection into the prompt | one layer deeper: a **per-domain knowledge level** and **facet arbitration** on top of the standing profile |
 | dsh-memory-evolve | memory warehouse / evolution loops | a typed service seam, approval gate, and session-log audit; no warehouse ambition |
 | dsh-mnemon | memory store helper | protocol + gate + audit, not another store |
 | dsh-kb-sieve | knowledge-base sieving | no retrieval engineering: small-corpus substring search, cross-session recall via `session_search`/`sessionQuery` |
@@ -161,7 +166,9 @@ The server is read-only: no network, no writes, no approval gate — search and 
 | dsh-external/Recall | external agent memory | local-first, zero-network, rides DSH's own approval seam |
 | Official MCP memory examples | DSH's stated "memory = external MCP" position | the **native first-party** complement: same goal, no external server; both coexist |
 
-The name is **`yammory_system`** (published on npm and GitHub). Not `dsh-recall` (confusable with dsh-external/Recall), not the deleted legacy name `dsh-memory`.
+The two differences that hold against today's field are the last pair in the table above: a **seven-facet profile carrying a per-domain knowledge level** (it decides how the assistant speaks, before any retrieval happens), and **facet arbitration** (it decides how a two-source conflict settles — ability follows observation, preference follows the self-report, the other five facets keep both and tag each `gap`).
+
+The name is **`yammory_system`** (installed from the GitHub channel; not on the npm registry yet). Not `dsh-recall` (confusable with dsh-external/Recall), not the deleted legacy name `dsh-memory`.
 
 ## dsh-memory-protocol v1
 
@@ -225,7 +232,7 @@ And the parts deliberately refused: hidden auto-summarization into model-private
 
 ```sh
 npm install              # node ^22.19 || >=24
-npm test                 # node --test: 141 tests
+npm test                 # node --test: 347 tests
 npm run lint             # oxlint
 npm run test:conformance # dsh-memory-protocol v1 conformance suite
 npm run typecheck        # tsc --checkJs gate

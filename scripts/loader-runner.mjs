@@ -72,10 +72,10 @@ try {
       if (tool === undefined) throw new Error('reload: memory tool is missing')
       const languageOk = language === 'zh' ? tool.description.includes('读写') : tool.description.includes('approval-gated')
       if (!languageOk) throw new Error(`reload: memory tool description does not reflect language=${language}`)
-      if (connection.list().length !== 5) throw new Error(`reload: expected 5 routes, got ${connection.list().length}`)
+      if (connection.list().length !== 6) throw new Error(`reload: expected 6 routes, got ${connection.list().length}`)
     }
 
-    // Phase 1: initial mount — seam live, English description, 5 routes.
+    // Phase 1: initial mount — seam live, English description, 6 routes.
     assertBase('en')
 
     // Phase 2: language:'zh' — the fiber restarts with the new config; the

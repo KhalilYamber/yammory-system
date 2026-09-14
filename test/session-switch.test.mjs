@@ -126,7 +126,7 @@ test('F5 迁移：v5 库升到 v6 建出 session_switch 表，旧数据原样保
 
   const store = openMemoryStore(dbPath)
   assert.equal(Number(store.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value), SCHEMA_VERSION, '迁移后 = 当前 SCHEMA_VERSION')
-  assert.equal(SCHEMA_VERSION, 6, 'F5 把 schema 推到 v6')
+  assert.equal(SCHEMA_VERSION, 7, 'F5 把 schema 推到 v6；收边（tidy_requests）推到 v7')
   assert.equal(store.listEntries()[0].text, 'v5 遗留条目', '旧条目原样保留')
   assert.equal(store.profileGet('数学')?.tier, '本科', 'profile 表原样保留')
   assert.equal(store.sessionEnabled('s-v5'), true, '新表就绪：无行即开')

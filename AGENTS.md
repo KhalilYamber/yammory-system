@@ -25,12 +25,12 @@ lib/observe.mjs      观察通道纯函数核心（闸一授权收窄 / 闸二�
 lib/consolidate.mjs  整理机纯函数核心（热度选候选 / `merged` 跳过 / 桶分组与相似线索 / 开工线积压核算，零依赖）
 lib/stats.mjs        可观测三数纯函数（重复率 Jaccard / 召回命中率 / 注入量；成功率恒 null 不冒充，零依赖）
 lib/strings.mjs      模型可见/命令面双语词表（预热头/约束头/四档说话要求/分组标题/提案头 ＋ `COMMAND_TEXT` 命令面文案包与 `CommandTextBundle` typedef，零依赖）
-lib/store.mjs        node:sqlite Provider：条目表+审计账本+迁移（SCHEMA v1→v6，含 `session_switch` 会话开关表与 `entries.status` 降级/回滚/打标写入；零依赖）
+lib/store.mjs        node:sqlite Provider：条目表+审计账本+迁移（SCHEMA v1→v7，含 `session_switch` 会话开关表、`tidy_requests` 全库整理标记表与 `entries.status` 降级/回滚/打标写入；零依赖）
 lib/retrieval.mjs    可插拔检索 Provider seam：keyword 主路径（分词＋多词召回＋相关度排序，F2 层 A）+ substring 对照 + vector 可选后端（零 DSH 依赖）
 lib/embedding.mjs    嵌入 Provider seam：确定性伪嵌入（零 DSH 依赖，仅 node: 内置模块）
 lib/mcp.mjs          stdio MCP server 导出：只读工具面 memory_search / memory_stats（零 DSH 依赖）
 bin/mcp-server.mjs   MCP 可执行入口（零 DSH 依赖）
-client/client.js     Web 面板（零构建 vanilla，只读；en/zh 随 language 配置；经 dsh.client 注入）+ 会话开关钮（`conversation.composer.dock`，session scope）
+client/client.js     Web 面板（零构建 vanilla，对记忆内容只读；en/zh 随 language 配置；经 dsh.client 注入）+ 会话开关钮（`conversation.composer.dock`，session scope）+ 「整理全库」排队按钮（只登记 `tidy_requests` 标记，不调模型、不碰条目）
 scripts/             机械门：verify-readmes.mjs（五语一致性）、check-coverage.mjs（覆盖率）、verify-self-contained.mjs（拒绝仓库外依赖）、verify-artifacts.mjs（制品齐全+语法+导入）、loader-runner.mjs（真实 Loader composition）
 cordis.patch.yml     bundle 声明（insert yammory_system）
 package.json         npm 元数据；files 白名单 = 发布内容（含 docs/ 协议三件套与一致性套件）
@@ -84,7 +84,7 @@ npm run test:conformance  # 协议一致性套件（黄金参考；第三方 Pro
 - **模型可见 ⟺ 落盘**：注入模型的快照文本可自会话日志重建（system/message + snapshot 审计行 + 审批 reason 携带完整载荷）。
 - **会话级开关不可绕过**：`session_switch` 表的「关」状态在 `MemoryProtocolCore` 写方法内部拦截（与审批门同级、在 gate 与落盘之前），预热段/召回/观察在 `index.mjs` 各自入口拦截；开关状态**绝不进会话日志**（决策 4 的自适应门不变），审计行 `text` 恒为 `null`。
 - **审批门不可绕过**：写路径的强制点位于 `MemoryProtocolCore`（`lib/protocol.mjs`）写方法内部（`MemoryService` 继承它并注入 `ctx.approval.request` 传输），不在工具层；`writePolicy` 是 Config，模型不可见、不可改；禁用（`enabled:false`）时一切贡献整体消失，不留半残状态。
-- **整理机不越界**（F6）：语义判断（哪几条在讲同一件事）由**当前会话的模型**做，`supersede` 的强制点在同一个 `MemoryProtocolCore` 里——不新增后台模型通道、不新增定时器、不新增后台进程；`agent/turn-stopping` 只读算积压、过线只给提示（`tidy-due` 审计行 ＋ 预热段末行），**绝不自动跑整理**。降级只从 `active → superseded`（留痕、可回滚、绝不物理删），只动会话可见集，桶内不跨；降级审计行 `text` 恒为 `null`（只记 id），每批另落一行 `consolidation` 变更摘要。
+- **整理机不越界**（F6）：语义判断（哪几条在讲同一件事）由**当前会话的模型**做，`supersede` 的强制点在同一个 `MemoryProtocolCore` 里——不新增后台模型通道、不新增定时器、不新增后台进程；`agent/turn-stopping` 只读算积压、过线只给提示（`tidy-due` 审计行 ＋ 预热段末行），**绝不自动跑整理**。降级只从 `active → superseded`（留痕、可回滚、绝不物理删），只动会话可见集，桶内不跨；降级审计行 `text` 恒为 `null`（只记 id），每批另落一行 `consolidation` 变更摘要。面板「整理全库」按钮同理只是**排队**（决策 21）：登记一条 `tidy_requests` 标记（过同一套 `writePolicy` 的 turn 外 gate），提示进下次会话预热段末行，跑到清标记由 `supersede` 完成——面板点一下绝不等于记忆被整理过。
 - **治理不越界**（S5）：`restore` 只走 `superseded → active`（反向一律响亮失败，它不是「改状态」的通用口子）；`arbitrate` 的**方向由 `ARBITRATION_BY_FACET` 表决定**，工具与命令面都没有反向参数——「能力听观察、意愿听自陈」是代码不变量；coexist 面（其余五面）一条都不降级、两组各打 `gap` 标。两者复用 F6 的审批门、store 面、审计形状与桶内边界，**同样不新增 Config / 依赖 / 定时器 / 后台模型通道**；降级行审计 `text` 恒为 `null`。置信门槛刻意留 v2。
 - **失败要大声**：库损坏/版本过新/非法配置在加载期抛错；子串歧义报 `AMBIGUOUS_MATCH`；绝不静默吞、绝不静默截断。（v2：写入不因容量被拒，预算只是软预警线。）
 - **本地优先**：零网络、零凭据；记忆库只写 `dbPath`（默认 `$DSH_HOME/dsh-memento/memory.db`），POSIX 权限 0600。

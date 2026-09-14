@@ -107,7 +107,7 @@ memory 工具(add)
 8. **V2 观察面的命令写路径（turn 外审批门）**：`/memory` 命令在模型回合之外执行，而审批服务 `ctx.approval.request` 要求 open turn（`approval/asked + approval/decided` 审计对必须被 turn 包围，这是 DSH 持久化日志的 commit/replay 硬边界）。命令写因此走**同一** `approval/request` waterfall（同一 answerer 链、同一 `writePolicy` 裁决），差异只在审计落点：turn 内路径落审批审计对，命令路径落插件审计表 + `command/done`；被拒的命令写落 `<action>-denied` 行（见决策 2）。会话级 `never` 策略按公开 API（`approval.overrideOf`）在派发前预检，与审批服务同语义、不可绕过。这是对审批 seam 约束（审计对需 turn 包围）的最小偏离，已文档化并测试（`test/v2.test.mjs`）。
    - **export/import 备份迁移对**：`/memory export` 是纯只读路径（条目 + 预算的 JSON 导出，schema 标记 `memory-export-v1`，不落审计、不走审批门）。`/memory import <路径>` 或 `import '{...}'`（内联 JSON）读回该文档：校验 plugin/schema 标记与条目形状（未知 schema 版本响亮拒绝），条目数上限 `MAX_IMPORT_ENTRIES`（1000），然后经 `service.seed` 单次审批 + 全量预算预检 + 单事务原子落盘；source/workspaceKey/agentKey 随文档保留，条目获得新 id 与新时间戳、召回计数归零，提案/审计行不迁移（预算仍由 Config 决定）。
 
-9. **V2 面板只读**：Web 面板（`dsh.client` 零构建抽屉）只做条目浏览/搜索/预算条/审计尾；审批与写操作一律发生在 DSH 内置审批 UI + `memory` 工具（否则会与内置审批呈现重复并产生分歧）。
+9. **V2 面板只读**：Web 面板（`dsh.client` 零构建抽屉）对记忆内容只读：条目浏览/搜索/预算条/可观测三数/审计尾；审批与写操作一律发生在 DSH 内置审批 UI + `memory` 工具（否则会与内置审批呈现重复并产生分歧）。唯一的非只读动作是「整理全库」按钮（决策 21）：它只登记一条待整理标记。
 
 10. **检索引擎 = 大小写不敏感 instr + 召回计数排序，不用 FTS5**。
     - 实测（Node 22 内置 SQLite，FTS5 可用）：trigram 分词器无法索引单字 CJK 字符——`'中文测试'` 中查 `'中文'` 零命中；unicode61 把 CJK 连续段当一个 token，仅前缀可查。本插件语料以中文记忆为主，子串语义必须对 CJK 成立，instr 是唯一正确的内置引擎。
@@ -291,7 +291,7 @@ gate → 预算复审 → 落盘 → 审计的完整流水线、唯一子串定�
   （自上次整理以来 ≥2000 字符或 ≥10 条，另加 12 小时兜底），过线时落一行 `tidy-due` 审计（同进程
   按小时节流）并让下一个会话的预热段末行带一句提示；真整理由 `/memory tidy` 或用户开口显式发起。
   监听器整体吞住异常——该事件是串行派发，抛错会以错误收尾该轮，只读检查不该有这个权力。
-- **v1 不做**：全库整理与排队式按钮（v2）、跨桶合并、Dream、回滚（S5）。已降级条目不进
+- **v1 不做**：跨桶合并、Dream、回滚（S5）。全库整理的**排队式登记**由决策 21 补上（登记是标记表，整理仍由模型在会话内显式跑）。已降级条目不进
   `/memory export`（导出信封没有 `status` 字段，导回来会变成在场条目）。
 
 ### 19. 可观测三数（F7）：重复率 / 召回命中率 / 注入量
@@ -342,3 +342,30 @@ F6 让记忆有了负反馈回路，但那条回路当时只能往一个方向�
 - **与 F6 的分工**：`supersede` 管「同一来源的重复合并」，`arbitrate` 管「不同来源的冲突裁决」。
   两者复用同一套 store 面、审批门、审计形状与桶内边界；**都不新增 Config / 依赖 / 定时器 / 后台模型
   通道**。置信门槛（多高的把握才允许覆盖）刻意留 v2——它需要真实观察数据攒够才定得出线。
+
+### 21. 收边（面板两处 ＋ 门牌）：三数上屏，全库整理排队
+
+数据面早已就绪、界面上还空着的两处补上：面板读三数，面板按钮**排队**全库整理。方案见
+`docs/收边方案.md`。
+
+- **三数行由服务端渲染，面板照抄**：`GET /api/memento/stats` 返回 `stats` 与渲染好的 `lines`
+  （`statsLines` 与 `/memory stats` 同源）；`client/client.js` 把 `lines` 逐行贴进抽屉的「可观测三数」
+  区，语言跟随响应的 `language`。措辞只有一处出处，命令面与面板不会漂移；面板不重算任何数。
+- **按钮是排队，不是动作**：点击 → `POST /api/memento/tidy-request` → 新表
+  `tidy_requests(id, created_at, status)`（SCHEMA v6 → **v7**）落一条 `pending` 标记 → **下一个会话**
+  的预热段末行追加一句「用户点过全库整理，请跑一次 memory tidy（全库）」→ 模型在会话内跑完落写
+  （`supersede`）时标记转 `done` 并落一行 `tidy-request`/`cleared` 审计。登记只写标记：不调模型、
+  不碰条目、不经后台通道；整理动作永远是会话内、过审批门的显式写。
+- **登记幂等**：已有 `pending` 就原样返回它（`created: false`），重复点击不堆行；`done` 行保留在库里，
+  作为「用户点过、模型跑过」的痕迹（清除只改状态，绝不物理删）。
+- **面板动作没有会话，因此走 turn 外 gate**：`connection.fetch` 路由没有 agent，审批服务那条
+  「必须有 open turn」的路（决策 8）不参与。登记因此与 `/memory 命令` 同一条 `approval/request`
+  waterfall（同一 answerer 链、同一 `writePolicy`：`auto` 静默放行、`ask` 交给 UI answerer、`off` 拒绝），
+  写上下文里的 agent 不含 session——审计行 `sessionId` 恒为 `null`，如实记「这个动作不属于任何会话」，
+  不编造归属。审批载荷的 `track/scope` 写 `library/all`：全库范围不是任何真实桶，且它不是合法的
+  写策略键，策略解析自然落到全局或 `source:panel`。
+- **空块也带提示**：预热段有一条「无可渲染内容就返回空串」的纪律，排队提示是例外——它是用户点过的
+  动作，模型必须看见；块因此非空时照常落 `snapshot` 审计行（模型可见 ⟺ 落盘）。会话开关关掉的会话
+  仍然整段不注入，提示也不会出现（那种会话本来就不该替用户整理记忆）。
+- **不越界**：不新增 Config / 依赖 / 定时器 / 后台模型通道；不往会话日志 append 新事件类型；
+  面板不做任何写记忆操作。
