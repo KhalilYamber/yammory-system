@@ -9,6 +9,8 @@
 //     onClick / onChange / onInput 接成 addEventListener（click() 可直接触发）
 //   · 官方控件库的占位件：Button/Input/Tag/Pill/StateDot/Switch/Tooltip/Modal
 //     （只保留 props 与可见文字；观感由浏览器里的人眼终验）
+// 槽位组件默认一个都不渲染（设置卡片至今如此）；要断言某个槽位的组件时，
+// 在测试里显式调返回面上的 `renderSlot(name, props)`，它才把那一枚挂起来。
 // 断言口径因此从「innerHTML 里找字符串」改成「在渲染出来的元素树上找节点」。
 
 import assert from 'node:assert/strict'
@@ -296,6 +298,7 @@ function makePrimitives() {
     Tag: stub('Tag'),
     StateDot: stub('StateDot'),
     Switch: stub('Switch'),
+    IconDatabaseOutline16: stub('IconDatabaseOutline16'),
     Tooltip: function tooltipStub(/** @type {any} */ props) { return props.children },
     Modal: stub('Modal'),
   }
@@ -397,11 +400,16 @@ export async function mountClient(fetchImpl) {
   const slots = {
     injected: /** @type {string[]} */ ([]),
     registered: /** @type {object[]} */ ([]),
+    components: /** @type {Function[]} */ ([]),
     inject(/** @type {string} */ name, /** @type {Function} */ factory) {
       slots.injected.push(name)
       return factory()
     },
-    register(/** @type {object} */ options) { slots.registered.push(options); return () => {} },
+    register(/** @type {object} */ options, /** @type {Function} */ component) {
+      slots.registered.push(options)
+      slots.components.push(component)
+      return () => {}
+    },
   }
   /** @type {Function[]} */
   const cleanups = []
@@ -417,6 +425,18 @@ export async function mountClient(fetchImpl) {
     slots,
     cleanups,
     plugin,
+    /** 显式渲染某个已注册槽位的组件（测试用；每个测试最多调一次，渲染器只有一个根容器）。
+     *  槽位组件默认一律不渲染——设置卡片至今如此，本轮只是让侧栏入口可以被点一次。 */
+    renderSlot: (/** @type {string} */ name, /** @type {object} */ props = {}) => {
+      const index = slots.registered.findIndex((/** @type {object} */ options) => options.name === name)
+      assert.ok(index >= 0, `槽位未注册：${name}`)
+      const container = dom.document.createElement('div')
+      dom.document.body.appendChild(container)
+      const root = reactDomClient.createRoot(container)
+      root.render(moduleFor('react').createElement(slots.components[index], props))
+      flush()
+      return container
+    },
     /** 等异步取数落定并重渲染（测试里那些「点一下 → 回显」的步骤用它推进）。
      *  一轮 = 让出事件循环 ＋ 跑排队的 effect/setState；多跑几轮直到没有新排队项。 */
     render: async () => {

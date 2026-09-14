@@ -4,7 +4,9 @@
 // host 端 dsh.client 扫描把本文件作为 classic script 注入 __DSH_BOOT__ 图，
 // 执行时经 window.__ModuleLoader__.load 注册唯一 factory（id = 插件名，与
 // 宿主 graph row 一致；同文件多个 load 会产生永远不被物化的孤儿 factory）。
-// apply 挂载两块表面：浮层抽屉面板 + 宿主设置弹窗的一级设置项。
+// apply 挂载四块表面：侧栏底部入口（官方 sidebar.footer.action 槽）＋ 浮层抽屉面板
+// ＋ 会话标题栏的记忆开关 ＋ 宿主设置弹窗的一级设置项。入口的槽位注册失败时回落成
+// 右下角悬浮按钮（降级路径），两条路径共用同一套显隐与语言开关。
 // 面板只读：条目浏览/搜索/预算条/审计尾/可观测三数，全部走本插件自注册的
 // /api/memento/* JSON 路由（只走公开 API）。写与审批在 DSH 内置审批 UI 完成，
 // 面板不产生任何模型可见内容、不做任何审批决策。唯一的非只读动作是「整理全库」
@@ -30,20 +32,45 @@ const PANEL_ID = 'yammory_system-panel'
 /** 本页浮层根节点引用（设置页 panel.enabled 开关即时切换用）。 */
 let panelOpenButton = null
 
-/** 浮层开关的即时生效面：切显隐；开启时根节点缺失（上次探测为关）则重建。 */
+/**
+ * 降级路径标记：侧栏入口没能落座时为 true（宿主没声明那个槽、或注册同步抛错）。
+ * 悬浮按钮只在降级路径存在（主路径由侧栏入口承担），这道闸由 `bootPanel`（挂不挂）
+ * 与 `setPanelButtonVisible`（掀不掀）两处一起看守；入口一旦落座，
+ * `retireFloatingSeat` 就地把它关掉。
+ */
+let floatingSeat = false
+
+/**
+ * 设置页保存 panel.enabled 后的即时生效面：显隐入口，并切换旧悬浮根节点。
+ * 入口显隐走模块级开关（侧栏与悬浮两条路径都认它）；悬浮根节点只在降级路径存在，
+ * 主路径那次重建请求会被这里的前置闸挡下，不会冒出悬浮按钮。
+ */
 function setPanelButtonVisible(visible) {
+  setEntryEnabled(visible === true)
+  if (!floatingSeat) return
   if (panelOpenButton === null) panelOpenButton = document.getElementById(PANEL_ID)
   if (panelOpenButton !== null) {
     panelOpenButton.style.display = visible ? '' : 'none'
   } else if (visible) {
-    void bootPanel({ onToggle: () => {} })
+    void bootPanel({ onToggle: () => { drawerToggle.current() } })
   }
+}
+
+/**
+ * 入口在侧栏落座后退役悬浮路径：关掉 `floatingSeat` 闸并隐藏本代已挂上的旧根节点。
+ * 只认 `panelOpenButton`（本代 `installPanel` 自己记下的那一个），不去 `getElementById`
+ * 找可能残留的上一代节点：那不是本代的东西，藏错了等于把别人手上的入口掐掉。
+ * 不卸载 React 根（`setPanelButtonVisible` 的前置闸已经保证它不会再被掀开）。
+ */
+function retireFloatingSeat() {
+  floatingSeat = false
+  if (panelOpenButton !== null) panelOpenButton.style.display = 'none'
 }
 
 /** 面板文案（en 源文 / zh 译文；语言来自 /api/memento/entries 响应的 language 字段，缺省 en）。 */
 const STRINGS = {
   en: {
-    open: '🧠 Memory',
+    open: 'Memory',
     title: 'yammory_system memory',
     refresh: 'Refresh',
     close: 'Close',
@@ -73,7 +100,7 @@ const STRINGS = {
     loadFailed: (message) => `Load failed: ${message} (panel is read-only; make sure the Web profile has yammory_system loaded)`,
   },
   zh: {
-    open: '🧠 记忆',
+    open: '记忆',
     title: 'yammory_system 记忆',
     refresh: '刷新',
     close: '关闭',
@@ -146,13 +173,17 @@ async function probePanelState() {
 }
 
 /**
- * 启动探测：panel.enabled=false 时入口按钮不渲染（设置面板可随时改回）；
- * 探测失败按开启处理，行为与未引入开关前的版本一致。
- * @param {{ onToggle: () => void }} hooks - 入口按钮的开合回调。
+ * 启动探测：语言与显隐落到模块级开关（侧栏入口的文案与显隐都靠它，主路径也要跑）；
+ * 悬浮按钮只属于降级路径（`floatingSeat`），主路径探测完即返回，不挂右下角按钮。
+ * @param {{ onToggle: () => void }} hooks - 入口按钮的开合回调（只有降级路径用得上）。
  */
 async function bootPanel(hooks) {
   const state = await probePanelState()
-  if (!state.enabled) return
+  entryLanguage = state.language
+  entryEnabled = state.enabled
+  // 语言与显隐都要等探测返回：已挂载的入口得跟着重渲染，否则先挂上的那一枚会把标签钉死在 en。
+  publishEntry()
+  if (!state.enabled || !floatingSeat) return
   installPanel({ ...state, onToggle: hooks.onToggle })
 }
 
@@ -226,10 +257,16 @@ function DrawerHolder() {
 // @deepseek-ai/dsh-client-ui-primitives；色值一律来自 --dsw-* 令牌（亮暗自动跟随）。
 
 /** 面板自造样式（定位、滚动与排布；观感由官方控件与令牌承担）。
- * 入口按钮由官方 Button 承担观感，这里只补定位与浮起（elevation 令牌）。 */
+ * 降级路径那枚悬浮入口由官方 Button 承担观感，这里只补定位与浮起（elevation 令牌）；
+ * 侧栏入口自带按钮语义，几何照抄同槽位占用者（ui-cordis 的 CordisPanel `.badge`）。 */
 const PANEL_LAYOUT_CSS = `
 #yammory_system-panel { position: fixed; z-index: 2147483000; font: 13px/1.5 system-ui, "Segoe UI", sans-serif; }
 #mem-open { position: fixed; right: 16px; bottom: 56px; z-index: 2147483000; box-shadow: var(--dsw-elevation-prominent); }
+/* 侧栏入口（sidebar.footer.action）。类名刻意避开抽屉条目行的 .mem-entry：两条同权重规则
+   并存时后写的赢，那套「42px 高、无分隔线」会盖到记忆行上，把抽屉的条目列表压坏。 */
+.mem-side-entry { display: inline-flex; align-items: center; gap: 8px; width: 100%; height: 42px; margin: 0; padding: 0 10px 0 8px; border: none; border-radius: 12px; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 14px; text-align: left; cursor: pointer; overflow: hidden; }
+.mem-side-entry:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.mem-side-entry-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #mem-drawer { position: fixed; right: 0; top: 0; bottom: 0; width: 460px; max-width: 92vw; display: flex; flex-direction: column;
   background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); border-left: 1px solid var(--dsw-alias-border-l2); box-shadow: var(--dsw-elevation-panel); }
 .mem-head { padding: 10px 12px; border-bottom: 1px solid var(--dsw-alias-border-l2); display: flex; gap: 6px; align-items: center; }
@@ -474,7 +511,68 @@ function PanelContent(props) {
     jsx(TidyRow, { primitives, S, onLanguage }))
 }
 
-/** 入口按钮（官方 Button）；点击开合抽屉（抽屉本体挂在官方 shell.overlay 浮层里）。 */
+// ── 入口：侧栏底部槽位（主路径）＋ 右下角悬浮按钮（降级路径）────────────────
+// 侧栏入口占官方 `sidebar.footer.action`，与「设置」同处侧栏脚区，这是主路径：
+// 它不再与别的插件（如 dsh-tidewatch）争右下角那一块地方。槽位不可用时才回落到
+// 原来那枚右下角悬浮按钮，两条路径的显隐与语言共用下面这套模块级小开关。
+
+/** 面板入口的显隐与语言：模块级小开关（设置页 panel.enabled 与启动探测的即时生效面）。 */
+let entryEnabled = true
+let entryLanguage = 'en'
+const entryListeners = new Set()
+
+/** 通知已挂载的入口重渲染（显隐或语言变化后调用）。 */
+function publishEntry() {
+  for (const fn of entryListeners) fn()
+}
+
+/** 设置页保存后回写：切换入口显隐，并通知已挂载的入口组件重渲染。 */
+function setEntryEnabled(next) {
+  if (entryEnabled === next) return
+  entryEnabled = next
+  publishEntry()
+}
+
+/**
+ * 订阅入口开关。语言与显隐两类变化都经 `publishEntry` 广播，故用版本号当重渲染信号：
+ * 直接 set 一个没变的值时 React 会跳过渲染，语言就落不到已挂载的那一枚入口上。
+ */
+function useEntryEnabled() {
+  const [, bump] = react.useState(0)
+  react.useEffect(() => {
+    const notify = () => { bump((n) => n + 1) }
+    entryListeners.add(notify)
+    return () => { entryListeners.delete(notify) }
+  }, [])
+  return entryEnabled
+}
+
+/** 抽屉开合出口（apply 注入；入口组件不持有状态）。 */
+const drawerToggle = { current: () => {} }
+
+/**
+ * 侧栏底部入口（`sidebar.footer.action` 条目）：与「设置」同处侧栏脚区。
+ * 宽栏出「图标 ＋ 文字」，56px 窄栏只出图标（与同槽位的官方 CordisPanel 一致）。
+ * `panel.enabled === false` 时整条不渲染（设置页开回来即出现）。
+ */
+function MemoryEntryButton(props) {
+  const wide = props?.wide !== false
+  const enabled = useEntryEnabled()
+  if (!enabled) return null
+  const S = STRINGS[entryLanguage] ?? STRINGS.en
+  return jsx('button', {
+    type: 'button',
+    id: 'mem-entry',
+    className: 'mem-side-entry',
+    title: S.open,
+    'aria-label': S.open,
+    onClick: () => { drawerToggle.current() },
+  },
+  jsx(getPrimitives().IconDatabaseOutline16, { size: 16 }),
+  wide ? jsx('span', { className: 'mem-side-entry-label' }, S.open) : null)
+}
+
+/** 降级路径的入口（官方 Button，右下角悬浮）；只在侧栏槽位注册失败时挂载。 */
 function PanelButton(props) {
   const { primitives, S, onToggle } = props
   // 定位与层级内联一份（样式的第二层保险；控件观感仍由官方 Button 承担）。
@@ -589,7 +687,7 @@ function withTooltip(primitives, label, element, disabled) {
           writePolicy: 'Global write policy',
           writePolicies: 'Per-track/scope policies',
           writePoliciesHint: 'One per line: track/scope=policy or source:name=policy. Unknown keys fail validation on save.',
-          panelEnabled: 'Show the floating panel button',
+          panelEnabled: 'Show the sidebar memory entry',
           language: 'Language',
           budgetUserGlobal: 'user / user-global',
           budgetUserWorkspace: 'user / workspace',
@@ -657,7 +755,7 @@ function withTooltip(primitives, label, element, disabled) {
           writePolicy: '全局写策略',
           writePolicies: '按轨道/层粒度策略',
           writePoliciesHint: '每行一条：track/scope=策略 或 source:name=策略。保存时无法识别的键会被校验拒绝。',
-          panelEnabled: '显示悬浮窗入口按钮',
+          panelEnabled: '显示侧栏的记忆入口',
           language: '语言',
           budgetUserGlobal: 'user / user-global',
           budgetUserWorkspace: 'user / workspace',
@@ -816,8 +914,8 @@ function withTooltip(primitives, label, element, disabled) {
           zh: '给某一类记忆单独定策略，用来覆盖上面的全局值。每行一条：user/workspace=auto 或 source:<来源名>=off。没写到的照旧走全局策略；写错键保存时会被拦下。',
         }],
         ['panel.enabled', {
-          en: 'Shows or hides the floating “Memory” button in the bottom-right corner. Hiding it removes the entry point only; the plugin and this settings card keep working.',
-          zh: '右下角那枚「记忆」按钮的显隐。关掉只是入口不在，设置页这张卡片照旧，插件本身也照常工作。',
+          en: 'Shows or hides the “Memory” entry at the sidebar foot. Hiding it removes the entry point only; the plugin and this settings card keep working.',
+          zh: '侧栏底部那枚「记忆」入口的显隐。关掉只是入口不在，设置页这张卡片照旧，插件本身也照常工作。',
         }],
         ['language', {
           en: 'Language for the panel, snapshot wording and command output. Tool descriptions are fixed when the plugin loads, so they do not follow this.',
@@ -1385,7 +1483,6 @@ function withTooltip(primitives, label, element, disabled) {
           }
         }
         drawerClose.current = () => { setDrawerOpen(false) }
-        void bootPanel({ onToggle: () => { setDrawerOpen(disposeDrawer === null) } })
         if (!styleInstalled && typeof document !== 'undefined') {
           styleInstalled = true
           const tag = document.createElement('style')
@@ -1393,7 +1490,35 @@ function withTooltip(primitives, label, element, disabled) {
           tag.textContent = CARD_CSS
           document.head.appendChild(tag)
         }
+        // 面板 chrome 样式表（抽屉定位 ＋ 侧栏入口几何）也在 apply 装：主路径不跑 installPanel，
+        // 而侧栏入口与抽屉都要这份样式（installPanel 里那次留给降级路径，幂等）。
+        installPanelStyles()
         registerHeaderSwitch(ctx)
+        drawerToggle.current = () => { setDrawerOpen(disposeDrawer === null) }
+        // 侧栏底部入口（官方槽 sidebar.footer.action）：与「设置」同脚区。
+        // 落座与否由**工厂是否真的跑起来**判定：宿主已声明该槽时 inject 会同步调它
+        // （未声明则只是等着，不抛错），所以不能只看 try/catch。注册抛错或槽位一直
+        // 不来，都不静默丢入口——floatingSeat 落回右下角悬浮按钮。
+        let entryInSlot = false
+        try {
+          ctx.effect(() => ctx.slots.inject('sidebar.footer.action', () => {
+            // 槽位已声明（或后来才声明）：入口落座，并退役可能已经挂上的悬浮入口。
+            entryInSlot = true
+            retireFloatingSeat()
+            return ctx.slots.register({
+              name: 'sidebar.footer.action',
+              id: 'yammory-system-entry',
+              order: 20,
+            }, MemoryEntryButton)
+          }), 'yammory-system: sidebar entry')
+        } catch {
+          // 注册同步失败（同 id 撞车、kind 冲突之类）：入口落回右下角悬浮按钮。
+          entryInSlot = false
+        }
+        floatingSeat = !entryInSlot
+        // 探测一次：语言与显隐落到模块级开关（侧栏入口的文案与显隐都靠它，主路径也要跑）；
+        // 悬浮按钮只属于降级路径，故 bootPanel 内部还看 floatingSeat。
+        void bootPanel({ onToggle: () => { drawerToggle.current() } })
         // 抽屉走官方通栏浮层（shell.overlay）：宿主声明该槽时用它，抽屉渲染进它给的容器。
         ctx.effect(() => ctx.slots.inject('shell.overlay', () => ctx.slots.register(
           { name: 'shell.overlay', id: 'yammory-system-drawer', order: 40 },

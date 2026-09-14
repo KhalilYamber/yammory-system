@@ -419,11 +419,18 @@ test('收边面板：三数行照抄 stats 响应的 lines；「整理全库」�
   assert.equal(app.dom.window.plugin.id, 'yammory_system', 'client 半侧按插件名注册唯一 factory')
   assert.deepEqual(
     app.slots.injected,
-    ['conversation.session.header.actions', 'shell.overlay', 'settings.section'],
-    '开关钮在会话标题栏、抽屉挂官方通栏浮层、设置页仍是一级项',
+    ['conversation.session.header.actions', 'sidebar.footer.action', 'shell.overlay', 'settings.section'],
+    '开关钮在会话标题栏、入口在侧栏底部槽位、抽屉挂官方通栏浮层、设置页仍是一级项',
   )
-  assert.equal(app.slots.registered[1].name, 'shell.overlay')
-  assert.equal(app.slots.registered[1].id, 'yammory-system-drawer')
+  assert.equal(
+    app.slots.registered.some((options) => options.name === 'sidebar.footer.action' && options.id === 'yammory-system-entry'),
+    true,
+    '面板入口注册进侧栏底部槽位',
+  )
+  // 槽位账本不再是「1 号是浮层」：侧栏入口插在它前面，故按名字找，下次挪序不会再断在这里。
+  const overlaySeat = app.slots.registered.find((options) => options.name === 'shell.overlay')
+  assert.ok(overlaySeat, '抽屉注册进官方通栏浮层槽位')
+  assert.equal(overlaySeat.id, 'yammory-system-drawer')
 
   // ② 第一步（样式对齐）：自造 CSS 里不再有硬编码色值，浮起感走官方 elevation 令牌。
   const css = app.dom.styleText.join('\n')
@@ -431,11 +438,13 @@ test('收边面板：三数行照抄 stats 响应的 lines；「整理全库」�
   assert.equal(/rgba?\(/.test(css), false, '面板样式不含硬编码 rgba')
   assert.equal(css.includes('var(--dsw-elevation-prominent)'), true, '入口按钮的浮起感走官方 elevation 令牌')
 
-  // ③ 入口按钮（官方 Button，id 不变）开抽屉。
-  const open = app.dom.document.getElementById('mem-open')
-  assert.ok(open, '悬浮入口按钮已渲染')
-  assert.equal(open.attributes['data-test'], 'ui-button', '入口按钮换成官方 Button')
-  assert.equal(open.textContent, '🧠 记忆')
+  // ③ 入口搬进官方侧栏槽位（sidebar.footer.action）：宽栏出「图标 ＋ 文字」，点一下开抽屉。
+  app.renderSlot('sidebar.footer.action', { wide: true })
+  const open = app.dom.document.getElementById('mem-entry')
+  assert.ok(open, '侧栏入口已渲染（在官方槽位条目里）')
+  assert.equal(open.tagName, 'BUTTON', '入口是一枚原生 button，按钮语义不借官方 Button')
+  assert.equal(open.className, 'mem-side-entry', '入口类名（CSS 挂在它上面，刻意避开抽屉条目行的 .mem-entry）')
+  assert.equal(open.textContent, '记忆', '宽栏出「图标 ＋ 文字」')
   open.click()
   await app.render()
 
