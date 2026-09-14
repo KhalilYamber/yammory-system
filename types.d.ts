@@ -157,10 +157,10 @@ export interface MemoryService {
    *  opts.agentKey 给定时按会话可见集过滤（共享层 + 指定 agent 键）；缺省不过滤（管理面全量视图）。 */
   query(filter?: { track?: MemoryTrack; scope?: MemoryScope; text?: string; limit?: number }, opts?: { sessionId?: string; session?: MemorySessionLike | null; agentKey?: string }): MemoryQueryResult
 
-  /** 新增条目（审批门 + 预算门）。 */
+  /** 新增条目（审批门；容量是软预警线，越线只提示、不拦写）。 */
   add(input: MemoryEntryInput, write: MemoryWriteContext): Promise<{ entry: MemoryEntry; usage: MemoryUsage }>
 
-  /** 按唯一子串替换（审批门 + 预算门；零/多命中报错）。写定位 = 会话可见集：
+  /** 按唯一子串替换（审批门；零/多命中报错）。写定位 = 会话可见集：
    *  agentKey/workspaceKey 显式给定则覆盖写方会话的推导值。审批载荷携带将被改写的旧条目全文。
    *  facet/level 省略时保持原条目的画像坐标，显式传入才覆盖。 */
   replace(input: { track: MemoryTrack; scope: MemoryScope; match: string; text: string; source?: string; agentKey?: string; workspaceKey?: string; tags?: string[]; facet?: MemoryFacet | null; level?: number | null }, write: MemoryWriteContext): Promise<{ previous: MemoryEntry; entry: MemoryEntry; usage: MemoryUsage }>
@@ -168,11 +168,11 @@ export interface MemoryService {
   /** 按唯一子串删除（审批门；零/多命中报错）。写定位 = 会话可见集；审批载荷携带将被删除的条目全文。 */
   remove(input: { track: MemoryTrack; scope: MemoryScope; match: string; agentKey?: string; workspaceKey?: string }, write: MemoryWriteContext): Promise<{ entry: MemoryEntry; usage: MemoryUsage }>
 
-  /** 整合多条为一条（一次审批 + Provider 单事务原子执行；零/多命中或超预算响亮失败）。
+  /** 整合多条为一条（一次审批 + Provider 单事务原子执行；零/多命中响亮失败）。
    *  facet/level 落在新条目上（省略 = 无坐标）。 */
   consolidate(input: { track: MemoryTrack; scope: MemoryScope; matches: string[]; text: string; source?: string; workspaceKey?: string; agentKey?: string; tags?: string[]; facet?: MemoryFacet; level?: number }, write: MemoryWriteContext): Promise<{ removed: MemoryEntry[]; entry: MemoryEntry; usage: MemoryUsage }>
 
-  /** 批量种子（一次 ask 审批整批；任一条超预算整批拒绝）。 */
+  /** 批量种子（一次 ask 审批整批；越预警线照常落盘）。 */
   seed(inputs: MemoryEntryInput[], write: MemoryWriteContext): Promise<{ added: number; entries: MemoryEntry[] }>
 
   /** 分领域知识水平列表（读；按 domain 升序）。 */
@@ -184,6 +184,20 @@ export interface MemoryService {
   /** 写入一条分领域知识水平（审批门 + 审计；domain 主键，覆盖旧值）。
    *  tier 缺省由 level 推导；审批载荷携带 from → to。首次写入时 previous 为 null。 */
   setProfile(input: { domain: string; level: number; tier?: MemoryKnowledgeTier; source?: string }, write: MemoryWriteContext): Promise<{ profile: MemoryProfile; previous: MemoryProfile | null }>
+
+  /** 整理机落写（F6）：按 id 批量把旧条目降级为 `superseded`（留痕、可回滚、不物理删），
+   *  可同时落一条合并后的新条目（自动带 `merged` 标）。桶内不跨；未知/已降级 id 整批回滚。 */
+  supersede(input: { ids: string[]; text?: string; tags?: string[]; facet?: MemoryFacet | null; level?: number | null; source?: string; agentKey?: string; workspaceKey?: string }, write: MemoryWriteContext): Promise<{ superseded: MemoryEntry[]; entry: MemoryEntry | null; usage: MemoryUsage; tidyRequestCleared: boolean }>
+
+  /** 治理（S5）：把降级条目救回（只允许 `superseded → active`；version 不变）。 */
+  restore(input: { ids: string[]; source?: string }, write: MemoryWriteContext): Promise<{ restored: MemoryEntry[]; usage: MemoryUsage }>
+
+  /** 治理（S5）：分面裁决。按面决定保留谁/降级谁；coexist 面两条都留、各打 `gap` 标。
+   *  方向由 `ARBITRATION_BY_FACET` 决定，调用方无反向参数。 */
+  arbitrate(input: { ids: string[]; source?: string }, write: MemoryWriteContext): Promise<{ facet: string; direction: string; kept: MemoryEntry[]; demoted: MemoryEntry[]; tagged: MemoryEntry[]; usage: MemoryUsage }>
+
+  /** 「整理全库」排队登记（收边）：只写一条待整理标记，不碰条目、不调模型。 */
+  requestTidy(input: { source?: string }, write: MemoryWriteContext): Promise<{ request: { id: string; createdAt: number; status: string }; created: boolean }>
 }
 
 /** 适配器描述（/memory adapters 与接入指南展示面）。 */
