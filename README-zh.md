@@ -37,6 +37,8 @@
 - **会话级开关。** 每个会话一个自己的记忆开关（插件自有 SQLite 表，schema v6；默认开）。关掉即四件同时停：**注入停**（该会话的冻结预热块立刻作废）、**召回禁**（`SESSION_MEMORY_OFF`）、**写入停**（与审批门同层拦截）、**观察不碰**（本会话不扫，历史选区也不选它）。管理面只读（`/memory list` / `budgets` / `audit` / `export`）照常可用。用 `/memory session on|off` 或输入框下方的开关切换；开关状态本身绝不进会话日志，审计行 `text` 恒为 `null`。
 - **整理与度量。** 模型驱动的整理把「在讲同一件事」的条目并成一条带 `merged` 标的条目，旧条目降级为 `superseded`——仍在库里，退出每个会话的可见集，绝不物理删。它不跨桶（`track × scope × agentKey`，workspace 层再加 `workspaceKey`），也绝不自动跑：`agent/turn-stopping` 上挂的只读检查只提示积压过线（一行 `tidy-due` 审计 ＋ 下个会话预热段末行一句）。`/memory stats` 打印可观测三数（重复率 / 召回命中率 / 注入量）；成功率刻意留白，因为本仓库没有「注入之后对方是否真听懂了」这条信号源。
 
+- **治理：把降级走回来，把冲突按面裁决。** `restore` 把一次降级走反方向（`superseded → active`，`version` 不动，重新进入每个会话的可见集），它是脱离降级态的唯一出口。`arbitrate` 处理「同一条事实、两个来源」：在**一个面**上裁决，方向由固定表决定——能力听观察、意愿听自陈，其余五面**两条都留**并各打 `gap` 标（落差本身即证据）。表即方向，所以没有反向参数可传；同组内保留 `updatedAt` 最新者。两者与所有写路径同门：同一审批门、同一会话开关、同一桶内边界；审计也逐条留痕——`restore` 每条一行，`arbitrate` 每次降级一行（`text` 恒为 `null`，只记 id）、打标一行 `arbitrate-tag`，收尾一行 `arbitrate` 摘要写清保留了谁、降级了谁、理由是什么。
+
 两条轨道 × 两个层级 × 按 agent 隔离：`user` 轨（关于用户的事实）与 `agent` 轨（环境事实与约定），各自再分为 `user-global` 与 `workspace` 层，并按 `agentPreset` 隔离。快照在会话首次组装提示时冻结一次，会话中途不再变化。预热块承载表达约束与常驻画像，末行是一行目录（`本工作区与 agent 轨另有 N 条记忆不在本块`），让模型知道还有东西可按需取——只报条数，正文仍留在 `memory_recall` 那一侧。
 
 ## Quick start
@@ -100,14 +102,14 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 
 | Surface | Kind | Notes |
 |---|---|---|
-| `memory` | tool | 带 Save/Skip 指引的 add/replace/remove/consolidate/supersede/query/tidy；条目可带画像坐标（`facet` 七面之一、`level` 分领域知识水平）；`supersede` 把 1..20 条并成一条带 `merged` 标的条目、旧条目降级为 `superseded`（留痕不删），`tidy` 返回只读整理计划；写入走审批门 |
+| `memory` | tool | 带 Save/Skip 指引的 add/replace/remove/consolidate/supersede/restore/arbitrate/query/tidy；条目可带画像坐标（`facet` 七面之一、`level` 分领域知识水平）；`supersede` 把 1..20 条并成一条带 `merged` 标的条目、旧条目降级为 `superseded`（留痕不删），`restore` 把降级条目救回，`arbitrate` 按裁决表在一个面上裁两个来源的冲突，`tidy` 返回只读整理计划；写入走审批门 |
 | `memory_profile` | tool | 31 个子领域刻度上的分领域知识水平（`set` / `list` / `get`）；`set` 走审批门并落审计，`tier` 由 `level` 推导 |
 | `yammory-survey` | skill | 用户主动激发的画像问卷，覆盖 24 个问卷合法子板块；经 `memory` + `memory_profile` 落库。源文件：`skills/yammory-survey/` |
 | `memory_recall` | tool | 有界的记忆匹配（查询按词元切分：中文二字、英文整词；任一词元命中即召回，按相关度排序）+ 近期会话历史匹配 |
 | `memory_observe` | tool | 观察通道：`scan` 只读取「用户本人」旧发言的有界切片（`cwd` 精确收窄、系统注入的伪发言过滤并计数、预算缺口如实报出）；`commit` 以一次审批、一次原子写落 1..8 条带证据的条目，`source` 固定 `observation` |
 | `yammory-observe` | skill | 用户主动发起的行为观察，把五个仅观察面（思维方式与思辨 / 人格特质 / 情绪模式与心理强度 / 自我认知 / 决策与行动风格）经 `memory_observe` 落库。源文件：`skills/yammory-observe/` |
 | `yammory-tidy` | skill | 用户主动发起的记忆整理：读只读计划、把讲同一件事的条目并成一条、旧条目降级留痕（不删、不跨桶）。源文件：`skills/yammory-tidy/`；判据表在 `references/merge-rules.md` |
-| `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `tidy [--days=N]` · `stats` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` · `observe [--days=N]` · `session [on|off]` |
+| `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `restore <id...>` · `arbitrate <id...>` · `tidy [--days=N]` · `stats` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` · `observe [--days=N]` · `session [on|off]` |
 | session switch | composer dock | 输入框下方的会话记忆开关（`conversation.composer.dock`，session scope）：显示当前状态并点击切换，走 `GET`/`POST /api/memento/session`（与面板路由同一条 `connection.fetch` 信任栅栏） |
 | web panel | client drawer | 只读：浏览条目、搜索、预算条、审计尾部；悬浮入口按钮可隐藏（`panel.enabled`） |
 | settings section | DSH 设置侧栏 → `yammory-system` | 免改文件编辑除 `enabled` 外的全部配置字段；即时/重载生效时机在页面内标注 |

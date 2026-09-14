@@ -29,6 +29,7 @@ import {
   OBSERVATION_SOURCE,
   OBSERVE_LIMITS,
   MAX_SWITCH_SESSION_ID,
+  GAP_TAG,
 } from './lib/constants.mjs'
 import { COMMAND_TEXT } from './lib/strings.mjs'
 // CommandTextBundle 与 COMMAND_TEXT 同住 lib/strings.mjs（JSDoc typedef 随模块可见）。
@@ -89,6 +90,8 @@ import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, Vector
  * @property {(input: object) => MemoryEntry} removeEntry
  * @property {(input: object) => {removed: MemoryEntry[], entry: MemoryEntry}} consolidateEntries
  * @property {(input: object) => {superseded: MemoryEntry[], entry: MemoryEntry | null}} supersedeEntries
+ * @property {(input: {ids: string[]}) => MemoryEntry[]} restoreEntries
+ * @property {(input: {ids: string[], tag: string}) => MemoryEntry[]} tagEntries
  * @property {(id: string) => MemoryEntry | null} entryById
  * @property {() => MemoryEntry[]} allEntries
  * @property {(row: object) => object} auditAppend
@@ -146,6 +149,12 @@ import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, Vector
  * @property {PublicEntry} [entry]
  * @property {Array<{id: string, text: string}>} [removed]
  * @property {Array<{id: string, text: string}>} [superseded]
+ * @property {Array<{id: string, text: string}>} [restored]
+ * @property {{id: string, text: string, source: string}[]} [kept]
+ * @property {Array<{id: string, text: string}>} [demoted]
+ * @property {Array<{id: string, text: string, tags: string[]}>} [tagged]
+ * @property {string} [facet]
+ * @property {string} [direction]
  * @property {string} [plan]
  * @property {number} [candidates]
  * @property {{count: number, chars: number, due: boolean, reason?: string}} [backlog]
@@ -546,7 +555,7 @@ const MEMORY_TOOL_DESCRIPTION = {
     'SAVE: user preferences and corrections; environment facts and project conventions; lessons learned from mistakes; summaries of completed work; anything the user explicitly asks you to remember.',
     'SKIP: trivial or re-derivable facts; encyclopedia knowledge a fresh search can answer; large data dumps or logs; one-off file paths; content already available in the current workspace.',
     '',
-    'Writes (add/replace/remove/consolidate/supersede) require approval under the configured policy and are audited; reads (query/tidy) are free. replace/remove target an entry by a UNIQUE case-insensitive substring — an ambiguous match fails with the candidate list, so use a longer substring. consolidate merges 1..20 existing entries (unique substrings) into ONE new entry with a single approval and one atomic write — use it when a layer crosses its warning line. supersede is the tidy path: it merges 1..20 entries (by id, from a tidy plan) into one entry that carries the `merged` tag while the old ones are KEPT and demoted to `superseded` (kept on disk, out of every session\u2019s view; never physically deleted). It stays inside one bucket (track x scope x agentKey, plus workspaceKey on the workspace layer) — never cross buckets, never merge entries that merely look similar: when in doubt, leave them alone. Each session starts with a FROZEN warm-up block: the user\u2019s per-domain knowledge level (as speaking constraints) plus the standing user-global profile. That block never changes mid-session. Workspace-scoped and agent-track memory is deliberately NOT in it — fetch those on demand with memory_recall (or query); a closing line in the block tells you how many such entries are waiting.',
+    'Writes (add/replace/remove/consolidate/supersede/restore/arbitrate) require approval under the configured policy and are audited; reads (query/tidy) are free. replace/remove target an entry by a UNIQUE case-insensitive substring — an ambiguous match fails with the candidate list, so use a longer substring. consolidate merges 1..20 existing entries (unique substrings) into ONE new entry with a single approval and one atomic write — use it when a layer crosses its warning line. supersede is the tidy path: it merges 1..20 entries (by id, from a tidy plan) into one entry that carries the `merged` tag while the old ones are KEPT and demoted to `superseded` (kept on disk, out of every session\u2019s view; never physically deleted). It stays inside one bucket (track x scope x agentKey, plus workspaceKey on the workspace layer) — never cross buckets, never merge entries that merely look similar: when in doubt, leave them alone. restore walks a demotion back (superseded -> active, version untouched, back into every session\u2019s view) and is the only way out of the demoted state. arbitrate settles a same-entry-two-sources conflict on ONE facet: the direction comes from a fixed table — ability follows observation, preference follows the self-report, the other five facets keep BOTH and tag each with `gap`. The table is the direction; there is deliberately no reverse argument. Within a group the most recently updated entry is kept and the rest of that group is demoted too. Each session starts with a FROZEN warm-up block: the user\u2019s per-domain knowledge level (as speaking constraints) plus the standing user-global profile. That block never changes mid-session. Workspace-scoped and agent-track memory is deliberately NOT in it — fetch those on demand with memory_recall (or query); a closing line in the block tells you how many such entries are waiting.',
     '',
     'PROFILE COORDINATES: every entry can carry two optional coordinates. facet tags which face of the user profile the entry belongs to (one of: 躯体 | 心智 | 价值与意愿 | 能力与技能 | 行为与习惯 | 社会与处境 | 经历与轨迹). level (1..10) is the per-domain knowledge level and belongs only on entries about the user\u2019s knowledge/subject level; the structured per-domain scale itself is written with memory_profile, not with this tool. On replace, an omitted facet/level keeps the existing coordinate.',
   ].join('\n'),
@@ -560,7 +569,7 @@ const MEMORY_TOOL_DESCRIPTION = {
     '应存（SAVE）：用户偏好与纠正；环境事实与项目约定；犯错得到的教训；已完成工作总结；用户明确要求记住的内容。',
     '应跳过（SKIP）：琐碎或可再推导的事实；重新搜索即可回答的百科知识；大数据转储或日志；一次性文件路径；当前工作区已有的内容。',
     '',
-    '写（add/replace/remove/consolidate/supersede）需按配置策略审批并落审计；读（query/tidy）免费。replace/remove 用唯一大小写不敏感子串定位——歧义时报候选清单，请用更长子串。consolidate 以一次审批 + 一次原子写把 1..20 条整合为一条——层越预警线时使用。supersede 是整理机那条路：按 id（取自 tidy 计划）把 1..20 条合并成一条带 `merged` 标的新条目，旧条目**保留**并降级为 `superseded`（仍在库里，但不进任何会话的可见集；绝不物理删）。它只在同一个桶内进行（track × scope × agentKey，workspace 层再加 workspaceKey）——绝不跨桶，也不要只因「看着像」就合并：拿不准就留着。每个会话启动时获得一个冻结的预热块：用户分领域知识水平（表达约束）＋ 常驻 user-global 画像。该块在会话内不变。工作区层与 agent 轨记忆刻意不入此块——需要时用 memory_recall（或 query）按需取；该块末行会告诉你这类条目还有几条在等着。',
+    '写（add/replace/remove/consolidate/supersede/restore/arbitrate）需按配置策略审批并落审计；读（query/tidy）免费。replace/remove 用唯一大小写不敏感子串定位——歧义时报候选清单，请用更长子串。consolidate 以一次审批 + 一次原子写把 1..20 条整合为一条——层越预警线时使用。supersede 是整理机那条路：按 id（取自 tidy 计划）把 1..20 条合并成一条带 `merged` 标的新条目，旧条目**保留**并降级为 `superseded`（仍在库里，但不进任何会话的可见集；绝不物理删）。它只在同一个桶内进行（track × scope × agentKey，workspace 层再加 workspaceKey）——绝不跨桶，也不要只因「看着像」就合并：拿不准就留着。restore 把一次降级走回来（superseded → active，version 不动，重新进入每个会话的可见集），它是脱离降级态的唯一出口。arbitrate 在**一个面**上裁决「同一条事实、两个来源」的冲突：方向由固定表决定——能力听观察、意愿听自陈，其余五面**两条都留**并各打 `gap` 标。表即方向，刻意没有反向参数。同组内保留 updatedAt 最新者，其余同组条目一并降级。每个会话启动时获得一个冻结的预热块：用户分领域知识水平（表达约束）＋ 常驻 user-global 画像。该块在会话内不变。工作区层与 agent 轨记忆刻意不入此块——需要时用 memory_recall（或 query）按需取；该块末行会告诉你这类条目还有几条在等着。',
     '',
     '画像坐标：每条条目可带两个可选坐标。facet 标明该条目属于用户画像的哪一面（取值：躯体 | 心智 | 价值与意愿 | 能力与技能 | 行为与习惯 | 社会与处境 | 经历与轨迹）。level（1..10）是分领域知识水平，只用在「知识与学科水平」类条目上；结构化的分领域刻度本身请用 memory_profile 写，不用本工具。replace 时省略 facet/level 即保持原坐标。',
   ].join('\n'),
@@ -569,26 +578,26 @@ const MEMORY_TOOL_DESCRIPTION = {
 /** 记忆工具参数描述（双语）。 */
 const MEMORY_TOOL_PARAMETERS = {
   en: {
-    action: 'add = insert a new entry; replace = rewrite one existing entry; remove = delete one existing entry; consolidate = merge 1..20 existing entries into one new entry (single approval, atomic); supersede = merge 1..20 existing entries into one new `merged`-tagged entry while the old ones are kept and demoted to `superseded` (the tidy path; single approval, atomic); tidy = read-only tidy plan (backlog + per-bucket candidates + similar pairs); query = substring search over existing entries.',
+    action: 'add = insert a new entry; replace = rewrite one existing entry; remove = delete one existing entry; consolidate = merge 1..20 existing entries into one new entry (single approval, atomic); supersede = merge 1..20 existing entries into one new `merged`-tagged entry while the old ones are kept and demoted to `superseded` (the tidy path; single approval, atomic); restore = walk a demotion back (superseded -> active, version untouched); arbitrate = settle a same-entry-two-sources conflict on one facet, direction fixed by the arbitration table; tidy = read-only tidy plan (backlog + per-bucket candidates + similar pairs); query = substring search over existing entries.',
     track: 'Memory track. Defaults to "user". user = facts about the user; agent = environment/project facts and conventions.',
     scope: 'Layer. Defaults to "workspace". user-global applies to every workspace; workspace applies only to this working directory.',
     text: 'add/replace: the exact entry text. supersede: optional merged text (omit to only demote). query: case-insensitive substring filter.',
     match: 'replace/remove: a UNIQUE case-insensitive substring of the existing entry to target.',
     matches: 'consolidate: 1..20 UNIQUE case-insensitive substrings of the entries to merge into the new text.',
-    ids: 'supersede: 1..20 entry ids (from a tidy plan) to demote to `superseded`. Every id must sit in the SAME bucket (track x scope x agentKey, plus workspaceKey on the workspace layer); buckets are never crossed.',
+    ids: 'supersede / restore / arbitrate: 1..20 entry ids. Every id must sit in the SAME bucket (track x scope x agentKey, plus workspaceKey on the workspace layer); buckets are never crossed. restore only accepts `superseded` ids; arbitrate needs at least one observation-sourced and one self-report entry sharing a single facet.',
     limit: 'query: maximum entries to return (default 20; hard-capped at 1000).',
     tags: 'Optional short labels for the entry (e.g. ["project-x", "decision"]). At most 16 tags, each at most 32 characters; applies to add/replace/consolidate/supersede (supersede always adds the `merged` tag).',
     facet: 'Optional profile face this entry belongs to (one of the seven facets). Applies to add/replace/consolidate/supersede; on replace an omitted facet keeps the current one.',
     level: 'Optional per-domain knowledge level 1..10 (科普 1-3 / 本科 4-6 / 硕士 7-8 / 专家 9-10), for entries about the user\u2019s knowledge or subject level. Applies to add/replace/consolidate/supersede; on replace an omitted level keeps the current one.',
   },
   zh: {
-    action: 'add = 新增一条；replace = 改写一条既有条目；remove = 删除一条既有条目；consolidate = 把 1..20 条既有条目整合为一条新条目（单次审批、原子执行）；supersede = 整理机：把 1..20 条既有条目合并成一条带 `merged` 标的新条目，旧条目保留并降级为 `superseded`（单次审批、原子执行）；tidy = 只读整理计划（积压 ＋ 分桶候选 ＋ 相似线索）；query = 对既有条目的子串检索。',
+    action: 'add = 新增一条；replace = 改写一条既有条目；remove = 删除一条既有条目；consolidate = 把 1..20 条既有条目整合为一条新条目（单次审批、原子执行）；supersede = 整理机：把 1..20 条既有条目合并成一条带 `merged` 标的新条目，旧条目保留并降级为 `superseded`（单次审批、原子执行）；restore = 把降级走回来（superseded → active，version 不动）；arbitrate = 在一个面上裁决「同一条事实、两个来源」的冲突，方向由裁决表固定；tidy = 只读整理计划（积压 ＋ 分桶候选 ＋ 相似线索）；query = 对既有条目的子串检索。',
     track: '记忆轨道。默认 "user"。user = 用户相关事实；agent = 环境/项目事实与约定。',
     scope: '层。默认 "workspace"。user-global 对所有工作区生效；workspace 只对当前工作目录生效。',
     text: 'add/replace：完整条目文本。supersede：可选的合并后文本（省略即只降级、不落新条目）。query：大小写不敏感子串过滤。',
     match: 'replace/remove：目标条目的唯一大小写不敏感子串。',
     matches: 'consolidate：要并入新文本的 1..20 个唯一大小写不敏感子串。',
-    ids: 'supersede：要降级为 `superseded` 的 1..20 个条目 id（取自 tidy 计划）。所有 id 必须同属一个桶（track × scope × agentKey，workspace 层再加 workspaceKey）；桶内不跨。',
+    ids: 'supersede / restore / arbitrate：1..20 个条目 id（取自整理计划或 /memory list）。所有 id 必须同属一个桶（track × scope × agentKey，workspace 层再加 workspaceKey）；桶内不跨。restore 只接受 `superseded` 的 id；arbitrate 要求至少一条观察来源与一条自陈来源、且共用同一个面。',
     limit: 'query：最多返回条数（默认 20；硬钳 1000）。',
     tags: '可选短标签（如 ["project-x", "decision"]）。最多 16 个、每个最多 32 字符；用于 add/replace/consolidate/supersede（supersede 恒补 `merged` 标）。',
     facet: '可选：该条目属于七面中的哪一面。用于 add/replace/consolidate/supersede；replace 时省略即保持原面。',
@@ -612,7 +621,7 @@ export function makeMemoryTool(service, language = 'en') {
       action: {
         type: 'string',
         required: true,
-        enum: ['add', 'replace', 'remove', 'consolidate', 'supersede', 'tidy', 'query'],
+        enum: ['add', 'replace', 'remove', 'consolidate', 'supersede', 'restore', 'arbitrate', 'tidy', 'query'],
         description: parameters.action,
       },
       track: {
@@ -667,7 +676,7 @@ export function makeMemoryTool(service, language = 'en') {
         type: 'object',
         additionalProperties: false,
         properties: {
-          action: { type: 'string', required: true, enum: ['add', 'replace', 'remove', 'consolidate', 'supersede', 'tidy', 'query'] },
+          action: { type: 'string', required: true, enum: ['add', 'replace', 'remove', 'consolidate', 'supersede', 'restore', 'arbitrate', 'tidy', 'query'] },
           ok: { type: 'boolean', required: true },
           entry: {
             type: 'object',
@@ -705,6 +714,54 @@ export function makeMemoryTool(service, language = 'en') {
               },
             },
           },
+          restored: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                id: { type: 'string', required: true },
+                text: { type: 'string', required: true },
+              },
+            },
+          },
+          kept: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                id: { type: 'string', required: true },
+                text: { type: 'string', required: true },
+                source: { type: 'string', required: true },
+              },
+            },
+          },
+          demoted: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                id: { type: 'string', required: true },
+                text: { type: 'string', required: true },
+              },
+            },
+          },
+          tagged: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                id: { type: 'string', required: true },
+                text: { type: 'string', required: true },
+                tags: { type: 'array', items: { type: 'string' }, required: true },
+              },
+            },
+          },
+          facet: { type: 'string' },
+          direction: { type: 'string' },
           plan: { type: 'string' },
           candidates: { type: 'integer' },
           backlog: {
@@ -912,6 +969,34 @@ export function makeMemoryTool(service, language = 'en') {
               usage: result.usage,
             }
           }
+          case 'restore': {
+            // S5 §1 的回滚面：把降级条目救回在场集（superseded → active），一次审批一次原子写。
+            // source 锚死 'governance'（与本工具其它动作的 source 同样只作审计标注与粒度键）。
+            const result = await service.restore({ ids: args.ids, source: 'governance' }, write)
+            return {
+              action: 'restore',
+              ok: true,
+              // 只上带 output schema 声明过的字段：声明 additionalProperties:false 的校验器
+              // 会把未声明的键剥掉，与其让它静默消失，不如在这里就只投影 id 与正文。
+              restored: result.restored.map((entry) => ({ id: entry.id, text: entry.text })),
+              usage: result.usage,
+            }
+          }
+          case 'arbitrate': {
+            // S5 §2 的裁决面：方向由 ARBITRATION_BY_FACET 决定，模型没有反向参数。
+            // 一次审批一批落盘（降级 ＋ 打标 ＋ 审计 action='arbitrate'）。
+            const result = await service.arbitrate({ ids: args.ids, source: 'governance' }, write)
+            return {
+              action: 'arbitrate',
+              ok: true,
+              facet: result.facet,
+              direction: result.direction,
+              kept: result.kept.map((entry) => ({ id: entry.id, text: entry.text, source: entry.source })),
+              demoted: result.demoted.map((entry) => ({ id: entry.id, text: entry.text })),
+              tagged: result.tagged.map((entry) => ({ id: entry.id, text: entry.text, tags: entry.tags })),
+              usage: result.usage,
+            }
+          }
           case 'tidy': {
             // 只读整理计划：算积压 ＋ 分组候选 ＋ 桶内相似线索。不写库、不落审计、
             // 不调模型——语义判断（哪几条在讲同一件事）由本会话的模型自己做。
@@ -1000,6 +1085,21 @@ export function renderMemoryResult(/** @type {object} */ _args, /** @type {Memor
           ? `memory entries superseded: ${value.superseded.length} demoted to superseded (kept on disk, out of every session\u2019s view)\nbudget: ${value.usage.used}/${value.usage.limit} chars used`
           : `memory entries tidied (${value.entry.track}/${value.entry.scope}): ${value.superseded.length} superseded (kept) → 1 merged entry tagged \`merged\`: ${value.entry.text}${coordinateTag(value.entry)}\nbudget: ${value.usage.used}/${value.usage.limit} chars used`,
       }]
+    case 'restore':
+      return [{
+        type: 'text',
+        text: `memory entries restored: ${value.restored.length} back to active (they re-enter every session\u2019s view; version untouched)\n${value.restored.map((entry) => `- ${entry.text}`).join('\n')}\nbudget: ${value.usage.used}/${value.usage.limit} chars used`,
+      }]
+    case 'arbitrate':
+      return value.direction === 'coexist'
+        ? [{
+            type: 'text',
+            text: `memory arbitration on facet ${value.facet}: coexist — nothing demoted, ${value.tagged.length} entr${value.tagged.length === 1 ? 'y' : 'ies'} tagged \`gap\` (the gap itself is the evidence)\n${value.tagged.map((entry) => `- ${entry.text}`).join('\n')}\nbudget: ${value.usage.used}/${value.usage.limit} chars used`,
+          }]
+        : [{
+            type: 'text',
+            text: `memory arbitration on facet ${value.facet}: kept ${value.kept.length} (source: ${value.kept.map((entry) => entry.source).join(', ')}), demoted ${value.demoted.length} to superseded (kept on disk, out of every session\u2019s view; use action=restore to bring them back)\n${value.kept.map((entry) => `- kept: ${entry.text}`).join('\n')}\n${value.demoted.map((entry) => `- demoted: ${entry.text}`).join('\n')}\nbudget: ${value.usage.used}/${value.usage.limit} chars used`,
+          }]
     case 'tidy':
       return [{ type: 'text', text: value.plan }]
     default:
@@ -2330,12 +2430,12 @@ function makeCommandGate(ctx, write) {
 
 const COMMAND_DESCRIPTION = /** @type {{en: {description: string, hint: string}, zh: {description: string, hint: string}}} */ ({
   en: {
-    description: 'View/manage yammory_system memory: list | query <word> | add [--track=user|agent] [--scope=user-global|workspace] <text> | remove <substring> | consolidate <substring...> => <new text> | tidy [--days=N] (read-only tidy plan) | stats (the three observability numbers) | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path> | observe [--days=N] | session [on|off]',
-    hint: 'list | query <word> | add <text> | remove <substring> | consolidate <substring...> => <new text> | tidy [--days=N] | stats | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path> | observe [--days=N] | session [on|off]',
+    description: 'View/manage yammory_system memory: list | query <word> | add [--track=user|agent] [--scope=user-global|workspace] <text> | remove <substring> | consolidate <substring...> => <new text> | restore <id...> | arbitrate <id...> | tidy [--days=N] (read-only tidy plan) | stats (the three observability numbers) | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path> | observe [--days=N] | session [on|off]',
+    hint: 'list | query <word> | add <text> | remove <substring> | consolidate <substring...> => <new text> | restore <id...> | arbitrate <id...> | tidy [--days=N] | stats | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <path> | observe [--days=N] | session [on|off]',
   },
   zh: {
-    description: '查看/管理 yammory_system 记忆：list | query <词> | add [--track=user|agent] [--scope=user-global|workspace] <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | tidy [--days=N]（只读整理计划） | stats（可观测三数） | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径> | observe [--days=N] | session [on|off]',
-    hint: 'list | query <词> | add <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | tidy [--days=N] | stats | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径> | observe [--days=N] | session [on|off]',
+    description: '查看/管理 yammory_system 记忆：list | query <词> | add [--track=user|agent] [--scope=user-global|workspace] <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | restore <id...> | arbitrate <id...> | tidy [--days=N]（只读整理计划） | stats（可观测三数） | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径> | observe [--days=N] | session [on|off]',
+    hint: 'list | query <词> | add <文本> | remove <唯一子串> | consolidate <唯一子串...> => <新文本> | restore <id...> | arbitrate <id...> | tidy [--days=N] | stats | proposals [approve|dismiss <id>] | budgets | audit | adapters | export [--adapter=<id>] | import [--adapter=<id>] <路径> | observe [--days=N] | session [on|off]',
   },
 })
 
@@ -2620,6 +2720,34 @@ async function runMemoryCommand(ctx, service, invocation, live) {
         })
       }
       return { kind: 'success', text: `${text.sessionState(shortSessionId(sessionId), enabled ? text.sessionOn : text.sessionOff, mode === 'status')}\n${enabled ? text.sessionToggleHintOn : text.sessionToggleHintOff}` }
+    }
+    case 'restore': {
+      // S5 §1 的命令面：把降级条目救回（turn 外审批门，与 add/remove 同一条 makeCommandGate）。
+      // 关了记忆的会话与 query/tidy 同档拒绝：回滚会改变本会话的可见集。
+      if (!service.store.sessionEnabled(invocation?.agent?.session?.id)) return { kind: 'error', text: text.sessionOffRead }
+      const ids = rest.filter((arg) => arg.length > 0)
+      if (ids.length === 0) return { kind: 'error', text: text.restoreNeedsIds }
+      const result = await service.restore({ ids, source: 'command' }, { agent: invocation?.agent, gate: makeCommandGate(ctx, invocation) })
+      const body = result.restored.map((entry) => `- [${entry.id}] ${entry.text}`).join('\n')
+      return { kind: 'success', text: text.restored(result.restored.length, body, result.usage.used, result.usage.limit) }
+    }
+    case 'arbitrate': {
+      // S5 §2 的命令面：方向由裁决表决定，命令行没有反向参数（与工具面同一不变量）。
+      if (!service.store.sessionEnabled(invocation?.agent?.session?.id)) return { kind: 'error', text: text.sessionOffRead }
+      const ids = rest.filter((arg) => arg.length > 0)
+      if (ids.length === 0) return { kind: 'error', text: text.arbitrateNeedsIds }
+      const result = await service.arbitrate({ ids, source: 'command' }, { agent: invocation?.agent, gate: makeCommandGate(ctx, invocation) })
+      if (result.direction === 'coexist') return { kind: 'success', text: text.arbitratedCoexist(result.facet, result.tagged.length, GAP_TAG) }
+      return {
+        kind: 'success',
+        text: text.arbitratedKeep(
+          result.facet,
+          `${result.kept[0].id} [${result.kept[0].source}]`,
+          result.demoted.length,
+          result.usage.used,
+          result.usage.limit,
+        ),
+      }
     }
     case 'tidy': {
       // F6 命令面：只读整理计划（积压 ＋ 分桶候选 ＋ 桶内相似线索）。不写库、不落审计、

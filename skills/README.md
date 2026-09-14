@@ -92,7 +92,7 @@ ln -s /path/to/yammory-system/skills/yammory-tidy ~/.dsh/skills/yammory-tidy
 
 三个 skill 的纪律都写死在正文里：**只由用户主动发起**，模型不得自作主张开问卷、发起观察或整理——问卷留下的半张脏画像、观察烧掉的上下文、整理动的一批条目，都比没有更糟。
 
-观察通道的模型面入口是 `memory_observe` 工具（`scan` 只读取历史切片，`commit` 走审批门落库）；命令面是 `/memory observe`（只读打印同一切片，推断仍由模型做）。整理机的模型面入口是 `memory` 工具的 `tidy`（只读取计划）与 `supersede`（合并 ＋ 降级，走审批门）；命令面是 `/memory tidy`（只读计划）。
+观察通道的模型面入口是 `memory_observe` 工具（`scan` 只读取历史切片，`commit` 走审批门落库）；命令面是 `/memory observe`（只读打印同一切片，推断仍由模型做）。整理机的模型面入口是 `memory` 工具的 `tidy`（只读取计划）与 `supersede`（合并 ＋ 降级，走审批门）；命令面是 `/memory tidy`（只读计划）。治理面的模型面入口是 `memory` 工具的 `restore`（把降级走回来）与 `arbitrate`（按面裁决冲突，方向由代码里的表定）；命令面是 `/memory restore <id...>` 与 `/memory arbitrate <id...>`；`yammory-tidy` 的 `references/merge-rules.md` 第六节载有裁决表。
 
 ## 许可
 
