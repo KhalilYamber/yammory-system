@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Pushing a `v*` tag no longer publishes to npm; the tag only creates the GitHub Release page.** `release.yml` used to run the full gate chain and then `npm publish --provenance` on every tag, so cutting a tag was an irreversible public action taken by a side effect. Publishing is now a separate `publish-npm.yml` gated behind `workflow_dispatch`: someone presses the button, and can name the ref (tag, branch or SHA), which is what lets a tag be cut, inspected as a Release page, and only then published. `release.yml` keeps one job — build the Release from this version's CHANGELOG section, idempotent, skipping when the page already exists. The idempotency guard (`skip` when the version is already on npm) and the `NPM_TOKEN` secret both move with the publish job, unchanged. Two reasons for the split: the five READMEs advertise the GitHub channel, and the npm account's two-factor recovery is still an open ticket (#4755194) — a release should be a decision, not a reflex.
+
 ## [0.6.0] - 2026-09-15
 
 ### Added

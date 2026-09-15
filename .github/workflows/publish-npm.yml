@@ -1,0 +1,54 @@
+name: publish-npm
+
+# 手动发布到 npm。
+#
+# 打 v* 标签不再触发发布（那条路只建 GitHub Release 页，见 release.yml）；
+# 发布这件事改成人在 Actions 页上按 workflow_dispatch 触发，且可指定 ref，
+# 以便「先打标签、看过 Release 页，再决定要不要发到 npm」。
+#
+# 需要仓库 secret：NPM_TOKEN（npm 自动化 token，类型 Automation 或 Publish）。
+# 幂等：目标版本已在 npm 上时跳过 publish——重复手动触发不会红。
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 要发布的 tag、分支或 SHA（留空 = 触发时选定的 ref）
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org/
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run check:coverage
+      - run: npm run check:readmes
+      - name: 跳过已发布版本
+        id: published
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          if npm view "yammory_system@${VERSION}" version >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "yammory_system@${VERSION} 已在 npm 上，跳过发布"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.published.outputs.skip != 'true'
+        run: npm publish --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
