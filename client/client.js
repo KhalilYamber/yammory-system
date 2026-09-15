@@ -659,7 +659,7 @@ function installPanel(state) {
   root.id = PANEL_ID
   root.setAttribute('style', 'position: fixed; z-index: 2147483000;')
   document.body.appendChild(root)
-  // 设置页「显示悬浮窗入口按钮」的即时生效面：整块浮层根节点的显隐。
+  // 设置页「显示侧栏的记忆入口」的即时生效面：模块级开关广播 ＋（降级路径下）旧悬浮根节点的显隐。
   panelOpenButton = root
 
   // 入口按钮的文字只在挂载时定一次（与迁移前一致：抽屉侧换语言不回写按钮）。
@@ -682,9 +682,9 @@ function withTooltip(primitives, label, element, disabled) {
       const CARD_STRINGS = {
         en: {
           title: 'yammory_system memory',
-          description: 'Approval-gated cross-session memory. Writes, snapshot wording and the floating panel follow these values.',
+          description: 'Approval-gated cross-session memory. Writes, snapshot wording, the sidebar entry and the panel follow these values.',
           sectionPermissions: 'Write approval policy',
-          sectionPanel: 'Floating panel',
+          sectionPanel: 'Sidebar entry',
           sectionLanguage: 'Language',
           sectionBudgets: 'Warning lines (per track/layer)',
           sectionLimits: 'Query & command limits',
@@ -750,9 +750,9 @@ function withTooltip(primitives, label, element, disabled) {
         },
         zh: {
           title: 'yammory_system 记忆',
-          description: '带审批门的跨会话记忆。写入策略、快照文案与悬浮窗跟随这些值。',
+          description: '带审批门的跨会话记忆。写入策略、快照文案、侧栏入口与面板跟随这些值。',
           sectionPermissions: '写审批策略',
-          sectionPanel: '悬浮窗',
+          sectionPanel: '侧栏入口',
           sectionLanguage: '语言',
           sectionBudgets: '软预警线（每轨道/层）',
           sectionLimits: '查询与命令上限',

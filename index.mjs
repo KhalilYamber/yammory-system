@@ -403,7 +403,7 @@ function statsLines(stats, language) {
  * @property {number} [auditRetentionDays] 审计保留天数（默认 0 = 不限；变更时随 dbPath 重开 store，即时生效）。
  * @property {{enabled?: boolean, maxChars?: number, maxPending?: number}} [proposals]
  *   auto-capture 压缩记忆提案（默认 true / 2000 / 8；热生效）。
- * @property {{enabled?: boolean}} [panel] Web 面板悬浮窗（热生效；false 时面板入口按钮消失，仅记忆面板，设置卡片不受影响）。
+ * @property {{enabled?: boolean}} [panel] Web 面板入口（侧栏底部那枚「记忆」；热生效；false 时入口消失，仅记忆面板，设置卡片不受影响）。
  */
 const SHARED_CONFIG_FIELDS = {
   dbPath: Schema.string().default(''),
@@ -467,7 +467,7 @@ export const Config = Schema.object({
 /** 宿主设置弹窗一级项（client 端 settings.section 注册以本 namespace 为 id/页面来源）。 */
 export const SETTINGS_NAMESPACE = 'yammory-system'
 
-/** 设置面板用户面 schema：共享字段 + 悬浮窗开关；无 enabled（见 Config typedef）。 */
+/** 设置面板用户面 schema：共享字段 + 面板入口开关；无 enabled（见 Config typedef）。 */
 export const SettingsSchema = Schema.object({
   ...SHARED_CONFIG_FIELDS,
   panel: Schema.object({

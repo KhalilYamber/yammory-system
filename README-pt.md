@@ -61,12 +61,12 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 
 Todos os parâmetros são campos Schemastery `Config` (alteráveis pelo cordis.yml). Valores inválidos falham ruidosamente ao carregar. Sobrescreva na linha `yammory_system`.
 
-**Painel de configurações.** Com o serviço de configurações do DSH montado, todos os campos abaixo (exceto `enabled`) são editáveis na **entrada `yammory-system` na barra lateral de configurações do DSH** (uma seção de primeiro nível, como General ou Plugins); as alterações vão para a camada de usuário das configurações (`settings.yaml`) sem editar arquivos. Quase tudo se aplica ao vivo (políticas de escrita, idioma, orçamentos, limites, propostas, painel; `dbPath` / `auditRetentionDays` reabrindo o armazém; `retrieval.vector` trocando o recuperador) — só `snapshotOrder` exige recarregar o DSH. Sem o serviço de configurações, tudo volta à configuração composta, exatamente como antes. O botão flutuante do painel pode ser ocultado na mesma página (`panel.enabled`).
+**Painel de configurações.** Com o serviço de configurações do DSH montado, todos os campos abaixo (exceto `enabled`) são editáveis na **entrada `yammory-system` na barra lateral de configurações do DSH** (uma seção de primeiro nível, como General ou Plugins); as alterações vão para a camada de usuário das configurações (`settings.yaml`) sem editar arquivos. Quase tudo se aplica ao vivo (políticas de escrita, idioma, orçamentos, limites, propostas, painel; `dbPath` / `auditRetentionDays` reabrindo o armazém; `retrieval.vector` trocando o recuperador) — só `snapshotOrder` exige recarregar o DSH. Sem o serviço de configurações, tudo volta à configuração composta, exatamente como antes. A entrada de memória no pé da barra lateral pode ser ocultada na mesma página (`panel.enabled`).
 
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | Interruptor mestre; `false` remove serviço, ferramentas, snapshot, comando, painel e answerer (não editável na página de configurações: um plugin desabilitado não tem entrada de configurações) |
-| `panel.enabled` | `true` | Mostrar o botão flutuante do painel web; ao salvar `false` na página de configurações, a entrada 🧠 é ocultada imediatamente, sem recarregar (a página de configurações não é afetada) |
+| `panel.enabled` | `true` | Mostrar a entrada de memória no pé da barra lateral; ao salvar `false` na página de configurações, ela é ocultada imediatamente, sem recarregar (a página de configurações não é afetada) |
 | `dbPath` | `''` → `$DSH_HOME/dsh-memento/memory.db` | Absoluto, ou relativo a `$DSH_HOME` (no Windows cai para `~/.dsh`) |
 | `budgets.user.userGlobal` | `2000` | Linha de aviso suave da camada user-global da trilha user |
 | `budgets.user.workspace` | `2000` | Linha de aviso suave da camada workspace da trilha user |
@@ -115,7 +115,7 @@ Todos os parâmetros são campos Schemastery `Config` (alteráveis pelo cordis.y
 | `yammory-tidy` | skill | Arrumação da memória iniciada pelo usuário: lê o plano só de leitura, funde o que diz o mesmo e rebaixa as entradas antigas (conservadas, nunca apagadas), sem cruzar baldes. Código-fonte: `skills/yammory-tidy/`; regras de julgamento em `references/merge-rules.md` |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `restore <id...>` · `arbitrate <id...>` · `tidy [--days=N]` · `stats` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` · `observe [--days=N]` · `session [on|off]` |
 | session switch | session header | Interruptor de memória por sessão no cabeçalho da conversa, logo após o rótulo de preset de agente (`conversation.session.header.actions`, escopo de sessão): mostra o estado e alterna via `GET`/`POST /api/memento/session` (a mesma cerca de confiança `connection.fetch` das rotas do painel) |
-| web panel | client drawer | Somente leitura para o conteúdo: navegar entradas, buscar, barras de orçamento, os três números observáveis, cauda de auditoria; um botão de ação do usuário apenas enfileira uma arrumação da biblioteca inteira; o botão flutuante pode ser ocultado (`panel.enabled`) |
+| web panel | client drawer | Somente leitura para o conteúdo: navegar entradas, buscar, barras de orçamento, os três números observáveis, cauda de auditoria; um botão de ação do usuário apenas enfileira uma arrumação da biblioteca inteira; a entrada lateral pode ser ocultada (`panel.enabled`) |
 | settings section | Barra lateral de configurações do DSH → `yammory-system` | Edita todos os campos de configuração (exceto `enabled`) sem tocar em arquivos; o momento de aplicação (ao vivo ou após recarga) é indicado na página |
 
 ## MCP server

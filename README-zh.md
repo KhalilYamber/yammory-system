@@ -61,12 +61,12 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 
 所有可调项均为 Schemastery `Config` 字段（可在 cordis.yml 中修改）。非法值在加载期响亮失败。在 `yammory_system` 行下覆盖。
 
-**设置面板。** DSH 设置服务挂载时，下表除 `enabled` 外的全部字段可在 DSH 设置侧栏的插件一级项 **`yammory-system`**（与通用设置、插件等并列）中编辑；修改写入设置用户层（`settings.yaml`），无需改文件。几乎全部即时生效（写策略、语言、预算、各上限、提案、面板；`dbPath` / `auditRetentionDays` 经重开 store 生效；`retrieval.vector` 经重装检索器生效）——只有 `snapshotOrder` 需要 DSH 重载。设置服务缺失时一切回退组合配置，与从前完全一致。悬浮窗按钮可在同一页面隐藏（`panel.enabled`）。
+**设置面板。** DSH 设置服务挂载时，下表除 `enabled` 外的全部字段可在 DSH 设置侧栏的插件一级项 **`yammory-system`**（与通用设置、插件等并列）中编辑；修改写入设置用户层（`settings.yaml`），无需改文件。几乎全部即时生效（写策略、语言、预算、各上限、提案、面板；`dbPath` / `auditRetentionDays` 经重开 store 生效；`retrieval.vector` 经重装检索器生效）——只有 `snapshotOrder` 需要 DSH 重载。设置服务缺失时一切回退组合配置，与从前完全一致。侧栏底部的记忆入口可在同一页面隐藏（`panel.enabled`）。
 
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | 总开关；`false` 移除服务、工具、快照、命令、面板与 answerer（设置页不可编辑——禁用的插件没有设置项） |
-| `panel.enabled` | `true` | 显示 Web 面板悬浮按钮；在设置页保存 `false` 后立即隐藏 🧠 入口，无需刷新（设置页本身不受影响） |
+| `panel.enabled` | `true` | 显示侧栏底部的记忆入口；在设置页保存 `false` 后立即隐藏，无需刷新（设置页本身不受影响） |
 | `dbPath` | `''` → `$DSH_HOME/dsh-memento/memory.db` | 绝对路径，或相对 `$DSH_HOME`（Windows 上回退到 `~/.dsh`） |
 | `budgets.user.userGlobal` | `2000` | user 轨 user-global 层的软预警线 |
 | `budgets.user.workspace` | `2000` | user 轨 workspace 层的软预警线 |
@@ -115,7 +115,7 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 | `yammory-tidy` | skill | 用户主动发起的记忆整理：读只读计划、把讲同一件事的条目并成一条、旧条目降级留痕（不删、不跨桶）。源文件：`skills/yammory-tidy/`；判据表在 `references/merge-rules.md` |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `restore <id...>` · `arbitrate <id...>` · `tidy [--days=N]` · `stats` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` · `observe [--days=N]` · `session [on|off]` |
 | session switch | session header | 会话标题栏里的会话记忆开关，紧挨 Agent 预设（`conversation.session.header.actions`，session scope）：显示当前状态并点击切换，走 `GET`/`POST /api/memento/session`（与面板路由同一条 `connection.fetch` 信任栅栏） |
-| web panel | client drawer | 对记忆内容只读：浏览条目、搜索、预算条、可观测三数、审计尾部；另有一个用户动作按钮，只登记一条全库整理标记；悬浮入口按钮可隐藏（`panel.enabled`） |
+| web panel | client drawer | 对记忆内容只读：浏览条目、搜索、预算条、可观测三数、审计尾部；另有一个用户动作按钮，只登记一条全库整理标记；侧栏入口可隐藏（`panel.enabled`） |
 | settings section | DSH 设置侧栏 → `yammory-system` | 免改文件编辑除 `enabled` 外的全部配置字段；即时/重载生效时机在页面内标注 |
 
 ## MCP server

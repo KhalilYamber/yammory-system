@@ -60,12 +60,12 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 
 All tunables are Schemastery `Config` fields (changeable from cordis.yml). Invalid values fail loudly at load. Override under the `yammory_system` row.
 
-**Settings panel.** When the DSH settings service is mounted, every field below (except `enabled`) is editable from the plugin's own **`yammory-system` entry in the DSH settings sidebar** (a top-level section, like General or Plugins); edits land in the settings user layer (`settings.yaml`) and need no file editing. Nearly everything applies live (write policies, language, budgets, limits, proposals, panel, `dbPath` / `auditRetentionDays` via a store reopen, `retrieval.vector` via a retriever swap) — only `snapshotOrder` needs a DSH reload. Without the settings service everything falls back to the composed cordis config, exactly as before. The floating panel button can be hidden from the same page (`panel.enabled`).
+**Settings panel.** When the DSH settings service is mounted, every field below (except `enabled`) is editable from the plugin's own **`yammory-system` entry in the DSH settings sidebar** (a top-level section, like General or Plugins); edits land in the settings user layer (`settings.yaml`) and need no file editing. Nearly everything applies live (write policies, language, budgets, limits, proposals, panel, `dbPath` / `auditRetentionDays` via a store reopen, `retrieval.vector` via a retriever swap) — only `snapshotOrder` needs a DSH reload. Without the settings service everything falls back to the composed cordis config, exactly as before. The sidebar memory entry can be hidden from the same page (`panel.enabled`).
 
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | Master switch; `false` removes the service, tools, snapshot, command, panel, and answerer (not editable from the settings page — a disabled plugin has no settings entry) |
-| `panel.enabled` | `true` | Show the web panel's floating button; saving `false` from the settings page hides the 🧠 entry immediately, no reload needed (the settings page itself stays reachable) |
+| `panel.enabled` | `true` | Show the memory entry at the sidebar foot; saving `false` from the settings page hides it immediately, no reload needed (the settings page itself stays reachable) |
 | `dbPath` | `''` → `$DSH_HOME/dsh-memento/memory.db` | Absolute, or relative to `$DSH_HOME` (falls back to `~/.dsh` on Windows) |
 | `budgets.user.userGlobal` | `2000` | Soft warning line for the user track's user-global layer |
 | `budgets.user.workspace` | `2000` | Soft warning line for the user track's workspace layer |
@@ -114,7 +114,7 @@ All tunables are Schemastery `Config` fields (changeable from cordis.yml). Inval
 | `yammory-tidy` | skill | User-initiated memory tidy: reads the read-only plan, merges what says the same thing, demotes the old entries (kept, never deleted), never crosses buckets. Source: `skills/yammory-tidy/`; judgement rules in `references/merge-rules.md` |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `restore <id...>` · `arbitrate <id...>` · `tidy [--days=N]` · `stats` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` · `observe [--days=N]` · `session [on|off]` |
 | session switch | session header | Per-session memory switch in the conversation header, right after the agent-preset label (`conversation.session.header.actions`, session scope): shows the current state and toggles it through `GET`/`POST /api/memento/session` (the route rides the same `connection.fetch` trust fence as the panel routes) |
-| web panel | client drawer | Read-only for memory content: browse entries, search, budget bars, the three observability numbers, audit tail; one user-action button queues a whole-library tidy (marker only); the floating entry button can be hidden (`panel.enabled`) |
+| web panel | client drawer | Read-only for memory content: browse entries, search, budget bars, the three observability numbers, audit tail; one user-action button queues a whole-library tidy (marker only); the sidebar entry can be hidden (`panel.enabled`) |
 | settings section | DSH settings sidebar → `yammory-system` | Edit every config field (except `enabled`) without touching files; live vs reload-required timing is marked on the page |
 
 ## MCP server
