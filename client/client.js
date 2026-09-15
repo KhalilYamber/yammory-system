@@ -258,15 +258,24 @@ function DrawerHolder() {
 
 /** 面板自造样式（定位、滚动与排布；观感由官方控件与令牌承担）。
  * 降级路径那枚悬浮入口由官方 Button 承担观感，这里只补定位与浮起（elevation 令牌）；
- * 侧栏入口自带按钮语义，几何照抄同槽位占用者（ui-cordis 的 CordisPanel `.badge`）。 */
+ * 侧栏入口自带按钮语义，几何照抄同槽位、同在侧栏脚区的 dsh-wsl-workspace（W 钮）。 */
 const PANEL_LAYOUT_CSS = `
 #yammory_system-panel { position: fixed; z-index: 2147483000; font: 13px/1.5 system-ui, "Segoe UI", sans-serif; }
 #mem-open { position: fixed; right: 16px; bottom: 56px; z-index: 2147483000; box-shadow: var(--dsw-elevation-prominent); }
-/* 侧栏入口（sidebar.footer.action）。类名刻意避开抽屉条目行的 .mem-entry：两条同权重规则
-   并存时后写的赢，那套「42px 高、无分隔线」会盖到记忆行上，把抽屉的条目列表压坏。 */
-.mem-side-entry { display: inline-flex; align-items: center; gap: 8px; width: 100%; height: 42px; margin: 0; padding: 0 10px 0 8px; border: none; border-radius: 12px; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 14px; text-align: left; cursor: pointer; overflow: hidden; }
+/* 侧栏入口（sidebar.footer.action）。两点交代：
+   ① 类名刻意避开抽屉条目行的 .mem-entry：两条同权重规则并存时后写的赢，那套几何会盖到
+      记忆行上，把抽屉的条目列表压坏。
+   ② 侧栏脚区的容器是 display:flex 的**一行**（.footerActions）。同槽位的 dsh-wsl-workspace
+      是 28×28 圆图标钮、内容居中、flex: none；若这里摆一条占满整行的 42px 长条，行高会被它
+      顶到 42px，而 W 有显式 height: 28px、在 cross 轴上按起点对齐，两个钮便一高一低。
+      故这里只跟 W 对齐**竖向几何**（同高 28px、同顶、内容居中），宽度按自己内容取；
+      左 4px 间距取自侧栏自身分组习惯（.panelList 的 gap 也是 4px），不是随手数。 */
+.mem-side-entry { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; margin: 0 0 0 4px; padding: 0 10px; border: none; border-radius: 14px; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer; }
 .mem-side-entry:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.mem-side-entry-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-side-entry:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
+.mem-side-entry--rail { width: 36px; height: 36px; gap: 0; padding: 0; border-radius: 50%; color: var(--dsw-alias-label-primary); }
+.mem-side-entry-label { overflow: hidden; text-overflow: ellipsis; }
+.mem-side-entry svg { flex: none; }
 #mem-drawer { position: fixed; right: 0; top: 0; bottom: 0; width: 460px; max-width: 92vw; display: flex; flex-direction: column;
   background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); border-left: 1px solid var(--dsw-alias-border-l2); box-shadow: var(--dsw-elevation-panel); }
 .mem-head { padding: 10px 12px; border-bottom: 1px solid var(--dsw-alias-border-l2); display: flex; gap: 6px; align-items: center; }
@@ -552,7 +561,9 @@ const drawerToggle = { current: () => {} }
 
 /**
  * 侧栏底部入口（`sidebar.footer.action` 条目）：与「设置」同处侧栏脚区。
- * 宽栏出「图标 ＋ 文字」，56px 窄栏只出图标（与同槽位的官方 CordisPanel 一致）。
+ * 竖向几何与同槽位的 dsh-wsl-workspace（W 钮）对齐：同高 **28px**、同顶、内容居中；
+ * 宽度自己按内容取——宽栏出「图标 ＋ 文字」（胶囊），窄栏收起为 36×36 圆图标钮。
+ * 两者只共用「高」与「对齐」，不互相拉伸，故不再一高一低。
  * `panel.enabled === false` 时整条不渲染（设置页开回来即出现）。
  */
 function MemoryEntryButton(props) {
@@ -563,7 +574,7 @@ function MemoryEntryButton(props) {
   return jsx('button', {
     type: 'button',
     id: 'mem-entry',
-    className: 'mem-side-entry',
+    className: wide ? 'mem-side-entry' : 'mem-side-entry mem-side-entry--rail',
     title: S.open,
     'aria-label': S.open,
     onClick: () => { drawerToggle.current() },

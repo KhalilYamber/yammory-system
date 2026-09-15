@@ -438,13 +438,14 @@ test('收边面板：三数行照抄 stats 响应的 lines；「整理全库」�
   assert.equal(/rgba?\(/.test(css), false, '面板样式不含硬编码 rgba')
   assert.equal(css.includes('var(--dsw-elevation-prominent)'), true, '入口按钮的浮起感走官方 elevation 令牌')
 
-  // ③ 入口搬进官方侧栏槽位（sidebar.footer.action）：宽栏出「图标 ＋ 文字」，点一下开抽屉。
+  // ③ 入口搬进官方侧栏槽位（sidebar.footer.action）：与同槽位的 W 同形（圆图标钮），点一下开抽屉。
   app.renderSlot('sidebar.footer.action', { wide: true })
   const open = app.dom.document.getElementById('mem-entry')
   assert.ok(open, '侧栏入口已渲染（在官方槽位条目里）')
   assert.equal(open.tagName, 'BUTTON', '入口是一枚原生 button，按钮语义不借官方 Button')
   assert.equal(open.className, 'mem-side-entry', '入口类名（CSS 挂在它上面，刻意避开抽屉条目行的 .mem-entry）')
-  assert.equal(open.textContent, '记忆', '宽栏出「图标 ＋ 文字」')
+  assert.equal(open.title, '记忆', '悬停提示仍是「记忆」')
+  assert.equal(open.textContent, '记忆', '宽栏出「图标 ＋ 文字」：与 W 同高，宽度按内容取')
   open.click()
   await app.render()
 
