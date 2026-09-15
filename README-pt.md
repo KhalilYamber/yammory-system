@@ -2,46 +2,35 @@
 
 # yammory_system
 
-**Memória entre sessões em camadas, com porta de aprovação e auditável para o DeepSeek Harness — linhas de aviso suaves em vez de um limite rígido.**
+**O seu assistente deixa de perguntar o que já devia saber.**
 
-*Uma costura tipada `ctx.memory`, uma porta de aprovação de escrita que nenhum caminho do modelo pode contornar e trilhas de auditoria reconstruíveis a partir do log de sessão.*
+Ele lembra-se de você entre sessões — em que ponto está em cada matéria, como prefere que falem com você, o que já ficou decidido — e nenhuma escrita chega ao disco sem a sua aprovação, então nada sobre você é guardado pelas suas costas.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![DSH plugin](https://img.shields.io/badge/dsh--plugin-✅-green)](https://github.com/topics/dsh-plugin)
-[![Node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-brightgreen.svg)](#)
+[![Node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-brightgreen.svg)](#compatibility)
 [![CI](https://img.shields.io/github/actions/workflow/status/KhalilYamber/yammory-system/ci.yml?branch=main&label=CI)](https://github.com/KhalilYamber/yammory-system/actions)
 [![Version](https://img.shields.io/github/v/tag/KhalilYamber/yammory-system?label=version)](https://github.com/KhalilYamber/yammory-system/releases)
 
 [English](README.md) · [简体中文](README-zh.md) · [Español](README-es.md) · [Português](README-pt.md) · [हिन्दी](README-hi.md)
 
+<sub>Distribuição: apenas o canal do GitHub — não há pacote npm nem listagem em marketplace.</sub>
+
 </div>
 
 ---
 
-## Compatibility
+## Why this exists
 
-| Surface | Status |
-|---|---|
-| Harness | DeepSeek Harness `dsh-v0.1.5-rc.2` (adaptado em 2026-09-09): o envelope de sessão mantém seu campo ignorable apenas para compatibilidade de leitura de logs armazenados - o Session.append ainda não consegue estampá-lo, então o comportamento da porta não muda. Verificado em 2026-09-11 contra o checkout master dsh-v0.1.5-rc.2 (cadeia completa de portas + smoke de instalação de perfil). |
-| Node | `^22.19.0 || >=24.0.0` |
-| Platforms | Windows / macOS / Linux (somente host; sem código nativo, sem rede) |
-| Model | Qualquer |
+Um assistente competente continua sendo um assistente com amnésia. Em cada sessão ele começa do zero: não sabe que você já entende autovetores mas nunca tocou numa rede tensorial, que prefere ser corrigido a ser incentivado, nem que há três semanas você decidiu não seguir aquele caminho. Então você se apresenta de novo, outra e outra vez, e a conversa que poderia ter começado na parte interessante começa no zero.
 
-## What you get
+O `yammory_system` dá ao DeepSeek Harness um lugar para guardar esse conhecimento, e uma forma de usá-lo sem adivinhar. Três coisas o separam de um armazém de memória:
 
-O `yammory_system` é uma costura de capacidade, não outro armazém: um serviço tipado `ctx.memory`, um provedor SQLite local (`node:sqlite`, WAL, `0600`, em `$DSH_HOME/dsh-memento/memory.db`) e seus consumidores — a ferramenta `memory` e um snapshot congelado injetado no prompt do sistema.
+- **Decide como falar antes de buscar.** Um perfil de sete facetas carrega um nível de conhecimento por domínio, então o assistente sabe que vocabulário você aguenta antes de responder: a injeção acontece na montagem do prompt, não depois de um passo de recuperação.
+- **Sem você, nada é escrito.** Todo caminho de escrita passa pela própria porta de aprovação do DSH dentro do serviço. Uma escrita negada também deixa evidência; uma escrita silenciosa não é um estado que este plugin consiga alcançar.
+- **O trabalho dele você pode conferir.** Tudo o que o modelo viu fica registrado, o armazém é um arquivo SQLite comum que você pode navegar, exportar e auditar, e toda uma categoria de erros é evitada por desenho, não por disciplina.
 
-- **A porta não pode ser contornada.** Todo caminho de escrita (`add` / `replace` / `remove` / `seed`) passa pela cascata de aprovação dentro do serviço, não na camada de ferramentas. `writePolicy: ask | auto | off` é configuração invisível para o modelo; `replace` / `remove` / `consolidate` carregam o texto completo das entradas que alteram no payload de aprovação, e uma escrita negada ainda gera uma linha de auditoria `*-denied`.
-- **Visível para o modelo ⟺ registrado.** O snapshot injetado chega textualmente a `system/message`; toda escrita é reconstruível a partir de `approval/asked` + `approval/decided` + a própria tabela de auditoria do plugin.
-- **Limitado e honesto.** Linhas de aviso suaves por trilha e por camada (padrão usuário 2000 / agente 4000). Ultrapassar uma nunca bloqueia uma escrita — apenas sinaliza que aquela camada merece consolidação. Nunca trunca, nunca compacta automaticamente.
-- **Interruptor por sessão.** Cada sessão tem o seu próprio interruptor de memória (tabela SQLite do próprio plugin, esquema v6; ligado por padrão). Desligado para quatro coisas de uma vez: a injeção (o bloco de aquecimento congelado é descartado na hora), a recordação (`SESSION_MEMORY_OFF`), a escrita (recusada na mesma camada da porta de aprovação) e a observação (a sessão não é varrida nem escolhida como histórico). As leituras de gestão (`/memory list` / `budgets` / `audit` / `export`) continuam disponíveis. Alterne com `/memory session on|off` ou com o interruptor do compositor; o estado do interruptor nunca entra no registro da sessão e as suas linhas de auditoria levam `text: null`.
-- **Arrumar e medir.** Uma passagem de arrumação conduzida pelo modelo funde as entradas que dizem o mesmo numa só com a etiqueta `merged` e rebaixa as antigas para `superseded`: continuam no disco, fora da vista de qualquer sessão, nunca são apagadas. Nunca cruza baldes (`track × scope × agentKey`, mais `workspaceKey` na camada workspace) nem arranca sozinha: uma verificação só de leitura em `agent/turn-stopping` apenas avisa que o atraso passou a linha (uma linha de auditoria `tidy-due` e uma linha no fim do bloco de aquecimento seguinte). `/memory stats` informa os três números observáveis (taxa de repetição, taxa de acerto da recordação, volume injetado), e o painel mostra essas mesmas três linhas; a taxa de sucesso fica em branco de propósito, porque este repositório não tem fonte de sinal para «o bloco injetado chegou a ser entendido?». O botão **Arrumar a biblioteca inteira** do painel é uma fila, não uma ação: grava uma única linha de marca (`tidy_requests`, schema v7) sob a mesma política de aprovação, o aquecimento da sessão seguinte pede ao modelo uma passagem completa, e a marca vira `done` quando uma escrita de arrumação chega: nada é fundido pelo painel.
-
-- **Governar a memória: desfazer um rebaixamento e arbitrar um conflito por faceta.** `restore` percorre o rebaixamento ao contrário (`superseded → active`, `version` intacta, de volta à vista de qualquer sessão) e é a única saída do estado rebaixado. `arbitrate` resolve o caso de um facto com duas fontes: decide sobre **uma só faceta** e a direção vem de uma tabela fixa — a capacidade segue a observação, a preferência segue o autorrelato, e as outras cinco facetas mantêm **ambas** as entradas e etiquetam cada uma com `gap` (a lacuna é a evidência). A tabela é a direção, portanto não há argumento inverso a passar, e dentro de um grupo mantém-se a entrada atualizada mais recentemente. Ambas passam pela mesma porta de aprovação, o mesmo interruptor por sessão e as mesmas regras de balde que qualquer outra escrita, e ambas deixam rasto de auditoria: `restore` por entrada, `arbitrate` por rebaixamento (`text: null`, só ids), `arbitrate-tag` por etiqueta e um resumo final `arbitrate` que diz quem ficou, quem foi rebaixado e por quê.
-
-Duas trilhas × duas camadas × chave por agente: uma trilha `user` (fatos sobre o usuário) e uma trilha `agent` (fatos de ambiente e convenções), cada uma dividida em camadas `user-global` e `workspace`, isoladas por `agentPreset`. O snapshot é congelado uma vez por sessão na primeira montagem do prompt e nunca muda no meio da sessão. O bloco de pré-aquecimento carrega as restrições de expressão e o perfil permanente, e termina com um diretório de uma linha (`N more workspace / agent-track entries stay out of this block`) para o modelo saber que há algo a buscar com `memory_recall`: apenas a contagem, o conteúdo continua sob demanda.
-
-## Quick start
+## Install
 
 ```sh
 # 1. install the bundle into your profile
@@ -51,11 +40,70 @@ dsh plugin --profile web add "github:KhalilYamber/yammory-system#main"
 dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 ```
 
-## Install & uninstall
+Outros canais e desinstalação:
 
 - **canal git** (último `main`): `dsh plugin --profile web add git+https://github.com/KhalilYamber/yammory-system.git`.
 - **canal tarball**: `npm pack` neste repo, depois `dsh plugin --profile web add ./yammory_system-<version>.tgz`.
 - **desinstalar**: `dsh plugin --profile web remove yammory_system` (o banco de memória e os logs de sessão são mantidos).
+
+## The first minute
+
+Depois de reiniciar você deve ver, sem configurar nada:
+
+| Onde | O quê |
+|---|---|
+| Pé da barra lateral | Uma entrada de **memória** ao lado de Configurações (ela abre e fecha o painel; dá para ocultar com `panel.enabled`) |
+| Cabeçalho da conversa | Um interruptor de memória por sessão — desligado, ele para a injeção, a recordação, as escritas e a observação daquela sessão |
+| Pé da barra lateral → essa entrada | O painel: entradas por trilha e camada, busca, uso das linhas de aviso, auditoria recente, os três números observáveis e um botão **Arrumar a biblioteca inteira** que só enfileira uma marca |
+| Configurações do DSH → `yammory-system` | Todos os campos de configuração, cada um com um ponto de interrogação que o explica em palavras simples |
+| `/memory` | `list`, `query`, `stats`, `audit`, `session on|off`, `export` / `import <path>` e mais |
+
+## Table of contents
+
+- [Why this exists](#why-this-exists)
+- [Install](#install)
+- [The first minute](#the-first-minute)
+- [How it works](#how-it-works)
+- [Capabilities](#capabilities)
+- [Compatibility](#compatibility)
+- [Configuration](#configuration)
+- [Tools & surfaces](#tools--surfaces)
+- [MCP server](#mcp-server)
+- [Permissions & data](#permissions--data)
+- [Security boundaries](#security-boundaries)
+- [Known limitations](#known-limitations)
+- [How it's different](#how-its-different)
+- [dsh-memory-protocol v1](#dsh-memory-protocol-v1)
+- [What we learned from the terminal memories](#what-we-learned-from-the-terminal-memories)
+- [Development](#development)
+- [Topics](#topics)
+- [Contributors](#contributors)
+- [Upstream](#upstream)
+
+## How it works
+
+O `yammory_system` é uma costura de capacidade, não outro armazém: um serviço tipado `ctx.memory`, um provedor SQLite local (`node:sqlite`, WAL, `0600`, em `$DSH_HOME/dsh-memento/memory.db`) e seus consumidores — a ferramenta `memory` e um snapshot congelado injetado no prompt do sistema.
+
+Duas trilhas × duas camadas × chave por agente: uma trilha `user` (fatos sobre o usuário) e uma trilha `agent` (fatos de ambiente e convenções), cada uma dividida em camadas `user-global` e `workspace`, isoladas por `agentPreset`. O snapshot é congelado uma vez por sessão na primeira montagem do prompt e nunca muda no meio da sessão. O bloco de pré-aquecimento carrega as restrições de expressão e o perfil permanente, e termina com um diretório de uma linha (`N more workspace / agent-track entries stay out of this block`) para o modelo saber que há algo a buscar com `memory_recall`: apenas a contagem, o conteúdo continua sob demanda.
+
+## Capabilities
+
+- **A porta não pode ser contornada.** Todo caminho de escrita (`add` / `replace` / `remove` / `seed`) passa pela cascata de aprovação dentro do serviço, não na camada de ferramentas. `writePolicy: ask | auto | off` é configuração invisível para o modelo; `replace` / `remove` / `consolidate` carregam o texto completo das entradas que alteram no payload de aprovação, e uma escrita negada ainda gera uma linha de auditoria `*-denied`.
+- **Visível para o modelo ⟺ registrado.** O snapshot injetado chega textualmente a `system/message`; toda escrita é reconstruível a partir de `approval/asked` + `approval/decided` + a própria tabela de auditoria do plugin.
+- **Limitado e honesto.** Linhas de aviso suaves por trilha e por camada (padrão usuário 2000 / agente 4000). Ultrapassar uma nunca bloqueia uma escrita — apenas sinaliza que aquela camada merece consolidação. Nunca trunca, nunca compacta automaticamente.
+- **Interruptor por sessão.** Cada sessão tem o seu próprio interruptor de memória (tabela SQLite do próprio plugin, esquema v6; ligado por padrão). Desligado para quatro coisas de uma vez: a injeção (o bloco de aquecimento congelado é descartado na hora), a recordação (`SESSION_MEMORY_OFF`), a escrita (recusada na mesma camada da porta de aprovação) e a observação (a sessão não é varrida nem escolhida como histórico). As leituras de gestão (`/memory list` / `budgets` / `audit` / `export`) continuam disponíveis. Alterne com `/memory session on|off` ou com o interruptor do compositor; o estado do interruptor nunca entra no registro da sessão e as suas linhas de auditoria levam `text: null`.
+- **Arrumar e medir.** Uma passagem de arrumação conduzida pelo modelo funde as entradas que dizem o mesmo numa só com a etiqueta `merged` e rebaixa as antigas para `superseded`: continuam no disco, fora da vista de qualquer sessão, nunca são apagadas. Nunca cruza baldes (`track × scope × agentKey`, mais `workspaceKey` na camada workspace) nem arranca sozinha: uma verificação só de leitura em `agent/turn-stopping` apenas avisa que o atraso passou a linha (uma linha de auditoria `tidy-due` e uma linha no fim do bloco de aquecimento seguinte). `/memory stats` informa os três números observáveis (taxa de repetição, taxa de acerto da recordação, volume injetado), e o painel mostra essas mesmas três linhas; a taxa de sucesso fica em branco de propósito, porque este repositório não tem fonte de sinal para «o bloco injetado chegou a ser entendido?». O botão **Arrumar a biblioteca inteira** do painel é uma fila, não uma ação: grava uma única linha de marca (`tidy_requests`, schema v7) sob a mesma política de aprovação, o aquecimento da sessão seguinte pede ao modelo uma passagem completa, e a marca vira `done` quando uma escrita de arrumação chega: nada é fundido pelo painel.
+
+- **Governar a memória: desfazer um rebaixamento e arbitrar um conflito por faceta.** `restore` percorre o rebaixamento ao contrário (`superseded → active`, `version` intacta, de volta à vista de qualquer sessão) e é a única saída do estado rebaixado. `arbitrate` resolve o caso de um facto com duas fontes: decide sobre **uma só faceta** e a direção vem de uma tabela fixa — a capacidade segue a observação, a preferência segue o autorrelato, e as outras cinco facetas mantêm **ambas** as entradas e etiquetam cada uma com `gap` (a lacuna é a evidência). A tabela é a direção, portanto não há argumento inverso a passar, e dentro de um grupo mantém-se a entrada atualizada mais recentemente. Ambas passam pela mesma porta de aprovação, o mesmo interruptor por sessão e as mesmas regras de balde que qualquer outra escrita, e ambas deixam rasto de auditoria: `restore` por entrada, `arbitrate` por rebaixamento (`text: null`, só ids), `arbitrate-tag` por etiqueta e um resumo final `arbitrate` que diz quem ficou, quem foi rebaixado e por quê.
+
+## Compatibility
+
+| Surface | Status |
+|---|---|
+| Harness | DeepSeek Harness `dsh-v0.1.5-rc.2` (adaptado em 2026-09-09): o envelope de sessão mantém seu campo ignorable apenas para compatibilidade de leitura de logs armazenados - o Session.append ainda não consegue estampá-lo, então o comportamento da porta não muda. Verificado em 2026-09-11 contra o checkout master dsh-v0.1.5-rc.2 (cadeia completa de portas + smoke de instalação de perfil). |
+| Node | `^22.19.0 || >=24.0.0` |
+| Platforms | Windows / macOS / Linux (somente host; sem código nativo, sem rede) |
+| Model | Qualquer |
 
 ## Configuration
 
@@ -157,6 +205,27 @@ Exemplo para o Claude Desktop (`claude_desktop_config.json`):
 
 O servidor é somente-leitura: sem rede, sem gravações, sem porta de aprovação — apenas busca e estatísticas.
 
+## Permissions & data
+
+- **Permissions**: o manifesto de workshop declara `harness:tool`, `filesystem:read`, `filesystem:write` e `network:none` / `subprocess:none` / `shell:none` / `python:none` / `credentials:none`. A aprovação de escrita usa a costura oficial de aprovação.
+- **Data**: banco de dados SQLite local (`0600`), zero rede, zero credenciais.
+- **Session log**: a completude da auditoria vem do par de aprovação (`approval/asked` + `approval/decided`) mais a tabela de auditoria do plugin.
+
+## Security boundaries
+
+- **Somente serviços públicos.** Consome `tools`, `systemPrompt` e a costura de aprovação; sem alterações em engine / agent-loop / apiproxy / UI oficial.
+- **Zero rede, zero credenciais.** Banco de dados local com modo de arquivo POSIX `0600`.
+- **Falha ruidosa.** Banco corrompido, esquema mais novo ou configuração inválida falha ao carregar; orçamentos cheios e correspondências de substring ambíguas falham com erros estruturados.
+- **Um processo, um armazém.** Várias sessões compartilham o armazém SQLite; dois processos que compartilham um `$DSH_HOME` escrevem o mesmo arquivo (último escritor vence sob o bloqueio do SQLite).
+
+## Known limitations
+
+- **Eventos de sessão declarados, ainda não emitidos (rc.2).** `memory/added|updated|removed|recalled|snapshot` são declarados por fusão, mas o rc.2 não tem superfície de registro para tipos de evento fora do repo; a emissão é ativada quando uma build do harness os registrar.
+- **A política `ask` precisa de um answerer.** Sem um answerer UI/ACP composto, as escritas falham fechadas.
+- **Sem indexação FTS5.** A busca por substring usa `instr` insensível a maiúsculas (correto para CJK).
+- **A observação é uma lista de permissões, e a lista tem uma borda.** `memory_observe scan` só mantém eventos `user/message` cujo `source.kind` é `user` ou `user-rpc`; medido nesta máquina, isso descarta 48% de todos os eventos `user/message` (contexto de execução, AGENTS.md, catálogos de skills, rodadas de objetivo, avisos de subagentes). Não consegue, porém, separar uma mensagem digitada por uma pessoa de uma injetada por uma ponte externa que também declara `kind: 'user'` — o log carrega apenas esse sinal. Trate uma citação isolada como evidência fraca; exija repetição entre sessões.
+- **A metade da recordação chamada «semântica» ainda não é semântica.** `retrieval.vector` só entra em ação com um provedor de embedding que se declare semântico, e o único provedor que vem junto declara `false`, então hoje o interruptor recai por desenho na recordação por palavras-chave. Ligar a recordação semântica de verdade exige uma fonte de embedding que este repositório ainda não escolheu.
+
 ## How it's different
 
 | Plugin | O que é | A diferença do yammory_system |
@@ -200,26 +269,6 @@ O `yammory_system` é o ensaio comunitário do protocolo de memória DSH — uma
 
 - **Upstream proposal** — [docs/upstream-proposal.md](docs/upstream-proposal.md) (中文: [upstream-proposal.zh.md](docs/upstream-proposal.zh.md)): por que a costura oficial `ctx.memory` deveria adotar o protocolo, as diferenças e o caminho de migração.
 
-## Permissions & data
-
-- **Permissions**: o manifesto de workshop declara `harness:tool`, `filesystem:read`, `filesystem:write` e `network:none` / `subprocess:none` / `shell:none` / `python:none` / `credentials:none`. A aprovação de escrita usa a costura oficial de aprovação.
-- **Data**: banco de dados SQLite local (`0600`), zero rede, zero credenciais.
-- **Session log**: a completude da auditoria vem do par de aprovação (`approval/asked` + `approval/decided`) mais a tabela de auditoria do plugin.
-
-## Security boundaries
-
-- **Somente serviços públicos.** Consome `tools`, `systemPrompt` e a costura de aprovação; sem alterações em engine / agent-loop / apiproxy / UI oficial.
-- **Zero rede, zero credenciais.** Banco de dados local com modo de arquivo POSIX `0600`.
-- **Falha ruidosa.** Banco corrompido, esquema mais novo ou configuração inválida falha ao carregar; orçamentos cheios e correspondências de substring ambíguas falham com erros estruturados.
-- **Um processo, um armazém.** Várias sessões compartilham o armazém SQLite; dois processos que compartilham um `$DSH_HOME` escrevem o mesmo arquivo (último escritor vence sob o bloqueio do SQLite).
-
-## Known limitations
-
-- **Eventos de sessão declarados, ainda não emitidos (rc.2).** `memory/added|updated|removed|recalled|snapshot` são declarados por fusão, mas o rc.2 não tem superfície de registro para tipos de evento fora do repo; a emissão é ativada quando uma build do harness os registrar.
-- **A política `ask` precisa de um answerer.** Sem um answerer UI/ACP composto, as escritas falham fechadas.
-- **Sem indexação FTS5.** A busca por substring usa `instr` insensível a maiúsculas (correto para CJK).
-- **A observação é uma lista de permissões, e a lista tem uma borda.** `memory_observe scan` só mantém eventos `user/message` cujo `source.kind` é `user` ou `user-rpc`; medido nesta máquina, isso descarta 48% de todos os eventos `user/message` (contexto de execução, AGENTS.md, catálogos de skills, rodadas de objetivo, avisos de subagentes). Não consegue, porém, separar uma mensagem digitada por uma pessoa de uma injetada por uma ponte externa que também declara `kind: 'user'` — o log carrega apenas esse sinal. Trate uma citação isolada como evidência fraca; exija repetição entre sessões.
-
 ## What we learned from the terminal memories
 
 O `yammory_system` não é um port do Claude Code, Codex ou Hermes — mas seu design absorveu deliberadamente as partes que cada um acertou, e recusou as que causavam dano:
@@ -238,7 +287,7 @@ E as partes deliberadamente recusadas: a auto-resumização oculta em estado pri
 
 ```sh
 npm install              # node ^22.19 || >=24
-npm test                 # node --test: 347 tests
+npm test                 # node --test: 365 tests
 npm run lint             # oxlint
 npm run test:conformance # dsh-memory-protocol v1 conformance suite
 npm run typecheck        # tsc --checkJs gate

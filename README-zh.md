@@ -2,46 +2,35 @@
 
 # yammory_system
 
-**给 DeepSeek Harness 补上分层、带审批门、可审计的跨会话记忆——软预警线取代硬上限。**
+**您的助手不再追问那些它本该知道的事。**
 
-*一个类型安全的 `ctx.memory` 接缝、模型绕不过去的写入审批门，以及能从会话日志重建的审计链。*
+它跨会话记得您——每个科目里您到了哪一层、您喜欢被怎么说话、哪些事您已经定下来了——并且没有您的批准，任何一条写入都不会落盘，所以关于您的事，不会被背着您存下来。
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![DSH plugin](https://img.shields.io/badge/dsh--plugin-✅-green)](https://github.com/topics/dsh-plugin)
-[![Node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-brightgreen.svg)](#)
+[![Node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-brightgreen.svg)](#compatibility)
 [![CI](https://img.shields.io/github/actions/workflow/status/KhalilYamber/yammory-system/ci.yml?branch=main&label=CI)](https://github.com/KhalilYamber/yammory-system/actions)
 [![Version](https://img.shields.io/github/v/tag/KhalilYamber/yammory-system?label=version)](https://github.com/KhalilYamber/yammory-system/releases)
 
 [English](README.md) · [简体中文](README-zh.md) · [Español](README-es.md) · [Português](README-pt.md) · [हिन्दी](README-hi.md)
 
+<sub>分发渠道：仅 GitHub 一条——没有 npm 包，也没有市场上架。</sub>
+
 </div>
 
 ---
 
-## Compatibility
+## Why this exists
 
-| Surface | Status |
-|---|---|
-| Harness | DeepSeek Harness `dsh-v0.1.5-rc.2`（2026-09-09 已适配）：会话信封保留 ignorable 字段但仅用于存量日志读取兼容——Session.append 仍无法盖章，门控行为不变。 2026-09-11 已对照 dsh-v0.1.5-rc.2 master checkout 核验（全部门禁链 + profile 安装冒烟）。 |
-| Node | `^22.19.0 || >=24.0.0` |
-| Platforms | Windows / macOS / Linux（纯 host；无原生代码、无网络） |
-| Model | 任意 |
+一个有本事的助手，依然是个失忆的助手。每次会话它都从头来过：不知道您已经懂了特征向量、却从没碰过张量网络；不知道您宁可被纠正、也不愿被鼓励；也不知道三周前您已经决定不走那条路。于是您一次次重新自我介绍，而这场本可以从有趣处开始的对话，从零开始。
 
-## What you get
+`yammory_system` 给 DeepSeek Harness 一个地方存住这些知识，以及一套不去猜也能用上它的办法。三件事让它区别于一个记忆仓库：
 
-`yammory_system` 是能力接缝，不是又一个仓库：一个类型安全的 `ctx.memory` 服务、一个本地 SQLite 提供方（`node:sqlite`，WAL，`0600`，位于 `$DSH_HOME/dsh-memento/memory.db`），以及它的消费方——`memory` 工具与注入系统提示的冻结快照。
+- **先决定怎么说话，再去检索。** 七面画像携带分领域知识水位，所以助手在开口之前就知道您能接住哪些词——注入发生在提示组装时，而非检索之后。
+- **没有您，什么都不写。** 每条写路径都被强制经过服务内部 DSH 自己的审批门。被拒的写同样留证；静默写入不是本插件能到达的状态。
+- **它的工作您可以查。** 模型看过的每一句都有记录，库是一个您可以浏览、导出与审计的普通 SQLite 文件，一整类错误由设计拦下，而非靠自觉。
 
-- **审批门不可绕过。** 每条写路径（`add` / `replace` / `remove` / `seed`）都被强制经过服务内部的审批 waterfall，而非工具层。`writePolicy: ask | auto | off` 是模型看不见的配置；`replace` / `remove` / `consolidate` 的审批载荷携带将被改动条目的全文，被拒的写同样落一条 `*-denied` 审计行。
-- **模型可见 ⟺ 已记录。** 注入的快照逐字进入 `system/message`；每次写都能从 `approval/asked` + `approval/decided` + 插件自有审计表重建。
-- **有界且诚实。** 每轨每层软预警线（默认 user 2000 / agent 4000）。越线绝不拦写——只提示这一格值得整合。绝不截断、绝不自动压缩。
-- **会话级开关。** 每个会话一个自己的记忆开关（插件自有 SQLite 表，schema v6；默认开）。关掉即四件同时停：**注入停**（该会话的冻结预热块立刻作废）、**召回禁**（`SESSION_MEMORY_OFF`）、**写入停**（与审批门同层拦截）、**观察不碰**（本会话不扫，历史选区也不选它）。管理面只读（`/memory list` / `budgets` / `audit` / `export`）照常可用。用 `/memory session on|off` 或输入框下方的开关切换；开关状态本身绝不进会话日志，审计行 `text` 恒为 `null`。
-- **整理与度量。** 模型驱动的整理把「在讲同一件事」的条目并成一条带 `merged` 标的条目，旧条目降级为 `superseded`——仍在库里，退出每个会话的可见集，绝不物理删。它不跨桶（`track × scope × agentKey`，workspace 层再加 `workspaceKey`），也绝不自动跑：`agent/turn-stopping` 上挂的只读检查只提示积压过线（一行 `tidy-due` 审计 ＋ 下个会话预热段末行一句）。`/memory stats` 打印可观测三数（重复率 / 召回命中率 / 注入量），抽屉面板里同样有这三行；成功率刻意留白，因为本仓库没有「注入之后对方是否真听懂了」这条信号源。面板上的**整理全库**按钮是排队，不是动作：它按同一套审批策略只写一行标记（`tidy_requests`，schema v7），下次会话的预热段请模型跑一次全库整理，等真的有整理落写时标记转 `done`——面板这边一条都不会合并。
-
-- **治理：把降级走回来，把冲突按面裁决。** `restore` 把一次降级走反方向（`superseded → active`，`version` 不动，重新进入每个会话的可见集），它是脱离降级态的唯一出口。`arbitrate` 处理「同一条事实、两个来源」：在**一个面**上裁决，方向由固定表决定——能力听观察、意愿听自陈，其余五面**两条都留**并各打 `gap` 标（落差本身即证据）。表即方向，所以没有反向参数可传；同组内保留 `updatedAt` 最新者。两者与所有写路径同门：同一审批门、同一会话开关、同一桶内边界；审计也逐条留痕——`restore` 每条一行，`arbitrate` 每次降级一行（`text` 恒为 `null`，只记 id）、打标一行 `arbitrate-tag`，收尾一行 `arbitrate` 摘要写清保留了谁、降级了谁、理由是什么。
-
-两条轨道 × 两个层级 × 按 agent 隔离：`user` 轨（关于用户的事实）与 `agent` 轨（环境事实与约定），各自再分为 `user-global` 与 `workspace` 层，并按 `agentPreset` 隔离。快照在会话首次组装提示时冻结一次，会话中途不再变化。预热块承载表达约束与常驻画像，末行是一行目录（`本工作区与 agent 轨另有 N 条记忆不在本块`），让模型知道还有东西可按需取——只报条数，正文仍留在 `memory_recall` 那一侧。
-
-## Quick start
+## Install
 
 ```sh
 # 1. install the bundle into your profile
@@ -51,11 +40,70 @@ dsh plugin --profile web add "github:KhalilYamber/yammory-system#main"
 dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 ```
 
-## Install & uninstall
+其他渠道与卸载：
 
 - **git channel**（最新 `main`）：`dsh plugin --profile web add git+https://github.com/KhalilYamber/yammory-system.git`。
 - **tarball channel**：在本仓库执行 `npm pack`，然后 `dsh plugin --profile web add ./yammory_system-<version>.tgz`。
 - **uninstall**：`dsh plugin --profile web remove yammory_system`（记忆库与会话日志保留）。
+
+## The first minute
+
+重启之后，什么都不用配，您就该看到：
+
+| 位置 | 是什么 |
+|---|---|
+| 侧栏底部 | 设置旁边的一个**记忆**入口（它开关抽屉；可用 `panel.enabled` 隐藏） |
+| 会话标题栏 | 会话级的记忆开关——关掉即停掉该会话的注入、召回、写入与观察 |
+| 侧栏底部 → 该入口 | 抽屉：按轨道与层级列出的条目、搜索、预警线用量、近期审计、三个可观测数，以及一个只排队登记的**整理全库**按钮 |
+| DSH 设置 → `yammory-system` | 每一个配置项，各自带一个问号，用大白话解释它 |
+| `/memory` | `list`、`query`、`stats`、`audit`、`session on|off`、`export` / `import <path>`，以及更多 |
+
+## Table of contents
+
+- [Why this exists](#why-this-exists)
+- [Install](#install)
+- [The first minute](#the-first-minute)
+- [How it works](#how-it-works)
+- [Capabilities](#capabilities)
+- [Compatibility](#compatibility)
+- [Configuration](#configuration)
+- [Tools & surfaces](#tools--surfaces)
+- [MCP server](#mcp-server)
+- [Permissions & data](#permissions--data)
+- [Security boundaries](#security-boundaries)
+- [Known limitations](#known-limitations)
+- [How it's different](#how-its-different)
+- [dsh-memory-protocol v1](#dsh-memory-protocol-v1)
+- [What we learned from the terminal memories](#what-we-learned-from-the-terminal-memories)
+- [Development](#development)
+- [Topics](#topics)
+- [Contributors](#contributors)
+- [Upstream](#upstream)
+
+## How it works
+
+`yammory_system` 是能力接缝，不是又一个仓库：一个类型安全的 `ctx.memory` 服务、一个本地 SQLite 提供方（`node:sqlite`，WAL，`0600`，位于 `$DSH_HOME/dsh-memento/memory.db`），以及它的消费方——`memory` 工具与注入系统提示的冻结快照。
+
+两条轨道 × 两个层级 × 按 agent 隔离：`user` 轨（关于用户的事实）与 `agent` 轨（环境事实与约定），各自再分为 `user-global` 与 `workspace` 层，并按 `agentPreset` 隔离。快照在会话首次组装提示时冻结一次，会话中途不再变化。预热块承载表达约束与常驻画像，末行是一行目录（`本工作区与 agent 轨另有 N 条记忆不在本块`），让模型知道还有东西可按需取——只报条数，正文仍留在 `memory_recall` 那一侧。
+
+## Capabilities
+
+- **审批门不可绕过。** 每条写路径（`add` / `replace` / `remove` / `seed`）都被强制经过服务内部的审批 waterfall，而非工具层。`writePolicy: ask | auto | off` 是模型看不见的配置；`replace` / `remove` / `consolidate` 的审批载荷携带将被改动条目的全文，被拒的写同样落一条 `*-denied` 审计行。
+- **模型可见 ⟺ 已记录。** 注入的快照逐字进入 `system/message`；每次写都能从 `approval/asked` + `approval/decided` + 插件自有审计表重建。
+- **有界且诚实。** 每轨每层软预警线（默认 user 2000 / agent 4000）。越线绝不拦写——只提示这一格值得整合。绝不截断、绝不自动压缩。
+- **会话级开关。** 每个会话一个自己的记忆开关（插件自有 SQLite 表，schema v6；默认开）。关掉即四件同时停：**注入停**（该会话的冻结预热块立刻作废）、**召回禁**（`SESSION_MEMORY_OFF`）、**写入停**（与审批门同层拦截）、**观察不碰**（本会话不扫，历史选区也不选它）。管理面只读（`/memory list` / `budgets` / `audit` / `export`）照常可用。用 `/memory session on|off` 或输入框下方的开关切换；开关状态本身绝不进会话日志，审计行 `text` 恒为 `null`。
+- **整理与度量。** 模型驱动的整理把「在讲同一件事」的条目并成一条带 `merged` 标的条目，旧条目降级为 `superseded`——仍在库里，退出每个会话的可见集，绝不物理删。它不跨桶（`track × scope × agentKey`，workspace 层再加 `workspaceKey`），也绝不自动跑：`agent/turn-stopping` 上挂的只读检查只提示积压过线（一行 `tidy-due` 审计 ＋ 下个会话预热段末行一句）。`/memory stats` 打印可观测三数（重复率 / 召回命中率 / 注入量），抽屉面板里同样有这三行；成功率刻意留白，因为本仓库没有「注入之后对方是否真听懂了」这条信号源。面板上的**整理全库**按钮是排队，不是动作：它按同一套审批策略只写一行标记（`tidy_requests`，schema v7），下次会话的预热段请模型跑一次全库整理，等真的有整理落写时标记转 `done`——面板这边一条都不会合并。
+
+- **治理：把降级走回来，把冲突按面裁决。** `restore` 把一次降级走反方向（`superseded → active`，`version` 不动，重新进入每个会话的可见集），它是脱离降级态的唯一出口。`arbitrate` 处理「同一条事实、两个来源」：在**一个面**上裁决，方向由固定表决定——能力听观察、意愿听自陈，其余五面**两条都留**并各打 `gap` 标（落差本身即证据）。表即方向，所以没有反向参数可传；同组内保留 `updatedAt` 最新者。两者与所有写路径同门：同一审批门、同一会话开关、同一桶内边界；审计也逐条留痕——`restore` 每条一行，`arbitrate` 每次降级一行（`text` 恒为 `null`，只记 id）、打标一行 `arbitrate-tag`，收尾一行 `arbitrate` 摘要写清保留了谁、降级了谁、理由是什么。
+
+## Compatibility
+
+| Surface | Status |
+|---|---|
+| Harness | DeepSeek Harness `dsh-v0.1.5-rc.2`（2026-09-09 已适配）：会话信封保留 ignorable 字段但仅用于存量日志读取兼容——Session.append 仍无法盖章，门控行为不变。 2026-09-11 已对照 dsh-v0.1.5-rc.2 master checkout 核验（全部门禁链 + profile 安装冒烟）。 |
+| Node | `^22.19.0 || >=24.0.0` |
+| Platforms | Windows / macOS / Linux（纯 host；无原生代码、无网络） |
+| Model | 任意 |
 
 ## Configuration
 
@@ -157,6 +205,27 @@ Claude Desktop（`claude_desktop_config.json`）配置示例：
 
 服务器只读：无网络、无写入、无审批门——仅检索与统计。
 
+## Permissions & data
+
+- **Permissions**：workshop 清单声明 `harness:tool`、`filesystem:read`、`filesystem:write`，以及 `network:none` / `subprocess:none` / `shell:none` / `python:none` / `credentials:none`。写审批走官方审批接缝。
+- **Data**：本地 SQLite 数据库（`0600`），零网络、零凭据。
+- **Session log**：审计完整性来自审批对（`approval/asked` + `approval/decided`）加插件自有审计表。
+
+## Security boundaries
+
+- **仅公开服务。** 只消费 `tools`、`systemPrompt` 与审批接缝；不改 engine / agent-loop / apiproxy / 官方 UI。
+- **零网络、零凭据。** 本地数据库，POSIX 文件权限 `0600`。
+- **失败要大声。** 库损坏、schema 过新或非法配置在加载期抛错；子串歧义返回结构化错误。越预警线不拦写。
+- **一进程一库。** 多个会话共享 SQLite 库；共享同一 `$DSH_HOME` 的两个进程写同一文件（SQLite 锁下后写覆盖）。
+
+## Known limitations
+
+- **会话事件已声明、尚未发出（rc.2）。** `memory/added|updated|removed|recalled|snapshot` 已合并声明，但 rc.2 没有仓库外事件类型的注册面；一旦 harness 构建收录这些类型即自动开启发出。
+- **`ask` 策略需要 answerer。** 未组合 UI/ACP answerer 时，写入失败关闭。
+- **无 FTS5 索引。** 子串搜索走大小写不敏感的 `instr`（对 CJK 正确）。
+- **观察面是白名单，而白名单有边界。** `memory_observe scan` 只保留 `source.kind` 为 `user` / `user-rpc` 的 `user/message` 事件；本机实测这一条会挡下全部 `user/message` 的 48%（运行时上下文、AGENTS.md、skill 目录、goal 轮次、子代理通知）。但它分不出「人打的」与「外部桥接注入、同样声明 `kind: 'user'` 的」——事件日志只带这一个信号。故单条引文只算弱证据；要下结论，须跨会话重复出现。
+- **被叫作「语义」的那半边召回还不语义。** `retrieval.vector` 只在注册了真正声明为语义的嵌入 provider 时才生效，而本仓库自带的那个 provider 声明 `false`，所以今天这个开关是**按设计**回落到关键词召回。要开真正的语义召回，得先有一个本仓库尚未选定的嵌入来源。
+
 ## How it's different
 
 | Plugin | 是什么 | yammory_system 的差异 |
@@ -200,26 +269,6 @@ Claude Desktop（`claude_desktop_config.json`）配置示例：
 
 - **Upstream proposal** — [docs/upstream-proposal.md](docs/upstream-proposal.md)（中文: [upstream-proposal.zh.md](docs/upstream-proposal.zh.md)）：为何官方 `ctx.memory` 接缝应采纳该协议、差异与迁移路径。
 
-## Permissions & data
-
-- **Permissions**：workshop 清单声明 `harness:tool`、`filesystem:read`、`filesystem:write`，以及 `network:none` / `subprocess:none` / `shell:none` / `python:none` / `credentials:none`。写审批走官方审批接缝。
-- **Data**：本地 SQLite 数据库（`0600`），零网络、零凭据。
-- **Session log**：审计完整性来自审批对（`approval/asked` + `approval/decided`）加插件自有审计表。
-
-## Security boundaries
-
-- **仅公开服务。** 只消费 `tools`、`systemPrompt` 与审批接缝；不改 engine / agent-loop / apiproxy / 官方 UI。
-- **零网络、零凭据。** 本地数据库，POSIX 文件权限 `0600`。
-- **失败要大声。** 库损坏、schema 过新或非法配置在加载期抛错；子串歧义返回结构化错误。越预警线不拦写。
-- **一进程一库。** 多个会话共享 SQLite 库；共享同一 `$DSH_HOME` 的两个进程写同一文件（SQLite 锁下后写覆盖）。
-
-## Known limitations
-
-- **会话事件已声明、尚未发出（rc.2）。** `memory/added|updated|removed|recalled|snapshot` 已合并声明，但 rc.2 没有仓库外事件类型的注册面；一旦 harness 构建收录这些类型即自动开启发出。
-- **`ask` 策略需要 answerer。** 未组合 UI/ACP answerer 时，写入失败关闭。
-- **无 FTS5 索引。** 子串搜索走大小写不敏感的 `instr`（对 CJK 正确）。
-- **观察面是白名单，而白名单有边界。** `memory_observe scan` 只保留 `source.kind` 为 `user` / `user-rpc` 的 `user/message` 事件；本机实测这一条会挡下全部 `user/message` 的 48%（运行时上下文、AGENTS.md、skill 目录、goal 轮次、子代理通知）。但它分不出「人打的」与「外部桥接注入、同样声明 `kind: 'user'` 的」——事件日志只带这一个信号。故单条引文只算弱证据；要下结论，须跨会话重复出现。
-
 ## What we learned from the terminal memories
 
 `yammory_system` 不是 Claude Code、Codex 或 Hermes 的移植——但其设计刻意吸收了它们各自做对的部分，并拒绝有害的部分：
@@ -238,7 +287,7 @@ Claude Desktop（`claude_desktop_config.json`）配置示例：
 
 ```sh
 npm install              # node ^22.19 || >=24
-npm test                 # node --test: 347 tests
+npm test                 # node --test: 365 tests
 npm run lint             # oxlint
 npm run test:conformance # dsh-memory-protocol v1 conformance suite
 npm run typecheck        # tsc --checkJs gate
