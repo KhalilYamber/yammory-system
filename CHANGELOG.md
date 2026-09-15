@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-15
+
 ### Added
 
 - **The panel entry lines up with the WSL action beside it, and keeps its label.** The entry and `dsh-wsl-workspace`'s W button share `sidebar.footer.action`, whose container (`.footerActions`) is a `display: flex` **row**: the row's height is set by its tallest item, and flex's default `align-items: stretch` only stretches items that carry no explicit height. Ours was a 42px, full-width row copied from `CordisPanel`; the W button is `height: 28px`, so the W sat at the row's top while our icon centred inside 42px — about 7px apart, which reads as "off". The fix shares the **vertical** geometry only: both buttons are 28px tall, top-aligned, content-centred, `flex: none` (no stretching); the width follows each button's own content, so the label stays — a 28px pill (icon + `记忆`, 13px/500, 6px gap, 10px padding) — and the 56px rail collapses to a 36×36 round icon button, the size the W button also takes there. The 4px leading gap comes from the sidebar's own grouping habit (`.panelList` uses the same value). The lesson worth keeping: aligning to a sibling means matching one line — height, top edge, centred content — rather than matching its shape.
