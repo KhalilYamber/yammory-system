@@ -1,21 +1,99 @@
 <div align="center">
 
 # yammory_system
-**Layered, approval-gated, auditable cross-session memory for DeepSeek Harness — soft warning lines instead of a hard cap.**
 
-*A typed `ctx.memory` seam, a write-approval gate no model path can bypass, and audit trails rebuilt from the session log.*
+**Your assistant stops asking you what it should already know.**
+
+It remembers you across sessions — how deep you are in each subject, how you like to be spoken to, what you have already settled — and no write lands without your approval, so nothing about you is stored behind your back.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![DSH plugin](https://img.shields.io/badge/dsh--plugin-✅-green)](https://github.com/topics/dsh-plugin)
-[![Node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-brightgreen.svg)](#)
+[![Node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-brightgreen.svg)](#compatibility)
 [![CI](https://img.shields.io/github/actions/workflow/status/KhalilYamber/yammory-system/ci.yml?branch=main&label=CI)](https://github.com/KhalilYamber/yammory-system/actions)
 [![Version](https://img.shields.io/github/v/tag/KhalilYamber/yammory-system?label=version)](https://github.com/KhalilYamber/yammory-system/releases)
 
 [English](README.md) · [简体中文](README-zh.md) · [Español](README-es.md) · [Português](README-pt.md) · [हिन्दी](README-hi.md)
 
+<sub>Distribution: the GitHub channel only — there is no npm package and no marketplace listing.</sub>
+
 </div>
 
 ---
+
+## Why this exists
+
+A capable assistant is still an assistant with amnesia. Every session it starts over: it does not know that you already understand eigenvectors but have never touched a tensor network, that you would rather be corrected than encouraged, or that you decided three weeks ago not to take that route. So you re-introduce yourself, again and again, and the conversation that could have started at the interesting part starts at zero.
+
+`yammory_system` gives DeepSeek Harness a place to keep that knowledge, and a way to use it without guessing. Three things separate it from a memory warehouse:
+
+- **It decides how to speak before it searches.** A seven-facet profile carries a per-domain knowledge level, so the assistant knows what vocabulary you can take before it answers — the injection happens at prompt assembly, not after a retrieval step.
+- **Nothing is written without you.** Every write path is forced through DSH's own approval gate inside the service. A denied write leaves evidence too; a silent write is not a state this plugin can reach.
+- **You can check its work.** Everything the model saw is logged, the store is a plain SQLite file you can browse, export and audit, and a whole category of mistakes is prevented by design rather than by discipline.
+
+## Install
+
+```sh
+# 1. install the bundle into your profile
+dsh plugin --profile web add "github:KhalilYamber/yammory-system#main"
+
+# 2. restart, then verify the row
+dsh --profile web --dump-config | grep -A3 'id: yammory_system'
+```
+
+Other channels and removal:
+
+- **git channel** (latest `main`): `dsh plugin --profile web add git+https://github.com/KhalilYamber/yammory-system.git`.
+- **tarball channel**: `npm pack` in this repo, then `dsh plugin --profile web add ./yammory_system-<version>.tgz`.
+- **uninstall**: `dsh plugin --profile web remove yammory_system` (the memory database and session logs are kept).
+
+## The first minute
+
+After a restart you should see, without configuring anything:
+
+| Where | What |
+|---|---|
+| Sidebar foot | A **memory** entry beside Settings (it toggles the drawer; hide it with `panel.enabled`) |
+| Conversation header | A per-session memory switch — off stops injection, recall, writes and observation for that session |
+| Sidebar foot → the entry | The drawer: entries by track and layer, search, warning-line usage, recent audit, the three observability numbers, and a **Tidy the whole library** button that only queues a marker |
+| DSH settings → `yammory-system` | Every config field, each one with a question mark that explains it in plain words |
+| `/memory` | `list`, `query`, `stats`, `audit`, `session on|off`, `export` / `import <path>`, and more |
+
+## Table of contents
+
+- [Why this exists](#why-this-exists)
+- [Install](#install)
+- [The first minute](#the-first-minute)
+- [How it works](#how-it-works)
+- [Capabilities](#capabilities)
+- [Compatibility](#compatibility)
+- [Configuration](#configuration)
+- [Tools & surfaces](#tools--surfaces)
+- [MCP server](#mcp-server)
+- [Permissions & data](#permissions--data)
+- [Security boundaries](#security-boundaries)
+- [Known limitations](#known-limitations)
+- [How it's different](#how-its-different)
+- [dsh-memory-protocol v1](#dsh-memory-protocol-v1)
+- [What we learned from the terminal memories](#what-we-learned-from-the-terminal-memories)
+- [Development](#development)
+- [Topics](#topics)
+- [Contributors](#contributors)
+- [Upstream](#upstream)
+
+## How it works
+
+`yammory_system` is a capability seam, not another memory warehouse: a typed `ctx.memory` service, a local SQLite provider (`node:sqlite`, WAL, `0600`, at `$DSH_HOME/dsh-memento/memory.db`), and its consumers — the `memory` tool and a frozen snapshot injected into the system prompt.
+
+Two tracks × two layers × per-agent key: a `user` track (facts about the user) and an `agent` track (environment facts and conventions), each split into `user-global` and `workspace` layers, isolated per `agentPreset`. The snapshot is frozen once per session at first prompt assembly and never changes mid-session. The warm-up block carries the speaking constraints and the standing profile, and closes with a one-line directory (`N more workspace / agent-track entries stay out of this block`) so the model knows there is something to fetch with `memory_recall` — the count is one line, the content stays on demand.
+
+## Capabilities
+
+- **The approval gate cannot be bypassed.** Every write path (`add` / `replace` / `remove` / `seed`) is forced through the approval waterfall inside the service, not in the tool layer. `writePolicy: ask | auto | off` is model-invisible configuration; `replace` / `remove` / `consolidate` carry the full text of the entries they change in the approval payload, and a denied write still lands a `*-denied` audit row.
+- **Model-visible ⟺ logged.** The injected snapshot lands verbatim in `system/message`; every write is reconstructable from `approval/asked` + `approval/decided` + the plugin's own audit table.
+- **Bounded and honest.** Soft per-track/per-layer warning lines (default user 2000 / agent 4000). Crossing one never blocks a write — it only flags that the layer is worth consolidating. Never truncated, never auto-compacted.
+- **Per-session switch.** Every session has its own memory switch (plugin-owned SQLite table, schema v6; default on). Off means injection stops (the frozen warm-up block is dropped at once), recall is refused (`SESSION_MEMORY_OFF`), writes are refused at the same layer as the approval gate, and the observation channel neither scans the session nor selects it as history. Management reads (`/memory list` / `budgets` / `audit` / `export`) stay available. Toggle with `/memory session on|off` or the header switch; the switch state itself never enters the session log, and its audit rows carry `text: null`.
+- **Tidy and measure.** A model-driven tidy pass merges entries that say the same thing into one `merged`-tagged entry and demotes the old ones to `superseded` — kept on disk, out of every session's view, never deleted. It never crosses buckets (`track × scope × agentKey`, plus `workspaceKey` on the workspace layer) and never starts by itself: a read-only `agent/turn-stopping` check only flags that the backlog crossed the line (one `tidy-due` audit row plus a line at the end of the next warm-up block). `/memory stats` reports the three observability numbers (repetition rate, recall hit rate, injection volume) in the drawer too; the success rate is deliberately left blank, because this repo has no signal source for "did the injected block actually land". The panel's **Tidy the whole library** button is a queue, not an action: it writes one marker row (`tidy_requests`, schema v7) behind the same approval policy, the next session's warm-up asks the model to run a whole-library tidy, and the marker turns `done` when a tidy write lands — nothing is merged from the panel.
+- **Govern the memory: roll a demotion back, arbitrate a conflict by facet.** `restore` walks a demotion the other way (`superseded → active`, `version` untouched, back into every session's view) and is the only route out of the demoted state. `arbitrate` settles the case where one fact carries two sources: it decides on **one facet**, and the direction comes from a fixed table — ability follows the observation, preference follows the self-report, and the other five facets keep **both** entries and tag each `gap` (the gap itself is the evidence). The table is the direction, so there is no reverse argument to pass, and inside a group the most recently updated entry is the one kept. Both actions ride the same approval gate, the same per-session switch and the same bucket rules as every other write, and both leave an audit trail: `restore` per entry, `arbitrate` per demotion (`text: null`, ids only), `arbitrate-tag` per tag, and one closing `arbitrate` summary naming who was kept, who was demoted and why.
 
 ## Compatibility
 
@@ -25,36 +103,6 @@
 | Node | `^22.19.0 || >=24.0.0` |
 | Platforms | Windows / macOS / Linux (pure host; no native code, no network) |
 | Model | Any |
-
-## What you get
-
-`yammory_system` is a capability seam, not another memory warehouse: a typed `ctx.memory` service, a local SQLite provider (`node:sqlite`, WAL, `0600`, at `$DSH_HOME/dsh-memento/memory.db`), and its consumers — the `memory` tool and a frozen snapshot injected into the system prompt.
-
-- **The approval gate cannot be bypassed.** Every write path (`add` / `replace` / `remove` / `seed`) is forced through the approval waterfall inside the service, not in the tool layer. `writePolicy: ask | auto | off` is model-invisible configuration; `replace` / `remove` / `consolidate` carry the full text of the entries they change in the approval payload, and a denied write still lands a `*-denied` audit row.
-- **Model-visible ⟺ logged.** The injected snapshot lands verbatim in `system/message`; every write is reconstructable from `approval/asked` + `approval/decided` + the plugin's own audit table.
-- **Bounded and honest.** Soft per-track/per-layer warning lines (default user 2000 / agent 4000). Crossing one never blocks a write — it only flags that the layer is worth consolidating. Never truncated, never auto-compacted.
-- **Per-session switch.** Every session has its own memory switch (plugin-owned SQLite table, schema v6; default on). Off means injection stops (the frozen warm-up block is dropped at once), recall is refused (`SESSION_MEMORY_OFF`), writes are refused at the same layer as the approval gate, and the observation channel neither scans the session nor selects it as history. Management reads (`/memory list` / `budgets` / `audit` / `export`) stay available. Toggle with `/memory session on|off` or the composer switch; the switch state itself never enters the session log, and its audit rows carry `text: null`.
-- **Tidy and measure.** A model-driven tidy pass merges entries that say the same thing into one `merged`-tagged entry and demotes the old ones to `superseded` — kept on disk, out of every session's view, never deleted. It never crosses buckets (`track × scope × agentKey`, plus `workspaceKey` on the workspace layer) and never starts by itself: a read-only `agent/turn-stopping` check only flags that the backlog crossed the line (one `tidy-due` audit row plus a line at the end of the next warm-up block). `/memory stats` reports the three observability numbers (repetition rate, recall hit rate, injection volume) in the drawer too; the success rate is deliberately left blank, because this repo has no signal source for "did the injected block actually land". The panel's **Tidy the whole library** button is a queue, not an action: it writes one marker row (`tidy_requests`, schema v7) behind the same approval policy, the next session's warm-up asks the model to run a whole-library tidy, and the marker turns `done` when a tidy write lands — nothing is merged from the panel.
-
-- **Govern the memory: roll a demotion back, arbitrate a conflict by facet.** `restore` walks a demotion the other way (`superseded → active`, `version` untouched, back into every session's view) and is the only route out of the demoted state. `arbitrate` settles the case where one fact carries two sources: it decides on **one facet**, and the direction comes from a fixed table — ability follows the observation, preference follows the self-report, and the other five facets keep **both** entries and tag each `gap` (the gap itself is the evidence). The table is the direction, so there is no reverse argument to pass, and inside a group the most recently updated entry is the one kept. Both actions ride the same approval gate, the same per-session switch and the same bucket rules as every other write, and both leave an audit trail: `restore` per entry, `arbitrate` per demotion (`text: null`, ids only), `arbitrate-tag` per tag, and one closing `arbitrate` summary naming who was kept, who was demoted and why.
-
-Two tracks × two layers × per-agent key: a `user` track (facts about the user) and an `agent` track (environment facts and conventions), each split into `user-global` and `workspace` layers, isolated per `agentPreset`. The snapshot is frozen once per session at first prompt assembly and never changes mid-session. The warm-up block carries the speaking constraints and the standing profile, and closes with a one-line directory (`N more workspace / agent-track entries stay out of this block`) so the model knows there is something to fetch with `memory_recall` — the count is one line, the content stays on demand.
-
-## Quick start
-
-```sh
-# 1. install the bundle into your profile
-dsh plugin --profile web add "github:KhalilYamber/yammory-system#main"
-
-# 2. restart and verify the row
-dsh --profile web --dump-config | grep -A3 'id: yammory_system'
-```
-
-## Install & uninstall
-
-- **git channel** (latest `main`): `dsh plugin --profile web add git+https://github.com/KhalilYamber/yammory-system.git`.
-- **tarball channel**: `npm pack` in this repo, then `dsh plugin --profile web add ./yammory_system-<version>.tgz`.
-- **uninstall**: `dsh plugin --profile web remove yammory_system` (the memory database and session logs are kept).
 
 ## Configuration
 
@@ -132,7 +180,7 @@ Run it directly:
 
 ```sh
 node bin/mcp-server.mjs
-# or, once the package is installed from the GitHub channel: npx yammory_system-mcp
+# or, through the GitHub channel: npx -y -p github:KhalilYamber/yammory-system yammory_system-mcp
 ```
 
 The database path is `$DSH_MEMENTO_DB_PATH` (absolute, or relative to `$DSH_HOME`); it defaults to `$DSH_HOME/dsh-memento/memory.db`.
@@ -153,9 +201,30 @@ Claude Desktop (`claude_desktop_config.json`) example:
 }
 ```
 
-`npx` resolves the package from the GitHub channel here (this repo is not on the npm registry yet), so the `-p github:…` spec is what fetches it.
+`npx` resolves the package through the GitHub channel here (this repo is not on the npm registry), so the `-p github:…` spec is what fetches it.
 
 The server is read-only: no network, no writes, no approval gate — search and stats only.
+
+## Permissions & data
+
+- **Permissions**: declares `harness:tool`, `filesystem:read`, `filesystem:write`, and `network:none` / `subprocess:none` / `shell:none` / `python:none` / `credentials:none` in its workshop manifest. Write approval rides the official approval seam.
+- **Data**: local SQLite database (`0600`), zero network, zero credentials.
+- **Session log**: audit completeness comes from the approval pair (`approval/asked` + `approval/decided`) plus the plugin's own audit table.
+
+## Security boundaries
+
+- **Public services only.** Consumes `tools`, `systemPrompt`, and the approval seam; no engine / agent-loop / apiproxy / official-UI changes.
+- **Zero network, zero credentials.** Local database with POSIX file mode `0600`.
+- **Fail loud.** Corrupt DB, newer schema, or invalid config fails at load; ambiguous substring matches fail with structured errors. Crossing a warning line never fails a write.
+- **One process, one store.** Multiple sessions share the SQLite store; two processes sharing one `$DSH_HOME` write the same file (last-writer-wins under SQLite locking).
+
+## Known limitations
+
+- **Session events are declared, not yet emitted (rc.2).** `memory/added|updated|removed|recalled|snapshot` are merge-declared, but rc.2 has no registration surface for out-of-repo event types; emission turns on once a harness build registers them.
+- **`ask` policy needs an answerer.** With no UI/ACP answerer composed, writes fail closed.
+- **No FTS5 indexing.** Substring search runs on case-insensitive `instr` (correct for CJK).
+- **Observation is a whitelist, and the whitelist has an edge.** `memory_observe scan` keeps only `user/message` events whose `source.kind` is `user` or `user-rpc`; measured on this machine, that drops 48% of all `user/message` events (runtime context, AGENTS.md, skill catalogs, goal rounds, subagent notices). It cannot, however, separate a human-typed message from an externally bridged one that also declares `kind: 'user'` — the kind is the only signal the log carries. Treat a single quoted line as weak evidence; require repetition across sessions.
+- **The retrieval half called "semantic" is not semantic yet.** `retrieval.vector` engages only with a provider that declares itself semantic, and the only provider shipped here declares `false`, so today the switch falls back to keyword recall by design. Enabling real semantic recall needs an embedding source this repo has not chosen.
 
 ## How it's different
 
@@ -174,7 +243,7 @@ The server is read-only: no network, no writes, no approval gate — search and 
 
 The two differences that hold against today's field are the last pair in the table above: a **seven-facet profile carrying a per-domain knowledge level** (it decides how the assistant speaks, before any retrieval happens), and **facet arbitration** (it decides how a two-source conflict settles — ability follows observation, preference follows the self-report, the other five facets keep both and tag each `gap`).
 
-The name is **`yammory_system`** (installed from the GitHub channel; not on the npm registry yet). Not `dsh-recall` (confusable with dsh-external/Recall), not the deleted legacy name `dsh-memory`.
+The name is **`yammory_system`** (installed from the GitHub channel; not on the npm registry). Not `dsh-recall` (confusable with dsh-external/Recall), not the deleted legacy name `dsh-memory`.
 
 ## dsh-memory-protocol v1
 
@@ -200,26 +269,6 @@ The name is **`yammory_system`** (installed from the GitHub channel; not on the 
 
 - **Upstream proposal** — [docs/upstream-proposal.md](docs/upstream-proposal.md) (中文: [upstream-proposal.zh.md](docs/upstream-proposal.zh.md)): why the official `ctx.memory` seam should adopt the protocol, the differences, and the migration path.
 
-## Permissions & data
-
-- **Permissions**: declares `harness:tool`, `filesystem:read`, `filesystem:write`, and `network:none` / `subprocess:none` / `shell:none` / `python:none` / `credentials:none` in its workshop manifest. Write approval rides the official approval seam.
-- **Data**: local SQLite database (`0600`), zero network, zero credentials.
-- **Session log**: audit completeness comes from the approval pair (`approval/asked` + `approval/decided`) plus the plugin's own audit table.
-
-## Security boundaries
-
-- **Public services only.** Consumes `tools`, `systemPrompt`, and the approval seam; no engine / agent-loop / apiproxy / official-UI changes.
-- **Zero network, zero credentials.** Local database with POSIX file mode `0600`.
-- **Fail loud.** Corrupt DB, newer schema, or invalid config fails at load; ambiguous substring matches fail with structured errors. Crossing a warning line never fails a write.
-- **One process, one store.** Multiple sessions share the SQLite store; two processes sharing one `$DSH_HOME` write the same file (last-writer-wins under SQLite locking).
-
-## Known limitations
-
-- **Session events are declared, not yet emitted (rc.2).** `memory/added|updated|removed|recalled|snapshot` are merge-declared, but rc.2 has no registration surface for out-of-repo event types; emission turns on once a harness build registers them.
-- **`ask` policy needs an answerer.** With no UI/ACP answerer composed, writes fail closed.
-- **No FTS5 indexing.** Substring search runs on case-insensitive `instr` (correct for CJK).
-- **Observation is a whitelist, and the whitelist has an edge.** `memory_observe scan` keeps only `user/message` events whose `source.kind` is `user` or `user-rpc`; measured on this machine, that drops 48% of all `user/message` events (runtime context, AGENTS.md, skill catalogs, goal rounds, subagent notices). It cannot, however, separate a human-typed message from an externally bridged one that also declares `kind: 'user'` — the kind is the only signal the log carries. Treat a single quoted line as weak evidence; require repetition across sessions.
-
 ## What we learned from the terminal memories
 
 `yammory_system` is not a port of Claude Code, Codex, or Hermes — but its design deliberately absorbed the parts each got right, and refused the parts that hurt:
@@ -238,7 +287,7 @@ And the parts deliberately refused: hidden auto-summarization into model-private
 
 ```sh
 npm install              # node ^22.19 || >=24
-npm test                 # node --test: 347 tests
+npm test                 # node --test: 365 tests
 npm run lint             # oxlint
 npm run test:conformance # dsh-memory-protocol v1 conformance suite
 npm run typecheck        # tsc --checkJs gate
