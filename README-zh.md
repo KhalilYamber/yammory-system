@@ -4,7 +4,7 @@
 
 **您的助手不再追问那些它本该知道的事。**
 
-它跨会话记得您——每个科目里您到了哪一层、您喜欢被怎么说话、哪些事您已经定下来了——并且没有您的批准，任何一条写入都不会落盘，所以关于您的事，不会被背着您存下来。
+它跨会话记得您——每个科目里您到了哪一层、您喜欢别人怎么跟您说话、哪些事您已经定下来了——并且没有您的批准，任何一条写入都不会落盘，所以关于您的事，不会被背着您存下来。
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![DSH plugin](https://img.shields.io/badge/dsh--plugin-✅-green)](https://github.com/topics/dsh-plugin)
