@@ -313,7 +313,7 @@ export async function mountClient(fetchImpl) {
   const dom = makeDom()
   const hooks = makeHooks()
   const renderTree = makeRenderer(dom, hooks)
-  /** @type {Array<{url: string, method: string}>} */
+  /** @type {Array<{url: string, method: string, body?: unknown}>} */
   const calls = []
   /** @type {any} */
   let rootContainer = null
@@ -389,10 +389,13 @@ export async function mountClient(fetchImpl) {
   ;/** @type {any} */ (globalThis).document = dom.document
   globalThis.fetch = /** @type {any} */ (async (/** @type {string} */ url, /** @type {any} */ init = {}) => {
     const method = init.method ?? 'GET'
-    calls.push({ url, method })
-    return fetchImpl(`${method} ${url}`)
+    calls.push({ url, method, body: init.body })
+    return fetchImpl(`${method} ${url}`, init)
   })
 
+  // 同一进程只挂一次（需要不同响应的用例请拆到独立测试文件）：ESM 缓存会让第二次
+  // import 拿到旧模块，window.plugin 不更新；给说明符加查询串虽能绕开缓存，但覆盖率
+  // 会把那份实例与本体合并计账，把未覆盖行摊进来（实测 client.js 从 ~82% 掉到 70%）。
   await import('../client/client.js')
   const definition = /** @type {{id: string, factory: Function}} */ (dom.window.plugin)
   const plugin = definition.factory(moduleFor)

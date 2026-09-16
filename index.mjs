@@ -51,7 +51,7 @@ import {
 } from './lib/errors.mjs'
 import { validateBudgets, budgetReport, budgetLimits, checkBudget } from './lib/budget.mjs'
 import { buildWriteReason, isMemoryWriteRequest, applyWritePolicy, normalizeWritePolicy, resolveWritePolicy, validateWritePolicies, parseWriteReason } from './lib/gate.mjs'
-import { MemoryProtocolCore, PROTOCOL_ID, PROTOCOL_VERSION, PROTOCOL_URI, trustWriteGate, normalizeTags, normalizeFacet, normalizeLevel, validateMemoryEntry, validateExportEnvelope, validateAuditRow, MAX_TAGS_PER_ENTRY, MAX_TAG_LENGTH, PANEL_SOURCE } from './lib/protocol.mjs'
+import { MemoryProtocolCore, PROTOCOL_ID, PROTOCOL_VERSION, PROTOCOL_URI, trustWriteGate, normalizeTags, normalizeFacet, normalizeLevel, validateMemoryEntry, validateExportEnvelope, validateAuditRow, MAX_TAGS_PER_ENTRY, MAX_TAG_LENGTH, PANEL_SOURCE, AUTO_TIDY_SOURCE } from './lib/protocol.mjs'
 import { MemoryAdapterRegistry } from './lib/registry.mjs'
 import { REFERENCE_ADAPTERS } from './lib/adapters.mjs'
 import { renderSnapshot, renderWarmup, visibleEntries, visibleProposals } from './lib/snapshot.mjs'
@@ -99,6 +99,7 @@ import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, Vector
  * @property {(limit?: number) => object[]} auditList
  * @property {(batchId: string) => object[]} auditByBatch
  * @property {(batchId: string) => MemoryEntry[]} entriesByBatch
+ * @property {(input?: {source?: string, limit?: number}) => string[]} batchIds
  * @property {(input: object) => object | null} proposalUpsert
  * @property {(status?: string, limit?: number) => object[]} proposalList
  * @property {(id: string, status: string) => object} proposalDecide
@@ -3526,6 +3527,58 @@ export function registerWebRoutes(ctx, service, options) {
         }
       },
     }))
+    // F8 批次面（面板留痕与一键撤回）：GET 读最近几批自动整理（摘要与明细行都在服务端用
+    // lib/strings.mjs 渲染，面板照抄——文案与命令面同一出处），POST 按批次整批撤回。
+    // 与其它路由同栅栏（connection.fetch）：不得走 webServer exact（红队①）。
+    // POST 是**用户动作**，与面板其它写动作同一条 turn 外 gate 与 writePolicy；占位 agent
+    // 不含 session，审计如实记「这个动作不属于任何会话」。
+    routeDisposers.push(connection.fetch.register({
+      path: '/api/memento/batches',
+      methods: ['GET', 'POST'],
+      requestBody: 'buffered',
+      fetch: async (/** @type {Request} */ request) => {
+        try {
+          const panelText = COMMAND_TEXT[service.language] ?? COMMAND_TEXT.en
+          if (request.method === 'GET') {
+            const batches = recentBatchRows(service, panelText, 5)
+            return panelJson(200, {
+              language: service.language,
+              summary: batches.length === 0 ? null : panelText.autoTidyPanelLine(batches.length),
+              expandLabel: panelText.autoTidyPanelExpand,
+              collapseLabel: panelText.autoTidyPanelCollapse,
+              batches,
+            })
+          }
+          /** @type {unknown} */
+          let body
+          try {
+            body = await request.json()
+          } catch {
+            return panelJson(400, { error: 'body must be a JSON object {batchId}' })
+          }
+          const input = /** @type {{[key: string]: unknown}} */ (body)
+          if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+            return panelJson(400, { error: 'body must be a JSON object {batchId}' })
+          }
+          // 撤回按钮只带一个批次号：多余字段、缺字段、空值一律 400（同 /api/memento/session 的严格度）。
+          const keys = Object.keys(input)
+          if (keys.length !== 1 || !keys.includes('batchId') || typeof input.batchId !== 'string' || input.batchId.length === 0) {
+            return panelJson(400, { error: 'body must contain exactly {batchId} (a non-empty string)' })
+          }
+          const write = { agent: PANEL_AGENT, gate: makeCommandGate(ctx, { agent: PANEL_AGENT }) }
+          const result = await service.restoreBatch({ batchId: /** @type {string} */ (input.batchId), source: PANEL_SOURCE }, write)
+          return panelJson(200, {
+            batchId: result.batchId,
+            restored: result.restored.length,
+            demoted: result.demoted.length,
+            note: panelText.autoTidyPanelDone(result.restored.length, result.demoted.length),
+            language: service.language,
+          })
+        } catch (error) {
+          return panelJson(500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    }))
     // 路由随插件生命周期撤销：fiber 卸载时逆序执行全部 disposer。
     ctx.effect(() => () => {
       for (const dispose of routeDisposers.splice(0).reverse()) void dispose?.()
@@ -3565,6 +3618,41 @@ async function unknownSwitchSession(ctx, sessionId) {
   if (sessionQuery === undefined || sessionQuery === null || typeof sessionQuery.filterSessions !== 'function') return false
   const records = await sessionQuery.filterSessions([{ kind: 'id', values: [sessionId] }])
   return !Array.isArray(records) || records.length === 0
+}
+
+/**
+ * 最近几批自动整理的**面板行**（F8 批次面，只读）：批次报告 → 面板要的紧凑形状。
+ * 摘要、明细行与按钮文案都在这里由 lib/strings.mjs 渲染（与命令面同一出处），
+ * 面板只负责显示与转发撤回。角色取自审计还原出的 sourceIds / producedIds——
+ * 撤回之后条目状态会翻面，按状态取会把「源」与「产出」标反。
+ * @param {MemoryService} service - ctx.memory。
+ * @param {typeof COMMAND_TEXT.en} text - 该语言的文案包。
+ * @param {number} limit - 最多几批。
+ * @returns {Array<object>} 批次行（新 → 旧）。
+ */
+function recentBatchRows(service, text, limit) {
+  const rows = []
+  for (const batchId of service.store.batchIds({ source: AUTO_TIDY_SOURCE, limit })) {
+    const report = service.batchReport(batchId)
+    if (report === null) continue
+    const byId = new Map(report.entries.map((entry) => [entry.id, entry]))
+    const snippet = (/** @type {string} */ id) => {
+      const body = byId.get(id)?.text ?? ''
+      return body.length > 160 ? `${body.slice(0, 160)}…` : body
+    }
+    rows.push({
+      batchId,
+      at: report.endedAt,
+      rolledBack: report.rolledBack,
+      details: [
+        ...report.sourceIds.map((id) => text.autoTidyPanelSource(id, snippet(id))),
+        ...report.producedIds.map((id) => text.autoTidyPanelProduced(id, snippet(id))),
+      ],
+      rollbackLabel: text.autoTidyPanelRollback,
+      rolledBackLabel: text.autoTidyPanelRolledBack,
+    })
+  }
+  return rows
 }
 
 /** 面板 JSON 响应（WHATWG Response）。 */

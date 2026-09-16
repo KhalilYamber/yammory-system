@@ -303,6 +303,12 @@ const PANEL_LAYOUT_CSS = `
 .mem-tidy-row { display: flex; align-items: center; gap: 8px; }
 .mem-tidy-btn { flex: none; white-space: nowrap; }
 .mem-tidy-note { margin: 0; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.mem-batches { gap: 8px; }
+.mem-batches-summary { font-size: 12px; }
+.mem-batch-list { gap: 0; }
+.mem-batch { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; }
+.mem-batch + .mem-batch { border-top: 1px solid var(--dsw-alias-border-l2); }
+.mem-batch-details { display: flex; flex-direction: column; gap: 2px; }
 `
 
 /**
@@ -384,6 +390,72 @@ function AuditSection(props) {
     const where = row.track ? ` ${row.track}/${row.scope}` : ''
     return `${formatTime(row.ts)} ${row.action}${where} · ${row.outcome ?? ''} · ${row.source ?? ''}`
   }))
+}
+
+/**
+ * 自动整理留痕（F8 批次面）：摘要、明细行与按钮文案都由路由渲染好（lib/strings.mjs 单一
+ * 出处，与命令面同源），面板只负责展开与转发撤回。没有批次记录时整块不渲染——不留空壳；
+ * 撤回走 /api/memento/batches（与其它面板动作同一条连接栅栏），成功后重新拉一次。
+ */
+function BatchesSection(props) {
+  const { primitives, S, state } = props
+  const [data, setData] = react.useState(null)
+  const [open, setOpen] = react.useState(false)
+  const [busyId, setBusyId] = react.useState(null)
+  const [note, setNote] = react.useState(null)
+  const reload = react.useCallback(() => {
+    let alive = true
+    if (state.fresh) setData(null)
+    void fetch('/api/memento/batches')
+      .then((res) => res.json())
+      .then((payload) => { if (alive) setData(payload === null || typeof payload !== 'object' ? {} : payload) })
+      .catch((error) => { if (alive) setData({ error: String(error && error.message ? error.message : error) }) })
+    return () => { alive = false }
+  }, [state])
+  react.useEffect(reload, [reload, S])
+  if (data === null) return null
+  const batches = Array.isArray(data.batches) ? data.batches : []
+  if (batches.length === 0) return null
+  const rollback = async (/** @type {string} */ batchId) => {
+    setBusyId(batchId)
+    setNote(null)
+    try {
+      const response = await fetch('/api/memento/batches', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ batchId }),
+      })
+      const payload = await response.json()
+      if (!response.ok || payload.error !== undefined) throw new Error(payload.error === undefined ? `batches ${response.status}` : payload.error)
+      setNote(String(payload.note ?? ''))
+      reload()
+    } catch (error) {
+      setNote(String(error && error.message ? error.message : error))
+    } finally {
+      setBusyId(null)
+    }
+  }
+  return jsx('div', { className: 'mem-tidy mem-batches' },
+    jsx('div', { className: 'mem-tidy-row' },
+      jsx('b', { className: 'mem-batches-summary' }, String(data.summary ?? '')),
+      jsx(primitives.Button, {
+        className: 'mem-batch-toggle',
+        variant: 'ghost',
+        size: 'sm',
+        onClick: () => setOpen(!open),
+      }, open ? String(data.collapseLabel ?? '') : String(data.expandLabel ?? ''))),
+    open
+      ? jsx('div', { className: 'mem-rows mem-batch-list' }, batches.map((batch) => jsx('div', { key: String(batch.batchId), className: 'mem-batch' },
+          jsx('div', { className: 'mem-batch-details' }, (Array.isArray(batch.details) ? batch.details : []).map((line, index) => jsx('div', { key: index, className: 'mem-text' }, String(line)))),
+          jsx(primitives.Button, {
+            className: 'mem-batch-rollback',
+            variant: 'outline',
+            size: 'sm',
+            disabled: busyId !== null || batch.rolledBack === true,
+            onClick: () => { void rollback(String(batch.batchId)) },
+          }, batch.rolledBack === true ? String(batch.rolledBackLabel ?? '') : String(batch.rollbackLabel ?? '')))))
+      : null,
+    note === null ? null : jsx('p', { className: 'mem-tidy-note mem-batch-note' }, note))
 }
 
 /** 待审批提案：加载中 → null；失败与空一律「暂无提案」（照旧）。 */
@@ -517,6 +589,7 @@ function PanelContent(props) {
     }),
     countLine === null ? null : jsx('div', { className: 'mem-count' }, countLine),
     jsx('div', { ref: rootRef, className: 'mem-body' }, body),
+    jsx(BatchesSection, { primitives, S, state }),
     jsx(TidyRow, { primitives, S, onLanguage }))
 }
 
