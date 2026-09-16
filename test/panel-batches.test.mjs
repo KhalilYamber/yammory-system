@@ -227,5 +227,19 @@ test('面板批次行：渲染组数、展开明细、点撤回发出正确请�
   assert.equal(calls.filter((call) => call.url === '/api/memento/batches' && call.method === 'GET').length >= 2, true, '撤回后重新拉一次留痕')
 })
 
+test('批次路由：库里批次多于一行能放时，摘要如实标注总数（截断不谎报）', async (t) => {
+  const mounted = mount()
+  t.after(() => mounted.teardown())
+  const route = batchRoute(mounted.routes)
+  const agent = makeAgent({ session: makeSession({ id: 's-many', header: { cwd: '/w' } }) })
+  // 造 7 个批次，超过默认上限 5：摘要必须写「本次自动整理 5 组（共 7 组）」。
+  for (let i = 0; i < 7; i += 1) await makeBatch(mounted.service, agent, `第 ${i} 组甲`)
+
+  const payload = await (await getBatches(route)).json()
+  assert.equal(payload.batches.length, 5, '一行只放 5 条（默认上限）')
+  assert.equal(payload.batchTotal, 7, '总数如实回报')
+  assert.ok(String(payload.summary).includes('共 7 组'), `摘要标注真实总数（实测：${payload.summary}）`)
+})
+
 // 空壳那一条住在 test/panel-batches-empty.test.mjs：假 DOM 桩同一进程只挂一次，
 // 需要不同响应的用例得拆到独立文件（见 test/client-harness.mjs 的注释）。

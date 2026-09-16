@@ -109,6 +109,37 @@ test('F6 store：纯降级（无 text）不落新条目；entryById 形状校验
   assert.throws(() => store.entryById(''), (error) => error.code === ERROR_CODES.INVALID_INPUT)
 })
 
+test('F6 store：桶内不跨在 Provider 层同样成立（纵深防御，不靠协议层单点）', (t) => {
+  const { store, cleanup } = tempStore()
+  t.after(cleanup)
+  const one = store.insertEntry({ track: 'user', scope: 'user-global', text: '偏好中文回复', agentKey: 'agent-one' })
+  const two = store.insertEntry({ track: 'user', scope: 'user-global', text: '偏好中文回复。', agentKey: 'agent-two' })
+  const before = store.allEntries().length
+
+  assert.throws(
+    () => store.supersedeEntries({ ids: [one.id, two.id], text: '偏好中文回复' }),
+    (/** @type {any} */ error) => error.code === ERROR_CODES.INVALID_INPUT && /stay inside one bucket/u.test(error.message),
+    '直调 Provider 跨 agentKey 合并必须被拒',
+  )
+  assert.equal(store.allEntries().length, before, '拒绝即零变更')
+
+  // 跨 scope（一条 workspace、一条 user-global）同样拦下
+  const global = store.insertEntry({ track: 'user', scope: 'user-global', text: '另一条' })
+  const scoped = store.insertEntry({ track: 'user', scope: 'workspace', text: '再一条', workspaceKey: '/w' })
+  assert.throws(
+    () => store.supersedeEntries({ ids: [scoped.id, global.id], text: '另一条' }),
+    (/** @type {any} */ error) => error.code === ERROR_CODES.INVALID_INPUT && /stay inside one bucket/u.test(error.message),
+    '跨 scope 合并同样被拒',
+  )
+
+  // 同桶仍然放行（防线不是拦路虎）
+  const three = store.insertEntry({ track: 'user', scope: 'user-global', text: '同桶甲', agentKey: 'agent-one' })
+  const four = store.insertEntry({ track: 'user', scope: 'user-global', text: '同桶甲。', agentKey: 'agent-one' })
+  const merged = store.supersedeEntries({ ids: [three.id, four.id], text: '同桶甲' })
+  assert.equal(merged.superseded.length, 2, '同桶合并照常')
+  assert.equal(merged.entry?.agentKey, 'agent-one', '产出条目继承源桶')
+})
+
 // ── 协议层：审批门 / 开关 / 桶边界 / 可见集 ────────────────────────────────
 
 test('F6 协议：supersede 走审批门，载荷带 id 与原文；审计 text 恒为 null 只记 id，收尾留一行 consolidation', async (t) => {
@@ -266,7 +297,7 @@ function mount(opts = {}) {
     dbPath: path.join(dir, 'memory.db'),
     budgets: DEFAULT_BUDGETS,
     writePolicy: opts.writePolicy ?? 'auto',
-    writePolicies: {},
+    writePolicies: opts.writePolicies ?? {},
     snapshotOrder: -50,
     maxEntriesPerQuery: 20,
     commandListLimit: 50,
@@ -335,6 +366,42 @@ test('F6 工具面：action=tidy 只读出计划（积压 ＋ 分桶候选 ＋ �
   assert.deepEqual(merged.entry.tags, [MERGED_TAG])
   assert.equal(service.store.listEntries().length, 2, '在场集：合并条目 ＋ 另一桶那条')
   assert.equal(service.store.allEntries().length, 4, '降级的两条仍在库里')
+})
+
+test('F8 工具面：action=auto-tidy 走内核分级落写；非 auto 档一律拒绝、零落盘', async (t) => {
+  const mounted = mount()
+  t.after(() => teardown(mounted))
+  const { mock, service } = mounted
+  const session = makeSession({ id: 's-auto-tool' })
+  const write = { agent: makeAgent(session) }
+  const first = await service.add({ track: 'user', scope: 'user-global', text: '偏好中文回复' }, write)
+  const second = await service.add({ track: 'user', scope: 'user-global', text: '偏好中文回复。' }, write)
+  const tool = memoryTool(mock)
+  const exec = makeExec({ agent: makeAgent(session) })
+
+  // ① 够确定的一批：工具面落写，回执带批次号、逐杠明细与产出条目
+  const written = await tool.execute({ action: 'auto-tidy', ids: [first.entry.id, second.entry.id], text: '偏好中文回复' }, exec)
+  assert.equal(written.ok, true, `工具面能落写（实测：${JSON.stringify(written.error ?? null)}）`)
+  assert.equal(written.grade.verdict, 'auto')
+  assert.equal(typeof written.batchId, 'string')
+  assert.deepEqual(written.superseded.map((entry) => entry.id).sort(), [first.entry.id, second.entry.id].sort())
+  assert.equal(service.store.listEntries().length, 1, '在场集只剩产出条目')
+  assert.deepEqual(service.store.auditByBatch(written.batchId).map((row) => row.action), ['supersede', 'supersede', 'supersede-add', 'consolidation'], '整批账目同事务落地')
+
+  // ② 缺 text：结构化拒绝（分级守门要求「提议的合并文本」）
+  const noText = await tool.execute({ action: 'auto-tidy', ids: [/** @type {string} */ (written.entry?.id)] }, exec)
+  assert.equal(noText.ok, false)
+  assert.equal(noText.error.code, 'INVALID_INPUT')
+
+  // ③ 把握不足的一批：内核重跑硬杠判 review → 拒绝且零落盘
+  const third = await service.add({ track: 'agent', scope: 'user-global', text: '环境事实：Node 24 常驻' }, write)
+  const fourth = await service.add({ track: 'agent', scope: 'user-global', text: '环境事实：Node 24' }, write)
+  const before = service.store.allEntries().length
+  const refused = await tool.execute({ action: 'auto-tidy', ids: [third.entry.id, fourth.entry.id], text: '环境事实：Node 24 常驻' }, exec)
+  assert.equal(refused.ok, false, '非 auto 档必须拒绝')
+  assert.equal(refused.error.code, 'INVALID_INPUT')
+  assert.ok(String(refused.error.message).includes('grades as'), `拒绝文案带分级依据（实测：${refused.error.message}）`)
+  assert.equal(service.store.allEntries().length, before, '拒绝即零落盘')
 })
 
 test('F6 工具面：tidy 计划只含会话可见集（别的工作区 / agent 的条目不在里面）', async (t) => {

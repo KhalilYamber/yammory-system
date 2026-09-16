@@ -92,7 +92,7 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 - **模型可见 ⟺ 已记录。** 注入的快照逐字进入 `system/message`；每次写都能从 `approval/asked` + `approval/decided` + 插件自有审计表重建。
 - **有界且诚实。** 每轨每层软预警线（默认 user 2000 / agent 4000）。越线绝不拦写——只提示这一格值得整合。绝不截断、绝不自动压缩。
 - **会话级开关。** 每个会话一个自己的记忆开关（插件自有 SQLite 表，schema v6；默认开）。关掉即四件同时停：**注入停**（该会话的冻结预热块立刻作废）、**召回禁**（`SESSION_MEMORY_OFF`）、**写入停**（与审批门同层拦截）、**观察不碰**（本会话不扫，历史选区也不选它）。管理面只读（`/memory list` / `budgets` / `audit` / `export`）照常可用。用 `/memory session on|off` 或输入框下方的开关切换；开关状态本身绝不进会话日志，审计行 `text` 恒为 `null`。
-- **整理与度量。** 模型驱动的整理把「在讲同一件事」的条目并成一条带 `merged` 标的条目，旧条目降级为 `superseded`——仍在库里，退出每个会话的可见集，绝不物理删。它不跨桶（`track × scope × agentKey`，workspace 层再加 `workspaceKey`），也绝不自动跑：`agent/turn-stopping` 上挂的只读检查只提示积压过线（一行 `tidy-due` 审计 ＋ 下个会话预热段末行一句）。`/memory stats` 打印可观测三数（重复率 / 召回命中率 / 注入量），抽屉面板里同样有这三行；成功率刻意留白，因为本仓库没有「注入之后对方是否真听懂了」这条信号源。面板上的**整理全库**按钮是排队，不是动作：它按同一套审批策略只写一行标记（`tidy_requests`，schema v7），下次会话的预热段请模型跑一次全库整理，等真的有整理落写时标记转 `done`——面板这边一条都不会合并。
+- **整理与度量。** 模型驱动的整理把「在讲同一件事」的条目并成一条带 `merged` 标的条目，旧条目降级为 `superseded`——仍在库里，退出每个会话的可见集，绝不物理删。它不跨桶（`track × scope × agentKey`，workspace 层再加 `workspaceKey`），也绝不自动跑。合并能否不经人眼落写，由五根机械硬杠判定（同桶 / 条数 / 去标点、空白**与符号**后逐字一致 / 相似度 / 覆盖度），不由模型自报把握：只有「去过标点、空白与符号后逐字相同」的那一档判 `auto`、可以无人值守落写；改写过的同义句连 review 线都够不着，落 `skip`（原地不动）；一字之差落 `review`，等你过目。因此一个后台轮（由您自己的计划任务唤起的无头 `dsh` 会话）能自行合掉机制上明确无歧义的重复，硬杠不敢担保的部分则留着等您。写入把审计来源钉成 `tidy-auto`，所以粒度写策略（`source:tidy-auto`）可以只放行这一条路，其余写入仍留在审批门后。另有只读的 `agent/turn-stopping` 检查，它只提示积压过线（一行 `tidy-due` 审计 ＋ 下个会话预热段末行一句）。`/memory stats` 打印可观测三数（重复率 / 召回命中率 / 注入量），抽屉面板里同样有这三行；成功率刻意留白，因为本仓库没有「注入之后对方是否真听懂了」这条信号源。面板上的**整理全库**按钮是排队，不是动作：它按同一套审批策略只写一行标记（`tidy_requests`，schema v7），下次会话的预热段请模型跑一次全库整理，等真的有整理落写时标记转 `done`——面板这边一条都不会合并。
 
 - **治理：把降级走回来，把冲突按面裁决。** `restore` 把一次降级走反方向（`superseded → active`，`version` 不动，重新进入每个会话的可见集），它是脱离降级态的唯一出口。`arbitrate` 处理「同一条事实、两个来源」：在**一个面**上裁决，方向由固定表决定——能力听观察、意愿听自陈，其余五面**两条都留**并各打 `gap` 标（落差本身即证据）。表即方向，所以没有反向参数可传；同组内保留 `updatedAt` 最新者。两者与所有写路径同门：同一审批门、同一会话开关、同一桶内边界；审计也逐条留痕——`restore` 每条一行，`arbitrate` 每次降级一行（`text` 恒为 `null`，只记 id）、打标一行 `arbitrate-tag`，收尾一行 `arbitrate` 摘要写清保留了谁、降级了谁、理由是什么。
 
@@ -154,7 +154,7 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 
 | Surface | Kind | Notes |
 |---|---|---|
-| `memory` | tool | 带 Save/Skip 指引的 add/replace/remove/consolidate/supersede/restore/arbitrate/query/tidy；条目可带画像坐标（`facet` 七面之一、`level` 分领域知识水平）；`supersede` 把 1..20 条并成一条带 `merged` 标的条目、旧条目降级为 `superseded`（留痕不删），`restore` 把降级条目救回，`arbitrate` 按裁决表在一个面上裁两个来源的冲突，`tidy` 返回只读整理计划；写入走审批门 |
+| `memory` | tool | 带 Save/Skip 指引的 add/replace/remove/consolidate/supersede/auto-tidy/restore/arbitrate/query/tidy；条目可带画像坐标（`facet` 七面之一、`level` 分领域知识水平）；`supersede` 把 1..20 条并成一条带 `merged` 标的条目、旧条目降级为 `superseded`（留痕不删），`restore` 把降级条目救回，`arbitrate` 按裁决表在一个面上裁两个来源的冲突，`tidy` 返回只读整理计划；写入走审批门 |
 | `memory_profile` | tool | 31 个子领域刻度上的分领域知识水平（`set` / `list` / `get`）；`set` 走审批门并落审计，`tier` 由 `level` 推导 |
 | `yammory-survey` | skill | 用户主动激发的画像问卷，覆盖 24 个问卷合法子板块；经 `memory` + `memory_profile` 落库。源文件：`skills/yammory-survey/` |
 | `memory_recall` | tool | 有界的记忆匹配（查询按词元切分：中文二字、英文整词；任一词元命中即召回，按相关度排序）+ 近期会话历史匹配 |

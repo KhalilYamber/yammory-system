@@ -120,6 +120,78 @@ test('整批撤回：未知批次 / 已撤回批次 / 形状非法一律响亮�
   assert.deepEqual(snapshotOf(store), afterRollback, '失败路径库与审计分毫不动')
 })
 
+test('整批撤回：回执按实际动过的条目计数（不按计划清单）', async (t) => {
+  const { store, core, cleanup } = tempCore()
+  t.after(cleanup)
+  const [a, b] = addPair(store, '偏好中文回复')
+  const { batchId, entry } = await core.autoTidy({ ids: [a.id, b.id], text: '偏好中文回复' }, writeCtx('s-receipt'))
+  // 手工先把一条源条目救回，于是整批撤回时它不需要再被恢复
+  await core.restore({ ids: [a.id], source: 'governance' }, writeCtx('s-manual'))
+
+  const result = await core.restoreBatch({ batchId }, writeCtx('s-receipt2'))
+  assert.equal(result.restored.length, 1, '实际只恢复了一条')
+  const summary = /** @type {{text?: string}} */ (store.auditByBatch(batchId).find((row) => row.action === 'restore-batch'))
+  assert.ok(String(summary.text).includes('restored 1 ('), `回执写实际条数，实际文案：${summary.text}`)
+  assert.equal(String(summary.text).includes('restored 2'), false, '不得按计划清单报出没发生的事')
+  assert.equal(store.entryById(a.id)?.status, 'active')
+  assert.equal(store.entryById(b.id)?.status, 'active')
+  assert.equal(store.entryById(/** @type {string} */ (entry?.id))?.status, 'superseded')
+})
+
+test('整批撤回：产出条目已被手工降级 → 按状态如实拒绝，不报「假动作」', async (t) => {
+  const { store, core, gateCalls, cleanup } = tempCore()
+  t.after(cleanup)
+  const [a, b] = addPair(store, '偏好中文回复')
+  const { batchId, entry } = await core.autoTidy({ ids: [a.id, b.id], text: '偏好中文回复' }, writeCtx('s-phantom'))
+
+  // 手工把产物降级（账本里没有撤回行，故 rolledBack 仍为 false）：此时若放行，撤回会
+  // 成功返回 demoted 1，而那条降级在操作前就已经发生了——回执在说没发生的事。
+  await core.restore({ ids: [/** @type {string} */ (entry?.id)] }, writeCtx('s-phantom-manual')).catch(() => {})
+  store.supersedeEntries({ ids: [/** @type {string} */ (entry?.id)] })
+
+  gateCalls.length = 0
+  await assert.rejects(
+    () => core.restoreBatch({ batchId }, writeCtx('s-phantom')),
+    (/** @type {any} */ error) => error.code === ERROR_CODES.INVALID_INPUT && /no longer active|already rolled back/u.test(error.message),
+    '按状态如实拒绝',
+  )
+  assert.equal(gateCalls.length, 0, '拒绝发生在审批之前，一次许可也没耗')
+  assert.equal(store.entryById(a.id)?.status, 'superseded', '源条目仍在降级态——拒绝即零变更')
+})
+
+test('整批撤回：回执里的条目是更新后的快照（状态与库内一致，不说反话）', async (t) => {
+  const { store, core, cleanup } = tempCore()
+  t.after(cleanup)
+  const [a, b] = addPair(store, '偏好中文回复')
+  const { batchId, entry } = await core.autoTidy({ ids: [a.id, b.id], text: '偏好中文回复' }, writeCtx('s-receipt-state'))
+
+  const result = await core.restoreBatch({ batchId }, writeCtx('s-receipt-state2'))
+  // 回执若拿事务前的快照，被恢复的会报 superseded、被降级的会报 active——与库内正好相反。
+  for (const restored of result.restored) {
+    assert.equal(restored.status, 'active', `恢复回执 ${restored.id.slice(0, 8)} 应报 active`)
+    assert.equal(store.entryById(restored.id)?.status, restored.status, '与库内一致')
+  }
+  for (const demoted of result.demoted) {
+    assert.equal(demoted.status, 'superseded', `降级回执 ${demoted.id.slice(0, 8)} 应报 superseded`)
+    assert.equal(store.entryById(demoted.id)?.status, demoted.status, '与库内一致')
+  }
+  assert.equal(result.demoted[0]?.id, entry?.id, '降级的就是本批产出')
+})
+
+test('整批撤回：对已撤回批次再撤 → 不打扰审批门（守卫先于审批）', async (t) => {
+  const { store, core, gateCalls, cleanup } = tempCore()
+  t.after(cleanup)
+  const [a, b] = addPair(store, '偏好中文回复')
+  const { batchId } = await core.autoTidy({ ids: [a.id, b.id], text: '偏好中文回复' }, writeCtx('s-guard'))
+  await core.restoreBatch({ batchId }, writeCtx('s-guard'))
+
+  // 守卫排在审批之前：先弹审批再报「已经撤回过了」，既白耗一次许可，载荷方向还是反的
+  // （把已恢复的源写成降级、把产物写成恢复）。
+  gateCalls.length = 0
+  await assert.rejects(() => core.restoreBatch({ batchId }, writeCtx('s-guard')), codeIs(ERROR_CODES.INVALID_INPUT), '已撤回批次再撤 → 响亮拒绝')
+  assert.equal(gateCalls.length, 0, '拒绝发生在审批门之前，一次许可也没耗')
+})
+
 test('整批撤回：撤回落审计可重建，且不影响其他批次', async (t) => {
   const { store, core, cleanup } = tempCore()
   t.after(cleanup)

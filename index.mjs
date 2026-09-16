@@ -29,6 +29,7 @@ import {
   OBSERVATION_SOURCE,
   OBSERVE_LIMITS,
   MAX_SWITCH_SESSION_ID,
+  MAX_QUERY_LIMIT,
   GAP_TAG,
 } from './lib/constants.mjs'
 import { COMMAND_TEXT } from './lib/strings.mjs'
@@ -89,8 +90,8 @@ import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, Vector
  * @property {(input: object) => {previous: MemoryEntry, entry: MemoryEntry}} replaceEntry
  * @property {(input: object) => MemoryEntry} removeEntry
  * @property {(input: object) => {removed: MemoryEntry[], entry: MemoryEntry}} consolidateEntries
- * @property {(input: object) => {superseded: MemoryEntry[], entry: MemoryEntry | null}} supersedeEntries
- * @property {(input: {batchId: string, producedIds: string[], sourceIds: string[]}) => {restored: MemoryEntry[], demoted: MemoryEntry[]}} rollbackBatch
+ * @property {(input: object) => {superseded: MemoryEntry[], entry: MemoryEntry | null, cleared: {id: string, createdAt: number, status: string} | null}} supersedeEntries
+ * @property {(input: {batchId: string, producedIds: string[], sourceIds: string[], audit?: object}) => {restored: MemoryEntry[], demoted: MemoryEntry[]}} rollbackBatch
  * @property {(input: {ids: string[]}) => MemoryEntry[]} restoreEntries
  * @property {(input: {ids: string[], tag: string}) => MemoryEntry[]} tagEntries
  * @property {(id: string) => MemoryEntry | null} entryById
@@ -119,6 +120,7 @@ import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, Vector
  * @property {StoreHandle} store
  * @property {BudgetsConfig} budgets
  * @property {string} writePolicy
+ * @property {Record<string, string>} [writePolicies]
  * @property {number} maxEntriesPerQuery
  * @property {number} commandListLimit
  * @property {number} commandAuditLimit
@@ -141,6 +143,7 @@ import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, Vector
  * @property {{vector?: boolean}} [retrieval]
  * @property {number} [panelEntriesLimit]
  * @property {number} [panelAuditLimit]
+ * @property {number} [panelBatchLimit]
  * @property {number} [auditRetentionDays]
  * @property {{enabled?: boolean, maxChars?: number, maxPending?: number}} [proposals]
  * @property {{enabled?: boolean}} [panel]
@@ -149,6 +152,8 @@ import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, Vector
  * @typedef {{track: string, scope: string, text: string, facet?: string, level?: number}} PublicEntry
  * @typedef {object} MemoryToolValue - memory 工具规范结果形状。
  * @property {boolean} ok
+ * @property {string} [batchId] - auto-tidy 的批次号。
+ * @property {{verdict: string, similarity?: number, coverage?: number, gates?: Array<{name: string, passed: boolean, detail: string}>}} [grade] - auto-tidy 的逐杠分级明细（相似度/覆盖度在结构杠未过时为空）。
  * @property {string} action
  * @property {{message: string}} [error]
  * @property {PublicEntry[]} [entries]
@@ -404,6 +409,7 @@ function statsLines(stats, language) {
  * @property {{vector?: boolean}} [retrieval] 语义召回开关（默认 false：keyword 主路径；变更时拆旧装新检索器，即时生效）。
  * @property {number} [panelEntriesLimit] 面板条目页上限与钳制（默认 200；热生效）。
  * @property {number} [panelAuditLimit] 面板审计默认条数（默认 20；上限 200 为协议常量；热生效）。
+ * @property {number} [panelBatchLimit] 面板批次行条数上限（默认 5；上限 200 为协议常量；热生效）。超过时摘要如实标注「共 N 组」，不谎报总数。
  * @property {number} [auditRetentionDays] 审计保留天数（默认 0 = 不限；变更时随 dbPath 重开 store，即时生效）。
  * @property {{enabled?: boolean, maxChars?: number, maxPending?: number}} [proposals]
  *   auto-capture 压缩记忆提案（默认 true / 2000 / 8；热生效）。
@@ -455,6 +461,7 @@ const SHARED_CONFIG_FIELDS = {
   }),
   panelEntriesLimit: Schema.number().default(200),
   panelAuditLimit: Schema.number().default(20),
+  panelBatchLimit: Schema.number().default(5),
   auditRetentionDays: Schema.number().default(0),
   proposals: Schema.object({
     enabled: Schema.boolean().default(true),
@@ -536,13 +543,14 @@ function maybeAppendSessionEvent(session, type, data) {
  */
 export class MemoryService extends MemoryProtocolCore {
   /**
-   * @param {ServiceDeps} deps - {store, budgets, writePolicy, maxEntriesPerQuery, commandListLimit, commandAuditLimit, language, approval, sourceLabel}。
+   * @param {ServiceDeps} deps - {store, budgets, writePolicy, writePolicies, maxEntriesPerQuery, commandListLimit, commandAuditLimit, language, approval, sourceLabel}。
    */
   constructor(deps) {
     super({
       store: deps.store,
       budgets: deps.budgets,
       writePolicy: deps.writePolicy,
+      writePolicies: deps.writePolicies,
       defaultQueryLimit: deps.maxEntriesPerQuery,
       sourceLabel: deps.sourceLabel,
       gate: (payload, write) => askApproval(deps.approval, /** @type {WritePayload} */ (payload), write),
@@ -582,7 +590,7 @@ const MEMORY_TOOL_DESCRIPTION = {
     'SAVE: user preferences and corrections; environment facts and project conventions; lessons learned from mistakes; summaries of completed work; anything the user explicitly asks you to remember.',
     'SKIP: trivial or re-derivable facts; encyclopedia knowledge a fresh search can answer; large data dumps or logs; one-off file paths; content already available in the current workspace.',
     '',
-    'Writes (add/replace/remove/consolidate/supersede/restore/arbitrate) require approval under the configured policy and are audited; reads (query/tidy) are free. replace/remove target an entry by a UNIQUE case-insensitive substring — an ambiguous match fails with the candidate list, so use a longer substring. consolidate merges 1..20 existing entries (unique substrings) into ONE new entry with a single approval and one atomic write — use it when a layer crosses its warning line. supersede is the tidy path: it merges 1..20 entries (by id, from a tidy plan) into one entry that carries the `merged` tag while the old ones are KEPT and demoted to `superseded` (kept on disk, out of every session\u2019s view; never physically deleted). It stays inside one bucket (track x scope x agentKey, plus workspaceKey on the workspace layer) — never cross buckets, never merge entries that merely look similar: when in doubt, leave them alone. restore walks a demotion back (superseded -> active, version untouched, back into every session\u2019s view) and is the only way out of the demoted state. arbitrate settles a same-entry-two-sources conflict on ONE facet: the direction comes from a fixed table — ability follows observation, preference follows the self-report, the other five facets keep BOTH and tag each with `gap`. The table is the direction; there is deliberately no reverse argument. Within a group the most recently updated entry is kept and the rest of that group is demoted too. Each session starts with a FROZEN warm-up block: the user\u2019s per-domain knowledge level (as speaking constraints) plus the standing user-global profile. That block never changes mid-session. Workspace-scoped and agent-track memory is deliberately NOT in it — fetch those on demand with memory_recall (or query); a closing line in the block tells you how many such entries are waiting.',
+    'Writes (add/replace/remove/consolidate/supersede/auto-tidy/restore/arbitrate) require approval under the configured policy and are audited; reads (query/tidy) are free. replace/remove target an entry by a UNIQUE case-insensitive substring — an ambiguous match fails with the candidate list, so use a longer substring. consolidate merges 1..20 existing entries (unique substrings) into ONE new entry with a single approval and one atomic write — use it when a layer crosses its warning line. auto-tidy is supersede with the hard gates re-run by the core: it refuses any batch that does not grade as `auto` and pins the source to `tidy-auto` (the granular write policy `source:tidy-auto` is what lets a background session write without a human). supersede is the tidy path: it merges 1..20 entries (by id, from a tidy plan) into one entry that carries the `merged` tag while the old ones are KEPT and demoted to `superseded` (kept on disk, out of every session\u2019s view; never physically deleted). It stays inside one bucket (track x scope x agentKey, plus workspaceKey on the workspace layer) — never cross buckets, never merge entries that merely look similar: when in doubt, leave them alone. restore walks a demotion back (superseded -> active, version untouched, back into every session\u2019s view) and is the only way out of the demoted state. arbitrate settles a same-entry-two-sources conflict on ONE facet: the direction comes from a fixed table — ability follows observation, preference follows the self-report, the other five facets keep BOTH and tag each with `gap`. The table is the direction; there is deliberately no reverse argument. Within a group the most recently updated entry is kept and the rest of that group is demoted too. Each session starts with a FROZEN warm-up block: the user\u2019s per-domain knowledge level (as speaking constraints) plus the standing user-global profile. That block never changes mid-session. Workspace-scoped and agent-track memory is deliberately NOT in it — fetch those on demand with memory_recall (or query); a closing line in the block tells you how many such entries are waiting.',
     '',
     'PROFILE COORDINATES: every entry can carry two optional coordinates. facet tags which face of the user profile the entry belongs to (one of: 躯体 | 心智 | 价值与意愿 | 能力与技能 | 行为与习惯 | 社会与处境 | 经历与轨迹). level (1..10) is the per-domain knowledge level and belongs only on entries about the user\u2019s knowledge/subject level; the structured per-domain scale itself is written with memory_profile, not with this tool. On replace, an omitted facet/level keeps the existing coordinate.',
   ].join('\n'),
@@ -596,7 +604,7 @@ const MEMORY_TOOL_DESCRIPTION = {
     '应存（SAVE）：用户偏好与纠正；环境事实与项目约定；犯错得到的教训；已完成工作总结；用户明确要求记住的内容。',
     '应跳过（SKIP）：琐碎或可再推导的事实；重新搜索即可回答的百科知识；大数据转储或日志；一次性文件路径；当前工作区已有的内容。',
     '',
-    '写（add/replace/remove/consolidate/supersede/restore/arbitrate）需按配置策略审批并落审计；读（query/tidy）免费。replace/remove 用唯一大小写不敏感子串定位——歧义时报候选清单，请用更长子串。consolidate 以一次审批 + 一次原子写把 1..20 条整合为一条——层越预警线时使用。supersede 是整理机那条路：按 id（取自 tidy 计划）把 1..20 条合并成一条带 `merged` 标的新条目，旧条目**保留**并降级为 `superseded`（仍在库里，但不进任何会话的可见集；绝不物理删）。它只在同一个桶内进行（track × scope × agentKey，workspace 层再加 workspaceKey）——绝不跨桶，也不要只因「看着像」就合并：拿不准就留着。restore 把一次降级走回来（superseded → active，version 不动，重新进入每个会话的可见集），它是脱离降级态的唯一出口。arbitrate 在**一个面**上裁决「同一条事实、两个来源」的冲突：方向由固定表决定——能力听观察、意愿听自陈，其余五面**两条都留**并各打 `gap` 标。表即方向，刻意没有反向参数。同组内保留 updatedAt 最新者，其余同组条目一并降级。每个会话启动时获得一个冻结的预热块：用户分领域知识水平（表达约束）＋ 常驻 user-global 画像。该块在会话内不变。工作区层与 agent 轨记忆刻意不入此块——需要时用 memory_recall（或 query）按需取；该块末行会告诉你这类条目还有几条在等着。',
+    '写（add/replace/remove/consolidate/supersede/auto-tidy/restore/arbitrate）需按配置策略审批并落审计；读（query/tidy）免费。replace/remove 用唯一大小写不敏感子串定位——歧义时报候选清单，请用更长子串。consolidate 以一次审批 + 一次原子写把 1..20 条整合为一条——层越预警线时使用。supersede 是整理机那条路：按 id（取自 tidy 计划）把 1..20 条合并成一条带 `merged` 标的新条目，旧条目**保留**并降级为 `superseded`（仍在库里，但不进任何会话的可见集；绝不物理删）。它只在同一个桶内进行（track × scope × agentKey，workspace 层再加 workspaceKey）——绝不跨桶，也不要只因「看着像」就合并：拿不准就留着。restore 把一次降级走回来（superseded → active，version 不动，重新进入每个会话的可见集），它是脱离降级态的唯一出口。arbitrate 在**一个面**上裁决「同一条事实、两个来源」的冲突：方向由固定表决定——能力听观察、意愿听自陈，其余五面**两条都留**并各打 `gap` 标。表即方向，刻意没有反向参数。同组内保留 updatedAt 最新者，其余同组条目一并降级。每个会话启动时获得一个冻结的预热块：用户分领域知识水平（表达约束）＋ 常驻 user-global 画像。该块在会话内不变。工作区层与 agent 轨记忆刻意不入此块——需要时用 memory_recall（或 query）按需取；该块末行会告诉你这类条目还有几条在等着。',
     '',
     '画像坐标：每条条目可带两个可选坐标。facet 标明该条目属于用户画像的哪一面（取值：躯体 | 心智 | 价值与意愿 | 能力与技能 | 行为与习惯 | 社会与处境 | 经历与轨迹）。level（1..10）是分领域知识水平，只用在「知识与学科水平」类条目上；结构化的分领域刻度本身请用 memory_profile 写，不用本工具。replace 时省略 facet/level 即保持原坐标。',
   ].join('\n'),
@@ -605,7 +613,7 @@ const MEMORY_TOOL_DESCRIPTION = {
 /** 记忆工具参数描述（双语）。 */
 const MEMORY_TOOL_PARAMETERS = {
   en: {
-    action: 'add = insert a new entry; replace = rewrite one existing entry; remove = delete one existing entry; consolidate = merge 1..20 existing entries into one new entry (single approval, atomic); supersede = merge 1..20 existing entries into one new `merged`-tagged entry while the old ones are kept and demoted to `superseded` (the tidy path; single approval, atomic); restore = walk a demotion back (superseded -> active, version untouched); arbitrate = settle a same-entry-two-sources conflict on one facet, direction fixed by the arbitration table; tidy = read-only tidy plan (backlog + per-bucket candidates + similar pairs); query = substring search over existing entries.',
+    action: 'add = insert a new entry; replace = rewrite one existing entry; remove = delete one existing entry; consolidate = merge 1..20 existing entries into one new entry (single approval, atomic); auto-tidy = the AUTOMATIC tidy path: the same merge as supersede, but the core re-runs the hard gates on the real stored entries and REFUSES anything that does not grade as `auto` (the judgement cannot be declared by the caller), and the write source is pinned to `tidy-auto` (the granular write policy `source:tidy-auto` is what lets a background session write without a human). supersede = merge 1..20 existing entries into one new `merged`-tagged entry while the old ones are kept and demoted to `superseded` (the tidy path; single approval, atomic); restore = walk a demotion back (superseded -> active, version untouched); arbitrate = settle a same-entry-two-sources conflict on one facet, direction fixed by the arbitration table; tidy = read-only tidy plan (backlog + per-bucket candidates + similar pairs); query = substring search over existing entries.',
     track: 'Memory track. Defaults to "user". user = facts about the user; agent = environment/project facts and conventions.',
     scope: 'Layer. Defaults to "workspace". user-global applies to every workspace; workspace applies only to this working directory.',
     text: 'add/replace: the exact entry text. supersede: optional merged text (omit to only demote). query: case-insensitive substring filter.',
@@ -618,7 +626,7 @@ const MEMORY_TOOL_PARAMETERS = {
     level: 'Optional per-domain knowledge level 1..10 (科普 1-3 / 本科 4-6 / 硕士 7-8 / 专家 9-10), for entries about the user\u2019s knowledge or subject level. Applies to add/replace/consolidate/supersede; on replace an omitted level keeps the current one.',
   },
   zh: {
-    action: 'add = 新增一条；replace = 改写一条既有条目；remove = 删除一条既有条目；consolidate = 把 1..20 条既有条目整合为一条新条目（单次审批、原子执行）；supersede = 整理机：把 1..20 条既有条目合并成一条带 `merged` 标的新条目，旧条目保留并降级为 `superseded`（单次审批、原子执行）；restore = 把降级走回来（superseded → active，version 不动）；arbitrate = 在一个面上裁决「同一条事实、两个来源」的冲突，方向由裁决表固定；tidy = 只读整理计划（积压 ＋ 分桶候选 ＋ 相似线索）；query = 对既有条目的子串检索。',
+    action: 'add = 新增一条；replace = 改写一条既有条目；remove = 删除一条既有条目；consolidate = 把 1..20 条既有条目整合为一条新条目（单次审批、原子执行）；auto-tidy = 自动整理：与 supersede 同一套合并，但内核会拿库里真实条目**重跑硬杠**，不是 `auto` 档一律拒绝（判定不可由调用方声明），来源钉死为 `tidy-auto`（粒度写策略 `source:tidy-auto` 就是后台会话的放行口）；supersede = 整理机：把 1..20 条既有条目合并成一条带 `merged` 标的新条目，旧条目保留并降级为 `superseded`（单次审批、原子执行）；restore = 把降级走回来（superseded → active，version 不动）；arbitrate = 在一个面上裁决「同一条事实、两个来源」的冲突，方向由裁决表固定；tidy = 只读整理计划（积压 ＋ 分桶候选 ＋ 相似线索）；query = 对既有条目的子串检索。',
     track: '记忆轨道。默认 "user"。user = 用户相关事实；agent = 环境/项目事实与约定。',
     scope: '层。默认 "workspace"。user-global 对所有工作区生效；workspace 只对当前工作目录生效。',
     text: 'add/replace：完整条目文本。supersede：可选的合并后文本（省略即只降级、不落新条目）。query：大小写不敏感子串过滤。',
@@ -648,7 +656,7 @@ export function makeMemoryTool(service, language = 'en') {
       action: {
         type: 'string',
         required: true,
-        enum: ['add', 'replace', 'remove', 'consolidate', 'supersede', 'restore', 'arbitrate', 'tidy', 'query'],
+        enum: ['add', 'replace', 'remove', 'consolidate', 'supersede', 'auto-tidy', 'restore', 'arbitrate', 'tidy', 'query'],
         description: parameters.action,
       },
       track: {
@@ -703,7 +711,7 @@ export function makeMemoryTool(service, language = 'en') {
         type: 'object',
         additionalProperties: false,
         properties: {
-          action: { type: 'string', required: true, enum: ['add', 'replace', 'remove', 'consolidate', 'supersede', 'restore', 'arbitrate', 'tidy', 'query'] },
+          action: { type: 'string', required: true, enum: ['add', 'replace', 'remove', 'consolidate', 'supersede', 'auto-tidy', 'restore', 'arbitrate', 'tidy', 'query'] },
           ok: { type: 'boolean', required: true },
           entry: {
             type: 'object',
@@ -791,6 +799,31 @@ export function makeMemoryTool(service, language = 'en') {
           direction: { type: 'string' },
           plan: { type: 'string' },
           candidates: { type: 'integer' },
+          // auto-tidy 的回执：批次号 ＋ 逐杠分级明细。声明漏了它们，运行时会把整个
+          // 工具结果按 additionalProperties:false 判为「非法输出」——落写已经生效，
+          // 调用方却拿到一条 schema 错误（无头实跑撞出来的）。
+          batchId: { type: 'string' },
+          grade: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              verdict: { type: 'string', required: true },
+              similarity: { type: 'number' },
+              coverage: { type: 'number' },
+              gates: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    name: { type: 'string', required: true },
+                    passed: { type: 'boolean', required: true },
+                    detail: { type: 'string', required: true },
+                  },
+                },
+              },
+            },
+          },
           backlog: {
             type: 'object',
             additionalProperties: false,
@@ -1009,6 +1042,39 @@ export function makeMemoryTool(service, language = 'en') {
               usage: result.usage,
             }
           }
+          case 'auto-tidy': {
+            // 自动整理的落写面（F8 内核出口）：与 supersede 同一套合并，但分级守在门口——
+            // 内核拿库里真实条目重跑硬杠，非 auto 档即结构化拒绝、零落盘；来源钉死 auto-tidy，
+            // 后台会话靠粒度写策略 `source:tidy-auto` 放行。回执带逐杠明细，便于会话里复述依据。
+            if (args.text === undefined) {
+              // 抛结构化领域错误：既有的 catch 会把它翻成 ok:false ＋ error（与其他分支同形）。
+              throw new InvalidInputError('auto-tidy needs the proposed merged text (action=auto-tidy requires text); the core grades it against the real entries and refuses anything that is not a literal duplicate after stripping punctuation and whitespace')
+            }
+            const result = await service.autoTidy(
+              {
+                ids: args.ids,
+                text: args.text,
+                ...(args.tags === undefined ? {} : { tags: args.tags }),
+                ...(args.facet === undefined ? {} : { facet: args.facet }),
+                ...(args.level === undefined ? {} : { level: args.level }),
+              },
+              write,
+            )
+            return {
+              action: 'auto-tidy',
+              ok: true,
+              batchId: result.batchId,
+              grade: {
+                verdict: result.grade.verdict,
+                similarity: result.grade.similarity,
+                coverage: result.grade.coverage,
+                gates: result.grade.gates,
+              },
+              ...(result.entry === null ? {} : { entry: publicEntry(result.entry) }),
+              superseded: result.superseded.map((old) => ({ id: old.id, text: old.text })),
+              usage: result.usage,
+            }
+          }
           case 'arbitrate': {
             // S5 §2 的裁决面：方向由 ARBITRATION_BY_FACET 决定，模型没有反向参数。
             // 一次审批一批落盘（降级 ＋ 打标 ＋ 审计 action='arbitrate'）。
@@ -1111,6 +1177,13 @@ export function renderMemoryResult(/** @type {object} */ _args, /** @type {Memor
         text: value.entry === undefined
           ? `memory entries superseded: ${value.superseded.length} demoted to superseded (kept on disk, out of every session\u2019s view)\nbudget: ${value.usage.used}/${value.usage.limit} chars used`
           : `memory entries tidied (${value.entry.track}/${value.entry.scope}): ${value.superseded.length} superseded (kept) → 1 merged entry tagged \`merged\`: ${value.entry.text}${coordinateTag(value.entry)}\nbudget: ${value.usage.used}/${value.usage.limit} chars used`,
+      }]
+    case 'auto-tidy':
+      // 回执必须把批次号与分级依据送到模型手里：没有分支时落到 default 的「ok」，
+      // 模型拿不到 batchId，也就无法在会话里复述「本批是哪一批」（无头实跑撞出来的）。
+      return [{
+        type: 'text',
+        text: `memory auto-tidy: batch ${value.batchId} — ${value.superseded.length} superseded (kept on disk, out of every session\u2019s view) → 1 merged entry tagged \`merged\`: ${value.entry === undefined ? '(no merged entry)' : `${value.entry.text}${coordinateTag(value.entry)}`}\ngrade: ${value.grade?.verdict ?? '—'} (similarity ${value.grade?.similarity ?? '—'}, coverage ${value.grade?.coverage ?? '—'})\ngates: ${(value.grade?.gates ?? []).map((gate) => `${gate.name}=${gate.passed ? 'pass' : 'fail'}`).join(', ')}\nbudget: ${value.usage.used}/${value.usage.limit} chars used`,
       }]
     case 'restore':
       return [{
@@ -1893,6 +1966,7 @@ export function renderMemoryObserveResult(/** @type {object} */ _args, /** @type
  * @property {{vector: boolean}} retrieval
  * @property {number} panelEntriesLimit
  * @property {number} panelAuditLimit
+ * @property {number} panelBatchLimit
  * @property {number} auditRetentionDays
  * @property {{enabled: boolean, maxChars: number, maxPending: number}} proposals
  * @property {{enabled: boolean}} panel
@@ -1950,6 +2024,7 @@ function resolveComposed(config) {
     },
     panelEntriesLimit: config.panelEntriesLimit ?? 200,
     panelAuditLimit: config.panelAuditLimit ?? 20,
+    panelBatchLimit: config.panelBatchLimit ?? 5,
     auditRetentionDays: config.auditRetentionDays ?? 0,
     proposals: {
       enabled: config.proposals?.enabled ?? true,
@@ -2014,6 +2089,9 @@ function validateMemoryConfig(values) {
   }
   if (!Number.isInteger(values.panelAuditLimit) || values.panelAuditLimit <= 0) {
     throw new InvalidInputError('yammory_system config: panelAuditLimit must be a positive integer')
+  }
+  if (!Number.isInteger(values.panelBatchLimit) || values.panelBatchLimit <= 0) {
+    throw new InvalidInputError('yammory_system config: panelBatchLimit must be a positive integer')
   }
   if (!Number.isInteger(values.auditRetentionDays) || values.auditRetentionDays < 0) {
     throw new InvalidInputError('yammory_system config: auditRetentionDays must be a non-negative integer')
@@ -2184,6 +2262,7 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
     store,
     budgets: live.budgets,
     writePolicy: live.writePolicy,
+    writePolicies: live.writePolicies,
     maxEntriesPerQuery: live.maxEntriesPerQuery,
     commandListLimit: live.commandListLimit,
     commandAuditLimit: live.commandAuditLimit,
@@ -3346,11 +3425,11 @@ export function renderMemoryRecallResult(/** @type {object} */ _args, /** @type 
  * 注册面板 JSON 路由（F9；webServer 缺失的 profile 自动跳过）。
  * 除「整理全库」登记（收边 §2，用户动作、只写一条待整理标记）外全部只读：审批决策
  * 在 DSH 内置审批 UI 完成，面板不做任何审批决策、也不改记忆条目。路由随插件生命周期
- * 自动撤销。options 传 live（热字段：panelEntriesLimit/panelAuditLimit/panel/language
+ * 自动撤销。options 传 live（热字段：panelEntriesLimit/panelAuditLimit/panelBatchLimit/panel/language
  * 随设置变更即时生效）。
  * @param {import('@deepseek-ai/cordis').Context} ctx - Cordis 上下文。
  * @param {MemoryService} service - ctx.memory。
- * @param {{panelEntriesLimit: number, panelAuditLimit: number, panel: {enabled: boolean}, language: 'en'|'zh'}} options - 运行期可变值容器。
+ * @param {{panelEntriesLimit: number, panelAuditLimit: number, panelBatchLimit: number, panel: {enabled: boolean}, language: 'en'|'zh'}} options - 运行期可变值容器。
  */
 export function registerWebRoutes(ctx, service, options) {
   withService(ctx, 'connection', (/** @type {{fetch?: {register?: (route: object) => (() => Promise<void>) | undefined}} | null | undefined} */ connection) => {
@@ -3540,10 +3619,17 @@ export function registerWebRoutes(ctx, service, options) {
         try {
           const panelText = COMMAND_TEXT[service.language] ?? COMMAND_TEXT.en
           if (request.method === 'GET') {
-            const batches = recentBatchRows(service, panelText, 5)
+            const limit = options.panelBatchLimit
+            const batches = recentBatchRows(service, panelText, limit)
+            // 「N 组」必须是真话：库里的批次比一行能放的更多时，摘要标注总数，
+            // 别让截断后的条数读起来像总批数（复核「panel-truncation」）。
+            // batchIds 默认只取「最近几批」（为面板准备的默认值），当总数用会把 20 批以上的库读成 20；
+            // 这里按协议硬上限取，拿到的才是真总数。
+            const total = service.store.batchIds({ source: AUTO_TIDY_SOURCE, limit: MAX_QUERY_LIMIT }).length
             return panelJson(200, {
               language: service.language,
-              summary: batches.length === 0 ? null : panelText.autoTidyPanelLine(batches.length),
+              summary: batches.length === 0 ? null : panelText.autoTidyPanelLine(batches.length, total),
+              batchTotal: total,
               expandLabel: panelText.autoTidyPanelExpand,
               collapseLabel: panelText.autoTidyPanelCollapse,
               batches,

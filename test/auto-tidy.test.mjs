@@ -75,7 +75,7 @@ test('自动整理：auto 批次落写——降级留痕 ＋ merged 标 ＋ 继�
   assert.equal(gateCalls.length, 1, '一次审批整批')
   const payload = /** @type {{action: string, track: string, scope: string, text: string, source?: string}} */ (gateCalls[0])
   assert.equal(payload.track, 'user')
-  assert.equal(payload.source, AUTO_TIDY_SOURCE, '审批载荷带来源：粒度键 source:auto-tidy 在此着力')
+  assert.equal(payload.source, AUTO_TIDY_SOURCE, '审批载荷带来源：粒度键 source:tidy-auto 在此着力')
   assert.ok(payload.text.includes('偏好中文回复'), 'approve-what-you-see：载荷带被降级条目的原文')
 
   const rows = auditRows(store)
@@ -229,13 +229,178 @@ test('自动整理：会话开关关闭时在核心内部同门拦下——零�
   assert.equal(offRow.text, null, '连被拒的正文也不留')
 })
 
-test('自动整理：分级函数与协议核心之间无循环依赖（整理标记已下沉常量表）', () => {
-  const protocol = readFileSync(new URL('../lib/protocol.mjs', import.meta.url), 'utf8')
-  const consolidate = readFileSync(new URL('../lib/consolidate.mjs', import.meta.url), 'utf8')
-  assert.ok(protocol.includes("from './consolidate.mjs'"), 'protocol 取用分级函数')
-  assert.equal(consolidate.includes("from './protocol.mjs'"), false, 'consolidate 不得反向 import protocol，否则成环')
-  assert.ok(consolidate.includes('MERGED_TAG'), 'consolidate 仍取用整理标记（改为自常量表取用）')
-  assert.ok(protocol.includes('export { MERGED_TAG }'), 'protocol 对外仍 re-export 同一绑定（导出面不变）')
+test('自动整理：账目与条目同事务——审计写在库层被拒则整批不成，零残留', async (t) => {
+  const { store, core, cleanup } = tempCore()
+  t.after(cleanup)
+  const a = store.insertEntry({ track: 'user', scope: 'user-global', text: '偏好中文回复' })
+  const b = store.insertEntry({ track: 'user', scope: 'user-global', text: '偏好中文回复。' })
+  const beforeAudit = auditRows(store).length
+  // 库层真实阻断审计写（不是打桩）：条目插入成功、账目插入失败，事务必须整体回滚。
+  // 若账目还留在事务外，这里会是「条目落库、账本缺行」——红队二轮那条缺陷的形状。
+  store.db.exec("CREATE TRIGGER probe_block_audit BEFORE INSERT ON audit BEGIN SELECT RAISE(ABORT, 'probe: audit blocked'); END")
+
+  await assert.rejects(() => core.autoTidy({ ids: [a.id, b.id], text: '偏好中文回复' }, writeCtx('s-atomic')))
+  store.db.exec('DROP TRIGGER probe_block_audit')
+
+  assert.equal(store.entryById(a.id)?.status, 'active', '账目写失败 → 降级随整批回滚')
+  assert.equal(store.entryById(b.id)?.status, 'active', '两条都回到在场状态')
+  assert.equal(store.listEntries().length, 2, '不落合并条目')
+  assert.equal(auditRows(store).length, beforeAudit, '账本不多不少')
+})
+
+test('自动整理：收尾摘要行在批次事务内——批次面凭它重建，不留待补偿的尾巴', async (t) => {
+  const { store, core, cleanup } = tempCore()
+  t.after(cleanup)
+  const a = store.insertEntry({ track: 'user', scope: 'user-global', text: '偏好中文回复' })
+  const b = store.insertEntry({ track: 'user', scope: 'user-global', text: '偏好中文回复。' })
+
+  const result = await core.autoTidy({ ids: [a.id, b.id], text: '偏好中文回复' }, writeCtx('s-summary'))
+  const report = core.batchReport(result.batchId)
+  // 摘要行（consolidation）与条目、批次号同一个提交：批次一落地就自带可重建的账目，
+  // 不存在「落了条目、摘要还没写」的中间态，也就不需要事后补偿那一整套。
+  assert.equal(report?.sourceIds.length, 2, '降级行带被降级条目 id')
+  assert.equal(report?.producedIds.length, 1, '产出行带产出条目 id')
+  assert.equal(report?.entries.length, 3, '批次两侧条目都带批次号')
+  assert.equal(auditRows(store).filter((row) => row.action === 'consolidation').length, 1, '摘要行恰好一行')
+})
+
+test('自动整理：产出行缺失就没有「账目」可言——批次面不靠猜', async (t) => {
+  const { store, core, cleanup } = tempCore()
+  t.after(cleanup)
+  const a = store.insertEntry({ track: 'user', scope: 'user-global', text: '偏好中文回复' })
+  const b = store.insertEntry({ track: 'user', scope: 'user-global', text: '偏好中文回复。' })
+  const result = await core.autoTidy({ ids: [a.id, b.id], text: '偏好中文回复' }, writeCtx('s-ids'))
+
+  // 产出条目的 id 由协议层提前铸出、随事务交给 Provider：账目里它必须与库中那条一致。
+  const producedId = /** @type {string} */ (result.entry?.id)
+  const addRow = auditRows(store).find((row) => row.action === 'supersede-add')
+  assert.equal(addRow?.entry_id, producedId, '产出行记的正是落库那条的 id')
+  assert.equal(store.entryById(producedId)?.status, 'active')
+  assert.equal(store.entryById(producedId)?.batchId, result.batchId, '产出条目带本批批次号')
+})
+
+test('自动整理：整批落成后派发会话事件（与撤回路径同档，不早于提交）', async (t) => {
+  const { core, cleanup } = tempCore()
+  t.after(cleanup)
+  const events = []
+  core.emit = (/** @type {unknown} */ _session, /** @type {string} */ type) => { events.push(type) }
+  const write = writeCtx('s-events')
+  const a = await core.add({ track: 'user', scope: 'user-global', text: '偏好中文回复' }, write)
+  const b = await core.add({ track: 'user', scope: 'user-global', text: '偏好中文回复。' }, write)
+  events.length = 0
+
+  await core.autoTidy({ ids: [a.entry.id, b.entry.id], text: '偏好中文回复' }, write)
+  assert.deepEqual(events.slice().sort(), ['memory/added', 'memory/removed', 'memory/removed'].sort(), '两条降级 + 一条产出都要播报')
+
+  // 被拒的批次不播报（事件只跟成功的落写走）
+  events.length = 0
+  await assert.rejects(() => core.autoTidy({ ids: [a.entry.id, b.entry.id], text: '偏好中文回复' }, write))
+  assert.deepEqual(events, [], '零落盘即零事件')
+})
+
+test('自动整理：库层 id 校验——畸形 id 与重复 id 都结构化拒绝，不静默落库', (t) => {
+  const { store, cleanup } = tempCore()
+  t.after(cleanup)
+  const good = store.insertEntry({ track: 'user', scope: 'user-global', text: '偏好中文回复' })
+  for (const bad of ['not-a-uuid', '', 42, null]) {
+    assert.throws(
+      () => store.insertEntry(/** @type {any} */ ({ track: 'user', scope: 'user-global', text: 'x', id: bad })),
+      (/** @type {any} */ error) => error.code === ERROR_CODES.INVALID_INPUT,
+      `畸形 id ${JSON.stringify(bad)} 必须结构化拒绝`,
+    )
+  }
+  assert.throws(
+    () => store.insertEntry({ track: 'user', scope: 'user-global', text: '撞车', id: good.id }),
+    (/** @type {any} */ error) => error.code === ERROR_CODES.INVALID_INPUT && /already exists/u.test(error.message),
+    '重复 id 报结构化错误而不是裸 UNIQUE',
+  )
+  // 大写写法归一成小写：否则同一 UUID 能再占一行（entries.id 是二进制比较的主键）。
+  const upper = good.id.toUpperCase()
+  assert.throws(
+    () => store.insertEntry({ track: 'user', scope: 'user-global', text: '撞车（大写）', id: upper }),
+    (/** @type {any} */ error) => error.code === ERROR_CODES.INVALID_INPUT && /already exists/u.test(error.message),
+    '同一 UUID 的大写形式不得另占一行',
+  )
+})
+
+test('自动整理：协议层提前铸出的 id 就是落库那条——账目与条目同事务的前提成真', async (t) => {
+  const { store, core, cleanup } = tempCore()
+  t.after(cleanup)
+  const a = store.insertEntry({ track: 'user', scope: 'user-global', text: '偏好中文回复' })
+  const b = store.insertEntry({ track: 'user', scope: 'user-global', text: '偏好中文回复。' })
+  /** @type {Array<{id?: string}>} */
+  const seen = []
+  const real = store.supersedeEntries.bind(store)
+  store.supersedeEntries = (/** @type {any} */ input) => {
+    seen.push(input)
+    return real(input)
+  }
+
+  const result = await core.autoTidy({ ids: [a.id, b.id], text: '偏好中文回复' }, writeCtx('s-mint'))
+  store.supersedeEntries = real
+
+  // 这一条钉的是**结构前提**：协议层必须把 id 送到插入口。键名写错（entryId / id）或中途
+  // 掉环，落库的就是 Provider 另铸的 UUID，而「摘要行与条目同事务」就退化成空话——
+  // 账目虽仍自洽（都取实际条目），结构却不再成立。
+  const passedId = seen[0]?.id
+  assert.equal(typeof passedId, 'string', '协议层确实把 id 传了下来')
+  assert.equal(passedId, result.entry?.id, '传下去的 id 就是落库那条（不是 Provider 另铸的）')
+  assert.equal(store.entryById(/** @type {string} */ (passedId))?.status, 'active')
+  assert.equal(auditRows(store).find((row) => row.action === 'supersede-add')?.entry_id, result.entry?.id, '产出行记的也是它')
+})
+
+test('自动整理：待整理标记的收边也在批次事务内——阻断它即整批不成', async (t) => {
+  const { store, core, cleanup } = tempCore()
+  t.after(cleanup)
+  const a = store.insertEntry({ track: 'user', scope: 'user-global', text: '偏好中文回复' })
+  const b = store.insertEntry({ track: 'user', scope: 'user-global', text: '偏好中文回复。' })
+  const marker = store.tidyRequestAdd().request
+  const before = { entries: store.allEntries().length, audit: auditRows(store).length }
+
+  // 标记是队列里的一条权威状态：它若留在事务外，就会出现「整批成了、标记没结」，
+  // 下一轮再消费一次（组级复核第 1 条）。库层阻断标记的 UPDATE，整批必须一起不成。
+  store.db.exec("CREATE TRIGGER probe_block_marker BEFORE UPDATE ON tidy_requests BEGIN SELECT RAISE(ABORT, 'probe: marker blocked'); END")
+  await assert.rejects(() => core.autoTidy({ ids: [a.id, b.id], text: '偏好中文回复' }, writeCtx('s-marker')))
+  store.db.exec('DROP TRIGGER probe_block_marker')
+
+  assert.equal(store.allEntries().length, before.entries, '条目零残留')
+  assert.equal(auditRows(store).length, before.audit, '账本零残留')
+  assert.equal(store.entryById(a.id)?.status, 'active', '降级随整批回滚')
+  assert.equal(store.tidyRequestPending()?.id, marker.id, '标记仍是 pending——没被半途消费')
+})
+
+test('自动整理：拒绝行的审计文案记**生效**策略，不是全局那个', async (t) => {
+  // 全局 ask、来源键把自动整理封死。审计里必须写 writePolicy off——若拿全局 ask 充数，
+  // 账目就分不清「策略 off 拒的」与「ask 无人应答」（红队组级裁决实跑撞出的）。
+  const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-policy-label-'))
+  const store = openMemoryStore(path.join(dir, 'memory.db'))
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }) })
+  const core = new MemoryProtocolCore({
+    store,
+    budgets: BUDGETS,
+    writePolicy: 'ask',
+    writePolicies: { 'source:tidy-auto': 'off' },
+    gate: async () => 'rejected',
+    emit: () => {},
+  })
+  const write = writeCtx('s-policy-label')
+  const a = store.insertEntry({ track: 'user', scope: 'user-global', text: '偏好中文回复' })
+  const b = store.insertEntry({ track: 'user', scope: 'user-global', text: '偏好中文回复。' })
+
+  await assert.rejects(() => core.autoTidy({ ids: [a.id, b.id], text: '偏好中文回复' }, write))
+  const denied = auditRows(store).find((row) => String(row.action).endsWith('-denied'))
+  assert.ok(denied, '被拒的写要留痕')
+  assert.ok(String(denied.outcome).includes('writePolicy off'), `拒绝行记生效策略（实测：${denied.outcome}）`)
+  assert.equal(String(denied.outcome).includes('writePolicy ask'), false, '不得拿全局策略充数')
+  assert.equal(store.listEntries().length, 2, '拒绝即零落盘')
+})
+
+test('自动整理：落写停在一次 store 调用内（事务边界只有一个入口）', () => {
+  const source = readFileSync(new URL('../lib/protocol.mjs', import.meta.url), 'utf8')
+  // 落写路径不再有「事务外补账 + 补偿」：批次账目随条目一次性交给 Provider。
+  assert.equal([...source.matchAll(/this\.store\.supersedeEntries\(/gu)].length, 2, 'supersede 与批次回滚各一处调用')
+  assert.equal([...source.matchAll(/#compensate/gu)].length, 0, '补偿机制已删：账与条目同事务后它无用武之地')
+  assert.equal([...source.matchAll(/audit: \{/gu)].length, 2, '两处落写都把账目随事务交给 Provider')
 })
 
 test('自动整理：桶校验的每个调用点都显式带上动作名（防漏改文案）', () => {
@@ -259,6 +424,13 @@ test('自动整理：来源由动作自己钉死——调用方传别的 source 
   )
   assert.equal(/** @type {{source?: string}} */ (gateCalls[0]).source, AUTO_TIDY_SOURCE, '审批载荷带的是动作自己的来源')
   assert.equal(result.entry?.source, AUTO_TIDY_SOURCE, '新条目的来源不被覆盖')
-  const addRow = auditRows(store).find((row) => row.action === 'supersede-add')
+  // 产出行按正文定位（正文是这条用例的判别式）；entry_id 的精确对应由「协议层提前铸出的
+  // id 就是落库那条」一例钉住——id 现在落库前已知，账目里能写死。
+  const addRow = auditRows(store).find((row) => row.action === 'supersede-add' && row.text === '偏好中文回复')
   assert.equal(addRow?.source, AUTO_TIDY_SOURCE, '审计也记动作自己的来源')
+  assert.equal(
+    core.batchReport(result.batchId)?.producedIds.length,
+    1,
+    '产出条目的 id 由批次面还原（产出行不靠 entry_id 也能追到条目）',
+  )
 })

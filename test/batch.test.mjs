@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { MemoryProtocolCore } from '../lib/protocol.mjs'
+import { MemoryProtocolCore, AUTO_TIDY_SOURCE } from '../lib/protocol.mjs'
 import { openMemoryStore } from '../lib/store.mjs'
 import { ERROR_CODES, SCHEMA_VERSION } from '../lib/constants.mjs'
 
@@ -77,7 +77,7 @@ test('审计重建：仅凭审计行还原源 id 清单、产出 id、来源、�
   assert.ok(report, '批次报告非空')
   assert.deepEqual(report.sourceIds, [a.id, b.id], '源 id 清单与传入同序')
   assert.deepEqual(report.producedIds, [entry?.id], '产出条目 id')
-  assert.equal(report.source, 'auto-tidy', '来源 = 自动整理')
+  assert.equal(report.source, AUTO_TIDY_SOURCE, '来源 = 自动整理的来源标识')
   assert.equal(report.sessionId, 's-rebuild', '会话归属可还原')
   assert.ok(Number.isInteger(report.startedAt) && Number.isInteger(report.endedAt) && report.endedAt >= report.startedAt, '起止时间戳可还原')
   assert.deepEqual(report.entries.map((item) => item.id).sort(), [a.id, b.id, /** @type {string} */ (entry?.id)].sort(), '两侧条目都取得到')
