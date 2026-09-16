@@ -90,6 +90,7 @@ import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, Vector
  * @property {(input: object) => MemoryEntry} removeEntry
  * @property {(input: object) => {removed: MemoryEntry[], entry: MemoryEntry}} consolidateEntries
  * @property {(input: object) => {superseded: MemoryEntry[], entry: MemoryEntry | null}} supersedeEntries
+ * @property {(input: {batchId: string, producedIds: string[], sourceIds: string[]}) => {restored: MemoryEntry[], demoted: MemoryEntry[]}} rollbackBatch
  * @property {(input: {ids: string[]}) => MemoryEntry[]} restoreEntries
  * @property {(input: {ids: string[], tag: string}) => MemoryEntry[]} tagEntries
  * @property {(id: string) => MemoryEntry | null} entryById
@@ -2806,7 +2807,29 @@ async function runMemoryCommand(ctx, service, invocation, live) {
     case 'restore': {
       // S5 §1 的命令面：把降级条目救回（turn 外审批门，与 add/remove 同一条 makeCommandGate）。
       // 关了记忆的会话与 query/tidy 同档拒绝：回滚会改变本会话的可见集。
+      // F8 批次面：`--batch=<id>` 走整批撤回（产出降级 ＋ 源条目恢复，Provider 单事务），与逐 id 救回同一道门。
       if (!service.store.sessionEnabled(invocation?.agent?.session?.id)) return { kind: 'error', text: text.sessionOffRead }
+      const batchArg = rest.find((arg) => arg.startsWith('--batch'))
+      if (batchArg !== undefined) {
+        // 只认 `--batch=<id>` 与 `--batch <id>` 两种写法：`--batchabc` 这类拼错一律报用法，不静默当 id。
+        const inline = batchArg.startsWith('--batch=') ? batchArg.slice('--batch='.length) : undefined
+        if (batchArg !== '--batch' && inline === undefined) return { kind: 'error', text: text.restoreBatchNeedsId }
+        const batchId = inline ?? rest[rest.indexOf(batchArg) + 1]
+        if (typeof batchId !== 'string' || batchId.length === 0 || batchId.startsWith('--')) {
+          return { kind: 'error', text: text.restoreBatchNeedsId }
+        }
+        // 批次号与位置 id 混用、或给了多个批次旗标，一律报用法：静默忽略多余参数会让人
+        // 以为「两件事都做了」（重复旗标只撤第一个，是最危险的那种静默）。
+        const strays = rest.filter((arg) => arg !== batchArg && arg !== batchId && !arg.startsWith('--'))
+        const batchFlags = rest.filter((arg) => arg === '--batch' || arg.startsWith('--batch='))
+        if (strays.length > 0 || batchFlags.length > 1) return { kind: 'error', text: text.restoreBatchNeedsId }
+        const rolled = await service.restoreBatch({ batchId, source: 'command' }, { agent: invocation?.agent, gate: makeCommandGate(ctx, invocation) })
+        const lines = [
+          ...rolled.restored.map((entry) => `- restored [${entry.id}] ${entry.text}`),
+          ...rolled.demoted.map((entry) => `- demoted (batch product) [${entry.id}] ${entry.text}`),
+        ].join('\n')
+        return { kind: 'success', text: text.batchRolledBack(rolled.batchId, rolled.restored.length, rolled.demoted.length, lines, rolled.usage.used, rolled.usage.limit) }
+      }
       const ids = rest.filter((arg) => arg.length > 0)
       if (ids.length === 0) return { kind: 'error', text: text.restoreNeedsIds }
       const result = await service.restore({ ids, source: 'command' }, { agent: invocation?.agent, gate: makeCommandGate(ctx, invocation) })

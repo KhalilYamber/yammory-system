@@ -194,6 +194,10 @@ export interface MemoryService {
   /** 治理（S5）：把降级条目救回（只允许 `superseded → active`；version 不变）。 */
   restore(input: { ids: string[]; source?: string }, write: MemoryWriteContext): Promise<{ restored: MemoryEntry[]; usage: MemoryUsage }>
 
+  /** 整批撤回（F8 批次面）：把一批自动整理整体回滚——产出的合并条目降级、被它降级的源条目恢复为 active。
+   *  两件事在 Provider 同一个事务里完成（要么全成、要么全不动）；只碰带该批次号的条目，非本批次零影响。 */
+  restoreBatch(input: { batchId: string; source?: string }, write: MemoryWriteContext): Promise<{ batchId: string; restored: MemoryEntry[]; demoted: MemoryEntry[]; usage: MemoryUsage }>
+
   /** 治理（S5）：分面裁决。按面决定保留谁/降级谁；coexist 面两条都留、各打 `gap` 标。
    *  方向由 `ARBITRATION_BY_FACET` 决定，调用方无反向参数。 */
   arbitrate(input: { ids: string[]; source?: string }, write: MemoryWriteContext): Promise<{ facet: string; direction: string; kept: MemoryEntry[]; demoted: MemoryEntry[]; tagged: MemoryEntry[]; usage: MemoryUsage }>
