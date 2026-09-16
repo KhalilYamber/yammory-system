@@ -96,6 +96,8 @@ import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, Vector
  * @property {() => MemoryEntry[]} allEntries
  * @property {(row: object) => object} auditAppend
  * @property {(limit?: number) => object[]} auditList
+ * @property {(batchId: string) => object[]} auditByBatch
+ * @property {(batchId: string) => MemoryEntry[]} entriesByBatch
  * @property {(input: object) => object | null} proposalUpsert
  * @property {(status?: string, limit?: number) => object[]} proposalList
  * @property {(id: string, status: string) => object} proposalDecide

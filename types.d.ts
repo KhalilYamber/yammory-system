@@ -64,6 +64,8 @@ export interface MemoryEntry {
   recallCount: number
   /** 最近一次写它的会话 id；无则 null。 */
   sessionId: string | null
+  /** 自动整理批次号（F8 批次留痕）：产出或降级本条目的那一批；普通写入为 null。 */
+  batchId: string | null
 }
 
 /** 写入输入（add/seed 用）。 */
@@ -198,6 +200,10 @@ export interface MemoryService {
 
   /** 「整理全库」排队登记（收边）：只写一条待整理标记，不碰条目、不调模型。 */
   requestTidy(input: { source?: string }, write: MemoryWriteContext): Promise<{ request: { id: string; createdAt: number; status: string }; created: boolean }>
+
+  /** 批次留痕只读重建（F8）：仅凭审计行还原一整批（源 id 清单、产出条目 id、来源、起止时间戳）。
+   *  纯只读（不落审计、不走审批门、不改任何行）；未知批次返回 null，形状非法响亮拒绝。 */
+  batchReport(batchId: string): { batchId: string; sourceIds: string[]; producedIds: string[]; source: string | null; sessionId: string | null; startedAt: number; endedAt: number; entries: MemoryEntry[] } | null
 }
 
 /** 适配器描述（/memory adapters 与接入指南展示面）。 */

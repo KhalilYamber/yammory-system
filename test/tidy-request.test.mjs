@@ -98,9 +98,9 @@ test('收边迁移：v6 库升到 v7 建出 tidy_requests 表，旧数据原样�
 
   const store = openMemoryStore(dbPath)
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }) })
-  assert.equal(SCHEMA_VERSION, 7, '本版本 schema 为 v7')
+  assert.equal(SCHEMA_VERSION, 8, '本版本 schema 为 v8')
   const version = store.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value
-  assert.equal(String(version), '7', '迁移后回填 v7')
+  assert.equal(String(version), '8', '迁移后回填 v8')
   assert.equal(store.listEntries().length, 1, '旧条目原样保留')
   assert.equal(store.tidyRequestPending(), null, '新表就位且为空')
   assert.equal(store.tidyRequestAdd().created, true, 'v6 升上来的库可以直接登记')
