@@ -20,6 +20,7 @@ function entry(partial) {
     agentKey: partial.agentKey ?? '',
     text: partial.text,
     source: 'test',
+    tags: partial.tags ?? [],
     createdAt: partial.createdAt ?? 0,
     updatedAt: 0,
     sessionId: null,
@@ -176,6 +177,21 @@ test('S4b-6：末行「一行目录」只报按需条目的条数，正文一律
   const en = renderWarmup(entries, [], BUDGETS)
   assert.ok(en.includes('2 more workspace / agent-track entries stay out of this block'))
   assert.ok(renderWarmup([entry({ id: 'a1', track: 'agent', scope: 'workspace', text: 'x', workspaceKey: '/w' })], [], BUDGETS).includes('1 more workspace / agent-track entry stays'))
+})
+
+test('S4b-6+：末行的经验目录只报话题名，正文一条都不进（话题取 tags 里第一个非保留标）', () => {
+  const entries = [
+    entry({ id: 'u1', track: 'user', scope: 'user-global', text: '全局偏好' }),
+    entry({ id: 'a1', track: 'agent', scope: 'user-global', text: 'WSL 里看 diff 要用 Windows 侧 git', tags: ['git', 'A-开发相关'] }),
+    entry({ id: 'a2', track: 'agent', scope: 'user-global', text: '改行尾一律用 Windows 侧 git 提交', tags: ['git', 'A-开发相关'] }),
+    entry({ id: 'a3', track: 'agent', scope: 'user-global', text: '没打话题标的教训', tags: ['A-开发相关'] }),
+  ]
+  const text = renderWarmup(entries, [], BUDGETS, 'zh')
+  assert.ok(text.includes('经验 3 条，话题：git'), '话题去重后成目录')
+  assert.ok(text.includes('另有 3 条记忆不在本块'), '条数照旧如实')
+  assert.ok(!text.includes('没打话题标的教训') && !text.includes('WSL 里看 diff'), '目录只搬话题名，正文一律不进预热')
+  const en = renderWarmup(entries, [], BUDGETS)
+  assert.ok(en.includes('3 experience entries, topics: git'), 'en 侧同构')
 })
 
 test('S2：同一份输入两次渲染逐字一致（预热段可冻结、可进前缀缓存）', () => {
