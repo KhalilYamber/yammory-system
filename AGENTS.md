@@ -87,6 +87,7 @@ npm run test:conformance  # 协议一致性套件（黄金参考；第三方 Pro
 - **审批门不可绕过**：写路径的强制点位于 `MemoryProtocolCore`（`lib/protocol.mjs`）写方法内部（`MemoryService` 继承它并注入 `ctx.approval.request` 传输），不在工具层；`writePolicy` 是 Config，模型不可见、不可改；禁用（`enabled:false`）时一切贡献整体消失，不留半残状态。
 - **整理机不越界**（F6）：语义判断（哪几条在讲同一件事）由**当前会话的模型**做，`supersede` 的强制点在同一个 `MemoryProtocolCore` 里——不新增后台模型通道、不新增定时器、不新增后台进程；`agent/turn-stopping` 只读算积压、过线只给提示（`tidy-due` 审计行 ＋ 预热段末行），**绝不自动跑整理**。降级只从 `active → superseded`（留痕、可回滚、绝不物理删），只动会话可见集，桶内不跨；降级审计行 `text` 恒为 `null`（只记 id），每批另落一行 `consolidation` 变更摘要。面板「整理全库」按钮同理只是**排队**（决策 21）：登记一条 `tidy_requests` 标记（过同一套 `writePolicy` 的 turn 外 gate），提示进下次会话预热段末行，跑到清标记由 `supersede` 完成——面板点一下绝不等于记忆被整理过。
 - **治理不越界**（S5）：`restore` 只走 `superseded → active`（反向一律响亮失败，它不是「改状态」的通用口子）；`arbitrate` 的**方向由 `ARBITRATION_BY_FACET` 表决定**，工具与命令面都没有反向参数——「能力听观察、意愿听自陈」是代码不变量；coexist 面（其余五面）一条都不降级、两组各打 `gap` 标。两者复用 F6 的审批门、store 面、审计形状与桶内边界，**同样不新增 Config / 依赖 / 定时器 / 后台模型通道**；降级行审计 `text` 恒为 `null`。置信门槛刻意留 v2。
+- **观察轮不越界**（L2/L3）：自动跑的那条路同样在插件之外——系统计划任务唤起无头会话，插件内不新增定时器 / 后台进程 / 后台模型通道；到期提示（`observe-due`）挂在 `agent/turn-stopping`，只读、小时节流、**绝不自动跑观察**，过线只落一行审计 ＋ 下一次会话预热段末行一句。无人值守轮的任务文本以 `SCHEDULED_ROUND_MARKER`（`【无人值守轮】`）开头，闸二按前缀**整条排除**并计入账单 `injected`——自产文本不许当作用户证据。闸一（cwd 精确相等）不变：一轮只覆盖一个工作区，多工作区要另立计划任务。
 - **失败要大声**：库损坏/版本过新/非法配置在加载期抛错；子串歧义报 `AMBIGUOUS_MATCH`；绝不静默吞、绝不静默截断。（v2：写入不因容量被拒，预算只是软预警线。）
 - **本地优先**：零网络、零凭据；记忆库只写 `dbPath`（默认 `$DSH_HOME/dsh-memento/memory.db`），POSIX 权限 0600。
 - **systemPrompt 提供者必须同步**（0.1.2-rc.1 不 await）：SQLite 同步读 + WeakMap 按 Session 冻结。

@@ -1,7 +1,7 @@
 ---
 name: yammory-observe
 description: User-initiated behavioural observation (观察) writing into yammory_system memory. Reads a bounded slice of the user's OWN past messages via memory_observe scan, infers the five faces only observation can reach (thinking style, character under difficulty, emotional patterns, self-image, decision style), and commits at most 3 evidence-backed entries per round through the approval gate. Use when the user says observe me / 观察一下我 / 看看你对我了解到什么程度 / yammory observe.
-whenToUse: 用户提到「观察 / 观察一下我 / 看看你了解到我什么程度 / 从聊天里看看我 / 更新观察 / yammory observe」等意思时使用。不适用于：用户只是随口聊自己（照常对话即可）；也不允许模型自作主张发起观察——观察会读历史、烧上下文，只由用户主动发起。
+whenToUse: 用户提到「观察 / 观察一下我 / 看看你了解到我什么程度 / 从聊天里看看我 / 更新观察 / yammory observe」等意思时使用。不适用于：用户只是随口聊自己（照常对话即可）；也不允许模型自作主张发起观察——观察会读历史、烧上下文，只由用户主动发起（唯一例外：系统计划任务唤起的无人值守轮，任务文本以 `【无人值守轮】` 开头，属用户预先授权的常驻指令）。
 ---
 
 # 行为观察（yammory-observe）👁️
@@ -22,12 +22,14 @@ whenToUse: 用户提到「观察 / 观察一下我 / 看看你了解到我什么
 
 ## 何时启动
 
-**只由用户主动发起。** 触发不必卡死句式：
+**由用户发起：交互触发。** 触发不必卡死句式：
 
 - 「观察一下我」「看看你对我了解到什么程度」「从最近的聊天里看看我」
 - 「更新一下观察」「yammory observe」
 
 不启动的情形：用户只是在聊天里提到自己；用户没要求而你「觉得该多了解他一点」。**读历史＋推断会占真实上下文，默认不自动跑**——用户没开口就不动。
+
+**唯一的口子：无人值守轮。** 系统计划任务每周唤起一个无头会话（任务文本以 `【无人值守轮】` 开头），那不是「模型自作主张」，而是用户预先授权的常驻指令：它走同一套 `scan` → 推断 → `commit`、同一道审批门，写入按来源放行（`source:observation`，改 `ask` / `off` 即收口）。除它之外，任何「我想多了解他一点」的念头都不许自己开观察。
 
 用户中途喊停（「够了」「先到这」），立刻停，把已确认的写进去，不追问。
 

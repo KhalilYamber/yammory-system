@@ -226,6 +226,18 @@ export const TIDY_AUDIT_WINDOW = 200
 /** 同进程内两次「该整理了」审计提示的最小间隔（turn-stopping 每轮都会检查一次）。 */
 export const TIDY_NOTICE_INTERVAL = 3600000
 
+/**
+ * 观察通道的到期线（L2 闹钟）：距上次观察满 OBSERVE_DUE_DAYS 天，预热段末行提一句；
+ * 同一次检查还会只读问一次 sessionQuery「本工作区近观察窗口内还有几个可读会话」，
+ * 够 OBSERVE_DUE_SESSIONS 才落一行 observe-due 审计。两条都只是提示：插件内不新增定时器、
+ * 也绝不自动跑观察——自动跑的那条路在插件之外（系统计划任务唤起无头会话，决策 23）。
+ */
+export const OBSERVE_DUE_DAYS = 7
+export const OBSERVE_DUE_SESSIONS = 3
+export const OBSERVE_NOTICE_INTERVAL = 3600000
+/** 查「上次观察」时回看的审计行数（与 TIDY_AUDIT_WINDOW 同口径）。 */
+export const OBSERVE_AUDIT_WINDOW = 200
+
 /** F6 整理机的开工线（规格 3.5.1 的三个可调默认，出处单一：lib/consolidate.mjs）。 */
 export const TIDY_LINES = TIDY_DEFAULTS
 
@@ -320,6 +332,16 @@ export const WARMUP_TIDY_REQUEST = {
 }
 
 /**
+ * 预热段末行的观察到期提示（距上次观察过线时追加，只报天数与动作、不搬正文）。
+ * 与整理提示同一个节制：空块不硬塞。天数由同步读审计窗口算出；「本工作区有几个可读会话」
+ * 那半边要问异步的 sessionQuery，只进 observe-due 审计行，不进这里。
+ */
+export const WARMUP_OBSERVE_HINT = {
+  en: (/** @type {{days: number | null}} */ d) => `Observation is due: ${d.days === null ? 'no behavioural observation has ever run' : `the last one was ${d.days} day(s) ago`}. Say "observe me" and the model reads a bounded slice of your own past messages and writes at most 3 evidence-backed entries (memory_observe scan, then commit); /memory observe prints the same slice read-only.`,
+  zh: (/** @type {{days: number | null}} */ d) => `该做观察了：${d.days === null ? '还没有跑过一次行为观察' : `距上次观察已有 ${d.days} 天`}。说「观察一下我」，模型会读一段您自己的旧发言，最多落 3 条带证据的观察条目（memory_observe scan → commit）；/memory observe 可只读先看同一切片。`,
+}
+
+/**
  * 取上次整理时间（audit 行按 seq 倒序）：整理收尾固定落 `action='consolidation'`，
  * 窗口内没有就返回 0（= 从没整理过）。
  * @param {Array<{action?: string, ts?: number}>} auditRows - 审计行。
@@ -341,6 +363,53 @@ function lastTidyTs(auditRows) {
 function readTidyBacklog(store, now = Date.now()) {
   const since = lastTidyTs(store.auditList(TIDY_AUDIT_WINDOW))
   return backlogOf(/** @type {Array<{text: string, status?: string, createdAt: number, updatedAt: number}>} */ (store.listEntries()), { since, now })
+}
+
+/**
+ * 取上次观察时间（audit 行按 seq 倒序）：观察落 `action='observed'`，窗口内没有就返回 0
+ * （= 从没观察过）。
+ * @param {Array<{action?: string, ts?: number}>} auditRows - 审计行。
+ * @returns {number} 上次观察时间戳；无记录为 0。
+ */
+function lastObserveTs(auditRows) {
+  for (const row of auditRows) {
+    if (row.action === 'observed' && typeof row.ts === 'number') return row.ts
+  }
+  return 0
+}
+
+/**
+ * 只读算一次观察到没到期（预热段末行提示与 turn-stopping 共用）：O(n) 读审计窗口，不写库、
+ * 不落审计。天数同步可算；「本工作区可读会话数」要问异步的 sessionQuery，不在这里。
+ * @param {StoreHandle} store - Provider。
+ * @param {number} [now] - 当前时间（测试注入）。
+ * @returns {{lastAt: number, days: number | null, due: boolean}} 上次观察时间、距今天数（从没观察过为 null）与是否过线。
+ */
+function readObserveDue(store, now = Date.now()) {
+  const lastAt = lastObserveTs(store.auditList(OBSERVE_AUDIT_WINDOW))
+  const days = lastAt === 0 ? null : Math.floor((now - lastAt) / 86400000)
+  return { lastAt, days, due: lastAt === 0 || days >= OBSERVE_DUE_DAYS }
+}
+
+/**
+ * 只读算「本工作区近观察窗口内还有几个可读会话」：闸一口径（cwd 精确相等）＋ 已关记忆的
+ * 会话不算（历史半边，与 scan 的选区过滤一致）。要问 sessionQuery，故只能在异步路径上走。
+ * 读不到（服务缺失/拒绝/超时）一律记 0，且**不落审计**——只读辅助检查绝不打断一轮对话。
+ * @param {import('@deepseek-ai/cordis').Context} ctx - Cordis 上下文（查 sessionQuery）。
+ * @param {string} cwd - 本会话的工作目录。
+ * @param {number} days - 观察窗口天数（用 live.observe.days）。
+ * @returns {Promise<number>} 可读会话数；任何失败为 0。
+ */
+async function countWorkspaceSessions(ctx, cwd, days) {
+  const sessionQuery = /** @type {SessionQueryLike | null | undefined} */ (ctx.get('sessionQuery'))
+  if (sessionQuery === undefined || sessionQuery === null) return 0
+  try {
+    const records = await sessionQuery.filterSessions(sessionScope({ cwd, days, now: Date.now() }).filters)
+    const offIds = new Set(/** @type {MemoryService} */ (ctx.get('memory')).store.disabledSessionIds())
+    return records.filter((record) => !offIds.has(String(record?.header?.id ?? ''))).length
+  } catch {
+    return 0 // 空 catch 语义：只读辅助检查读不到就当 0，绝不因此以错误收尾本轮对话
+  }
 }
 
 /**
@@ -2374,6 +2443,12 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
         if (backlog.due && frozen.length > 0) {
           frozen = `${frozen}\n\n${(WARMUP_TIDY_HINT[live.language] ?? WARMUP_TIDY_HINT.en)(backlog)}`
         }
+        // L2 观察闹钟：距上次观察过线时在同一末行提一句（只报天数；观察照旧由人开口或
+        // 插件外的无头轮发起）。与整理提示一样的节制：空块不硬塞。
+        const observeDue = readObserveDue(store)
+        if (observeDue.due && frozen.length > 0) {
+          frozen = `${frozen}\n\n${(WARMUP_OBSERVE_HINT[live.language] ?? WARMUP_OBSERVE_HINT.en)(observeDue)}`
+        }
         // 收边 §2：用户点过的「整理全库」标记存在时，在同一处（末行）追加排队提示。
         // 这一行不受「空块不硬塞」限制——它是用户点过的动作，模型必须看见；块因此非空时
         // 也照常落 snapshot 审计行（模型可见 ⟺ 落盘）。
@@ -2443,6 +2518,43 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
     } catch {
       // 只读检查绝不能让一轮对话失败（turn-stopping 串行派发，抛错会以错误收尾本轮）。
     }
+  })
+
+  // L2 观察到期检测：与整理同一处挂载，同样**只读**（无模型、无定时器、绝不自动跑观察）。
+  // 这一半是异步的——「本工作区还有几个可读会话」要问 sessionQuery；预热段提供者是同步的，
+  // 那半边走 readObserveDue 只报天数。同进程按 OBSERVE_NOTICE_INTERVAL 节流，免得每轮都刷。
+  // 该事件串行派发，故用不阻塞的 IIFE 起头，异常整体吞住（吞的是只读检查的失败）。
+  const observeNotice = { at: 0 }
+  ctx.on('agent/turn-stopping', (payload) => {
+    void (async () => {
+      try {
+        const session = /** @type {{agent?: {session?: MemorySessionLike | null} | null} | undefined} */ (payload)?.agent?.session
+        const sessionId = typeof session?.id === 'string' ? session.id : null
+        // 会话关了记忆就不碰：提示也是记忆机制的一部分。
+        if (!store.sessionEnabled(sessionId)) return
+        const cwd = /** @type {string | undefined} */ (session?.header?.cwd)
+        if (typeof cwd !== 'string' || cwd.length === 0) return
+        const due = readObserveDue(store)
+        if (!due.due) return
+        const now = Date.now()
+        if (now - observeNotice.at < OBSERVE_NOTICE_INTERVAL) return
+        observeNotice.at = now // 先占坑再 await：并发轮不会重复落同一行
+        const sessions = await countWorkspaceSessions(ctx, cwd, live.observe.days)
+        if (sessions < OBSERVE_DUE_SESSIONS) return
+        store.auditAppend({
+          action: 'observe-due',
+          track: null,
+          scope: null,
+          entryId: null,
+          text: `${sessions} readable session(s) in ${cwd} within the ${live.observe.days}-day observe window; last observation ${due.days === null ? 'never recorded' : `${due.days} day(s) ago`}; say "observe me" (memory_observe scan, then commit), or run /memory observe for the read-only slice`,
+          outcome: 'over-line',
+          source: DEFAULT_SOURCE,
+          sessionId,
+        })
+      } catch {
+        // 只读检查绝不能让一轮对话失败（turn-stopping 串行派发，抛错会以错误收尾本轮）。
+      }
+    })()
   })
 }
 

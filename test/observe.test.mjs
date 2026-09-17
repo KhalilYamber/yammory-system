@@ -23,8 +23,8 @@ import {
   formatStamp,
 } from '../lib/observe.mjs'
 import { InvalidInputError } from '../lib/errors.mjs'
-import { OBSERVE_LIMITS, OBSERVATION_FACE_VALUES } from '../lib/constants.mjs'
-import { apply, DEFAULT_BUDGETS, handleMemoryCommand } from '../index.mjs'
+import { OBSERVE_LIMITS, OBSERVATION_FACE_VALUES, OBSERVATION_SOURCE, SCHEDULED_ROUND_MARKER } from '../lib/constants.mjs'
+import { apply, DEFAULT_BUDGETS, handleMemoryCommand, OBSERVE_DUE_DAYS, OBSERVE_DUE_SESSIONS, WARMUP_OBSERVE_HINT } from '../index.mjs'
 import { createMockCtx, makeSession, makeAgent, makeExec } from './helpers/mock-ctx.mjs'
 
 const DAY = 86400000
@@ -139,6 +139,18 @@ test('extractHumanMessages：空白发言丢弃、非数组输入返回空、图
   assert.deepEqual(extractHumanMessages([message('user', '   ', 0)], 400).messages, [])
   const imageOnly = { type: 'user/message', seq: 0, time: NOW, data: { content: [{ type: 'image', source: 'x.png' }], source: { kind: 'user' } } }
   assert.deepEqual(extractHumanMessages([imageOnly], 400).messages, [])
+})
+
+test('extractHumanMessages：无人值守轮的自产任务文本被窄排除，且排除条数进账单', () => {
+  const events = [
+    message('user', `${SCHEDULED_ROUND_MARKER}后台观察轮（无人值守，由系统计划任务唤起）：调用 memory_observe scan…`, 0),
+    message('user', '这条才是主人真说的', 1),
+    message('plugin', '系统注入', 2),
+  ]
+  const { messages, injected } = extractHumanMessages(events, 400)
+  assert.deepEqual(messages.map((m) => m.text), ['这条才是主人真说的'], '只有真人那句留下')
+  assert.equal(injected, 2, '自产文本与系统注入都进 injected，绝不静默丢')
+  assert.equal(extractHumanMessages([message('user', '我说【无人值守轮】是比喻', 0)], 400).messages.length, 1, '只在开头命中才排除，句中出现不算')
 })
 
 // ── 均匀采样 ──────────────────────────────────────────────────────────────────
@@ -720,4 +732,119 @@ test('/memory observe：坏标志报用法、无 session-query 报不可用（�
   assert.equal(unavailable.kind, 'error')
   assert.match(unavailable.text, /session-query/)
   assert.equal(service.store.listEntries().length, 0)
+})
+
+// ── L2 观察闹钟：预热段末行提示 ＋ turn-stopping 只读记账 ────────────────────
+// 到期线是「距上次观察的天数」；会话数那半边只在异步路径上算，进审计行、不进预热段
+// （预热段提供者是同步的）。两条都只提示：插件里不新增定时器、也绝不自动跑观察。
+
+/** 预热段文本（systemPrompt.section 的 text 回调产物）。 */
+function warmupText(mock, session) {
+  const section = mock.sections.find((/** @type {{name: string}} */ candidate) => candidate.name === 'yammory_system:memory')
+  assert.ok(section, '预热段已注册')
+  return section.text({ agent: makeAgent(session) })
+}
+
+/** 放完一轮异步 turn-stopping 检查（emit 不 await 监听器，只同步派发）。 */
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+const dueRows = (service) => service.store.auditList(50).filter((row) => row.action === 'observe-due')
+
+/** 观察文件的 mount() 只给 mock（不像 tidy 那份带 service），这里就地取一次。 */
+const mountedService = (mounted) => mounted.mock.services.get('memory')
+
+test('WARMUP_OBSERVE_HINT：报天数与动作；从没观察过时如实说「还没有」', () => {
+  const zh = WARMUP_OBSERVE_HINT.zh({ days: 9 })
+  assert.ok(zh.includes('9 天') && zh.includes('观察一下我') && zh.includes('/memory observe'))
+  assert.ok(WARMUP_OBSERVE_HINT.zh({ days: null }).includes('还没有跑过一次行为观察'), '从没观察过不谎报天数')
+  assert.ok(WARMUP_OBSERVE_HINT.en({ days: 3 }).includes('3 day(s) ago'))
+  assert.ok(OBSERVE_DUE_DAYS >= 1 && OBSERVE_DUE_SESSIONS >= 1, '到期线是正数')
+})
+
+test('L2 预热段：距上次观察过线时末行提一句并随快照落审计；刚观察过就一字不加', async (t) => {
+  const mounted = mount({ language: 'zh' })
+  t.after(() => teardown(mounted))
+  const { mock } = mounted
+  const service = mountedService(mounted)
+  await service.add({ track: 'user', scope: 'user-global', text: '常驻画像：偏好先给结论' }, { agent: makeAgent(makeSession({ id: 's-seed' })) })
+
+  const fresh = warmupText(mock, makeSession({ id: 's-fresh' }))
+  assert.ok(fresh.includes('该做观察了'), '从没观察过 → 过线提示')
+  assert.ok(fresh.includes('/memory observe'), '提示里给出只读入口')
+  const snapshot = service.store.auditList(20).find((row) => row.action === 'snapshot' && String(row.text).includes('该做观察了'))
+  assert.ok(snapshot, '提示随冻结文本进 snapshot 审计行（模型可见 ⟺ 落盘）')
+
+  service.store.auditAppend({ action: 'observed', track: null, scope: null, entryId: null, text: 'scan days=14', outcome: 'ok', source: OBSERVATION_SOURCE, sessionId: 's-fresh' })
+  const after = warmupText(mock, makeSession({ id: 's-after' }))
+  assert.equal(after.includes('该做观察了'), false, '刚观察过（0 天）→ 不再提示')
+  assert.ok(after.length > 0, '其余预热块照常渲染')
+})
+
+test('L2 触发检测：turn-stopping 只读算本工作区可读会话数，够数才落 observe-due 审计', async (t) => {
+  const mounted = mount({ language: 'zh' })
+  t.after(() => teardown(mounted))
+  const { mock } = mounted
+  const service = mountedService(mounted)
+  const now = Date.now()
+  mock.ctx.provide('sessionQuery', fakeSessionQuery([
+    { id: 'a', cwd: 'D:\\proj', createdAt: now - 3600000 },
+    { id: 'b', cwd: 'D:\\proj', createdAt: now - 7200000 },
+    { id: 'c', cwd: 'D:\\proj', createdAt: now - 10800000 },
+    { id: 'elsewhere', cwd: 'D:\\other', createdAt: now - 3600000 },
+  ]))
+  const session = makeSession({ id: 's-due', cwd: 'D:\\proj' })
+  const emit = () => mock.ctx.emit('agent/turn-stopping', { agent: makeAgent(session), turn: 1, signal: new AbortController().signal })
+
+  emit()
+  await flush()
+  assert.equal(dueRows(service).length, 1, '本工作区够 3 个可读会话 → 落一行')
+  assert.equal(dueRows(service)[0].outcome, 'over-line')
+  assert.equal(dueRows(service)[0].entryId, null)
+  assert.ok(String(dueRows(service)[0].text).includes('3 readable session(s)'), '数的是本工作区，口径与闸一一致（别的工作区不算）')
+  assert.ok(String(dueRows(service)[0].text).includes('D:\\proj'))
+  assert.equal(service.store.listEntries().length, 0, '只读检查不写记忆')
+
+  emit()
+  await flush()
+  assert.equal(dueRows(service).length, 1, '同一进程内节流，不每轮都刷')
+})
+
+test('L2 触发检测：会话数不够 / 关了记忆 / 没有 cwd / 没有读通道，一律不落审计且不抛', async (t) => {
+  const now = Date.now()
+  const emit = (mounted, session) => mounted.mock.ctx.emit('agent/turn-stopping', { agent: makeAgent(session), turn: 1, signal: new AbortController().signal })
+
+  const few = mount({ language: 'zh' })
+  t.after(() => teardown(few))
+  few.mock.ctx.provide('sessionQuery', fakeSessionQuery([{ id: 'a', cwd: 'D:\\proj', createdAt: now - 3600000 }]))
+  emit(few, makeSession({ id: 's1', cwd: 'D:\\proj' }))
+  await flush()
+  assert.equal(dueRows(mountedService(few)).length, 0, '本工作区会话太少 → 不落（提示要值钱）')
+
+  const off = mount({ language: 'zh' })
+  t.after(() => teardown(off))
+  off.mock.ctx.provide('sessionQuery', fakeSessionQuery([{ id: 'a', cwd: 'D:\\proj', createdAt: now - 3600000 }]))
+  mountedService(off).store.sessionSetEnabled('s-off', false)
+  emit(off, makeSession({ id: 's-off', cwd: 'D:\\proj' }))
+  await flush()
+  assert.equal(dueRows(mountedService(off)).length, 0, '关掉的会话不碰记忆机制（提示也算）')
+
+  const noCwd = mount({ language: 'zh' })
+  t.after(() => teardown(noCwd))
+  noCwd.mock.ctx.provide('sessionQuery', fakeSessionQuery([{ id: 'a', cwd: 'D:\\proj', createdAt: now - 3600000 }]))
+  emit(noCwd, makeSession({ id: 's2' }))
+  await flush()
+  assert.equal(dueRows(mountedService(noCwd)).length, 0, '没有 cwd 就不猜工作区')
+
+  const noService = mount({ language: 'zh' })
+  t.after(() => teardown(noService))
+  assert.doesNotThrow(() => emit(noService, makeSession({ id: 's3', cwd: 'D:\\proj' })))
+  await flush()
+  assert.equal(dueRows(mountedService(noService)).length, 0, '读通道缺失 → 记 0，不假装观察到')
+
+  const closed = mount({ language: 'zh' })
+  t.after(() => teardown(closed))
+  closed.mock.ctx.provide('sessionQuery', fakeSessionQuery([{ id: 'a', cwd: 'D:\\proj', createdAt: now - 3600000 }]))
+  mountedService(closed).store.close()
+  assert.doesNotThrow(() => emit(closed, makeSession({ id: 's4', cwd: 'D:\\proj' })))
+  await flush()
 })

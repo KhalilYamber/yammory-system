@@ -457,3 +457,43 @@ F6 让记忆有了负反馈回路，但那条回路当时只能往一个方向�
   没有一批持久化的待批合并项，人工合并仍要在会话内发起 `supersede` 并过一次审批；全库整理的**执行**部分
   与 v1 同（面板按钮只登记 `tidy_requests` 标记）。后台轮被拒时只留一行 `*-denied` 审计（文案记
   **生效**策略，不拿全局策略充数），不会有谁去改判据重试。
+
+### 24. 观察通道的到期提示与无人值守轮（L2 ＋ L3）：提示归提示，自动跑的路同样在插件之外
+
+**L2 到期提示（`observe-due`）。** 与整理机同形：`agent/turn-stopping` 只读算一次「距上次观察多久」，
+过 `OBSERVE_DUE_DAYS`（7 天）时落一行 `observe-due` 审计（同进程按 `OBSERVE_NOTICE_INTERVAL` 小时节流），
+并在下一次会话的预热段末行追加 `WARMUP_OBSERVE_HINT`；一旦有新的 `observed` 审计行（真跑过扫描），
+提示即消失。**同步/异步的边界是这条决策的要点**：预热段提供者必须同步（决策 3），所以那里只报
+「天数」——天数可自审计窗口同步读出；「本工作区还有几个可读会话」要问异步的 `sessionQuery`，
+只有 turn-stopping 那条异步路径能算，于是它进审计行、**不进**预热段末行。两处的过线条件因此不完全
+同形：末行看天数，审计行看「天数 ＋ 本工作区可读会话数 ≥ `OBSERVE_DUE_SESSIONS`」。这条差异是有意的：
+宁可少写一行审计，也不在同步路径上假装知道一个当时读不出来的数。
+
+**L3 无人值守观察轮。** 复用决策 23 的执行体与调度：插件本体不新增定时器、后台进程或后台模型通道
+（静态可核），系统计划任务唤起一个 `headless` profile 的真实会话，会话里的模型自己 `scan` → 推断 →
+`commit`。插件提供两样：入口（`memory_observe`，与交互路径同一个工具）与放行口——写入来源由
+`normalizeObservationEntries` 锚死为 `OBSERVATION_SOURCE`（`observation`），于是粒度写策略
+`source:observation` 可以只放行这一条路（headless profile 的 `cordis.patch.yml` 给出 `auto`；
+改 `ask` / `off` 即收口，与整理轮同一套开关语义）。调度只留插件之外：Windows 计划任务
+`\DSH-Memory-Observe`（每周日 04:00，比每天一轮的整理轮稀），执行体在
+`%LOCALAPPDATA%\DSH-Memory-Observe\`（`obs-sched.cmd` → `obs-sched.js` → `obs-task.txt`）。
+轮次刻意取稀：观察是对同一批语料反复推断，轮次越密越容易产出重复条目，任务文本因此要求先按
+`user/user-global` 查一遍已有观察条目再决定写不写。
+
+**闸一决定「一轮只能看一个工作区」。** `sessionScope` 按 cwd 精确相等放行，所以子进程的 cwd 就是被
+观察的工作区；反过来，执行体不能照抄整理轮的「cwd 落在 checkout」——那会让一轮只看得见 checkout
+自己的历史。三处环境坑（都有实测）：① 子进程 cwd 换到工作区后，tsx 按 cwd 找 tsconfig 的行为会让
+`@deepseek-ai/*` 的 `paths` 解析失效（症状是 `profile-boot` 报 `FiberState` 找不到），必须用
+`TSX_TSCONFIG_PATH` 指回 checkout 的 solution tsconfig；② `--import` 与入口脚本都要写成绝对路径；
+③ `.cmd` 包装照旧 ASCII-only（非 ASCII 的 checkout 路径只许出现在 Node 读的 `.js` 里）。
+
+**闸二之上加一条自产文本的窄排除。** 内核把无头轮的位置参数记成一条 `user/message`
+（`source.kind === 'user'`），于是观察轮自己的任务说明会被闸二当成「用户本人的发言」，下一轮就可能
+拿它当证据。任务文本因此以 `SCHEDULED_ROUND_MARKER`（`【无人值守轮】`）开头，`extractHumanMessages`
+按前缀整条排除并计入账单 `injected`（排除是响亮的，不静默丢）。这是白名单之上的一条窄排除，
+不改变「黑名单会漏」这条既有结论；整理轮的任务文本同样打了标记，于是它在观察切片里也不出现。
+
+**仍缺（诚实登记）**：① 会话数那半边不进预热段末行（同步约束，见上）；② 一轮只覆盖一个工作区，
+多工作区要铺多条计划任务——本轮按「14 天真人发言量」实测只铺了 `D:\DeepSeek-Harness\日常对话`
+一处（126 条，居首），其余工作区要另立任务；③ 观察轮自身的会话会进下一次扫描的候选（cwd 相同），
+内容靠任务文本标记排除——会话级开关（F5）只能整会话排除，而观察轮必须开着记忆才能扫描自己。
