@@ -97,6 +97,14 @@ const STRINGS = {
     tidyAlreadyQueued: 'Already queued — no duplicate marker.',
     tidyBusy: 'Queueing…',
     tidyFailed: (message) => `Not queued: ${message}`,
+    tabMemory: 'Memory',
+    tabExperience: 'Experience',
+    treeUnfiled: 'Unfiled',
+    topicsUnfiled: 'Untagged',
+    levels: 'Knowledge levels',
+    levelsEmpty: 'No domain scored yet (write with the memory_profile tool).',
+    levelUnscored: 'not scored',
+    emptyExperience: 'No experience yet. Lessons about doing the work belong to the agent track — see the yammory-experience skill.',
     loadFailed: (message) => `Load failed: ${message} (panel is read-only; make sure the Web profile has yammory_system loaded)`,
   },
   zh: {
@@ -127,6 +135,14 @@ const STRINGS = {
     tidyAlreadyQueued: '已在队列里了，不重复登记。',
     tidyBusy: '登记中…',
     tidyFailed: (message) => `未登记：${message}`,
+    tabMemory: '记忆',
+    tabExperience: '经验',
+    treeUnfiled: '未分类',
+    topicsUnfiled: '无话题',
+    levels: '知识水位',
+    levelsEmpty: '还没有领域打过分（用 memory_profile 工具写入）。',
+    levelUnscored: '未打分',
+    emptyExperience: '还没有经验条目。干活的教训归 agent 轨——见 yammory-experience skill。',
     loadFailed: (message) => `加载失败：${message}（面板只读；请确认 Web profile 已装载 yammory_system）`,
   },
 }
@@ -309,6 +325,15 @@ const PANEL_LAYOUT_CSS = `
 .mem-batch { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; }
 .mem-batch + .mem-batch { border-top: 1px solid var(--dsw-alias-border-l2); }
 .mem-batch-details { display: flex; flex-direction: column; gap: 2px; }
+/* 两个世界 (记忆／经验)：页签 ＋ 可折叠结构树。 */
+.mem-tabs { display: flex; gap: 6px; margin: 0 12px 6px; }
+.mem-tree-row { display: flex; align-items: center; gap: 4px; }
+.mem-tree-toggle { flex: 1; min-width: 0; justify-content: flex-start; text-align: left; }
+.mem-tree-body { display: flex; flex-direction: column; gap: 4px; margin: 0 0 4px 7px; padding-left: 9px; border-left: 1px solid var(--dsw-alias-border-l2); }
+.mem-tree-empty { margin: 0 0 4px 16px; color: var(--dsw-alias-label-tertiary); font-size: 11px; }
+.mem-level-cat { margin: 6px 0 2px; font-size: 11px; font-weight: 600; color: var(--dsw-alias-label-secondary); }
+.mem-level-row { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--dsw-alias-label-secondary); }
+.mem-level-row .n { font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-tertiary); }
 `
 
 /**
@@ -342,6 +367,110 @@ function groupHeading(primitives, key, count, S) {
   return jsx('div', { className: 'mem-group-title' },
     jsx('span', { style: { marginRight: badge === null ? 0 : 6 } }, key),
     badge)
+}
+
+// ── 两个世界：记忆 = user 轨（七面结构树），经验 = agent 轨（话题树）─────
+// 面板只按轨道分流，不做内容判别；分家判据与写法归 skills/yammory-experience
+// （判据一句话：这条知识该不该每一轮都在场）。
+
+/** 页签与树展开态的模块级记忆：关掉抽屉再打开仍在（不落盘、不进宿主存储）。 */
+let panelTab = 'memory'
+/** @type {Set<string>} */
+const expandedNodes = new Set()
+
+/** 展开态回写模块级记忆（抽屉卸载后仍保留）。 */
+function rememberExpansion(next) {
+  expandedNodes.clear()
+  for (const key of next) expandedNodes.add(key)
+}
+
+/** 话题标的保留词：观察/整理/裁决的机器标与分类标、日期标都不算话题。 */
+const RESERVED_TOPIC_TAGS = new Set(['observation', 'merged', 'gap', 'A-开发相关', 'B-非开发'])
+const DATE_TAG_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+/** 取经验条目的话题：tags 里第一个非保留标（约定写在 skills/yammory-experience）；没有则空串。 */
+function topicOf(entry) {
+  const tags = Array.isArray(entry.tags) ? entry.tags : []
+  for (const tag of tags) {
+    if (typeof tag === 'string' && tag.length > 0 && !RESERVED_TOPIC_TAGS.has(tag) && !DATE_TAG_PATTERN.test(tag)) return tag
+  }
+  return ''
+}
+
+/**
+ * 记忆轨按七面分桶：面清单由服务端随 entries 响应下发，单一出处仍是
+ * `lib/constants.mjs` 的 PROFILE_FACETS。面为空或不在清单内的条目归空串桶，
+ * 面板渲染成「未分类」（兜底节点排在最后）。
+ */
+function groupByFacet(entries, facets) {
+  const known = new Set(Array.isArray(facets) ? facets : [])
+  const groups = new Map()
+  for (const facet of known) groups.set(facet, [])
+  for (const entry of entries) {
+    const key = typeof entry.facet === 'string' && known.has(entry.facet) ? entry.facet : ''
+    const list = groups.get(key)
+    if (list === undefined) groups.set(key, [entry])
+    else list.push(entry)
+  }
+  return groups
+}
+
+/** 经验轨按话题分桶（无话题的归空串桶，面板渲染成「无话题」）。 */
+function groupByTopic(entries) {
+  const groups = new Map()
+  for (const entry of entries) {
+    const key = topicOf(entry)
+    const list = groups.get(key)
+    if (list === undefined) groups.set(key, [entry])
+    else list.push(entry)
+  }
+  return groups
+}
+
+/** 条目行（两个世界共用同一套渲染：正文 ＋ 来源/agent/时间）。 */
+function entryRow(entry) {
+  const agentTag = typeof entry.agentKey === 'string' && entry.agentKey.length > 0 ? ` · agent ${entry.agentKey}` : ''
+  return jsx('div', { key: entry.id, className: 'mem-entry', title: entry.text },
+    jsx('span', { className: 't' }, entry.text),
+    jsx('span', { className: 'm' }, `${entry.source}${agentTag} · ${formatTime(entry.createdAt)}`))
+}
+
+/** 结构树节点：一行可点的分类名 ＋ 计数；展开才由调用方渲染子树。 */
+function treeNode(primitives, nodeKey, label, count, expanded, onToggle, S) {
+  return jsx(react.Fragment, { key: nodeKey },
+    jsx('div', { className: 'mem-tree-row' },
+      jsx(primitives.Button, {
+        className: 'mem-tree-toggle',
+        variant: 'ghost',
+        size: 'sm',
+        'aria-expanded': expanded,
+        onClick: () => onToggle(nodeKey),
+      }, `${expanded ? '▾' : '▸'} ${label}`),
+      Number.isInteger(count) ? jsx(primitives.Tag, { tone: 'neutral' }, S.groupCount(count)) : null))
+}
+
+/**
+ * 知识水位块：八大类 → 31 子领域逐行给 level/tier，未打分的标「未打分」。
+ * 类目与子领域清单由服务端随 entries 响应下发，单一出处仍是 `lib/constants.mjs`
+ * 的 KNOWLEDGE_CATEGORIES；面板不另存一份清单。
+ */
+function renderLevels(S, state) {
+  const categories = Array.isArray(state.categories) ? state.categories : []
+  if (categories.length === 0) return jsx('div', { className: 'mem-tree-empty' }, S.levelsEmpty)
+  const byDomain = new Map()
+  for (const row of Array.isArray(state.profile) ? state.profile : []) byDomain.set(row.domain, row)
+  return categories.map((pair) => {
+    const name = Array.isArray(pair) ? String(pair[0]) : ''
+    const domains = Array.isArray(pair) && Array.isArray(pair[1]) ? pair[1] : []
+    return jsx('div', { key: `lv:${name}` },
+      jsx('div', { className: 'mem-level-cat' }, name),
+      domains.map((domain) => {
+        const row = byDomain.get(domain)
+        return jsx('div', { key: `lv:${name}:${domain}`, className: 'mem-level-row' },
+          jsx('span', null, domain),
+          jsx('span', { className: 'n' }, row === undefined ? S.levelUnscored : `${row.level}/10 · ${row.tier}`))
+      }))
+  })
 }
 
 function renderSnippet(primitives, lines) {
@@ -524,35 +653,63 @@ function TidyRow(props) {
     jsx('p', { className: 'mem-tidy-note' }, note ?? (pending === null ? S.tidyHint : S.tidyAlreadyQueued)))
 }
 
-/** 抽屉正文：条目浏览（分组 ＋ 过滤）＋ 预算条 ＋ 审计尾 ＋ 提案区 ＋ 三数行。 */
+/** 抽屉正文：两个世界（记忆＝七面结构树／经验＝话题树）＋ 预算条 ＋ 审计尾 ＋ 提案区 ＋ 三数行。 */
 function PanelContent(props) {
   const { primitives, rootRef, S, state, onLanguage, onRefresh, onFilter } = props
+  const [tab, setTab] = react.useState(panelTab)
+  const [expanded, setExpanded] = react.useState(() => new Set(expandedNodes))
+  const toggleNode = (key) => {
+    const next = new Set(expanded)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    rememberExpansion(next)
+    setExpanded(next)
+  }
+  const switchTab = (next) => { panelTab = next; setTab(next) }
   // 计数行与正文共用同一份过滤结果，故提前算一次（上限为面板条目页上限，成本可忽略）。
+  const filtering = state.filter.trim() !== ''
   const visible = state.entries.filter((entry) => entry.text.toLowerCase().includes(state.filter.toLowerCase()))
-  const countLine = state.fresh === true && state.error === null ? S.count(visible.length, state.entries.length) : null
+  const onTab = (entry) => (tab === 'experience' ? entry.track !== 'user' : entry.track === 'user')
+  const shown = visible.filter(onTab)
+  const tabTotal = state.entries.filter(onTab).length
+  const countLine = state.fresh === true && state.error === null ? S.count(shown.length, tabTotal) : null
   let body
   if (state.error !== null) {
     body = jsx('div', { className: 'mem-text' }, S.loadFailed(state.error))
   } else if (state.fresh === false) {
     body = jsx('div', { className: 'mem-text' }, S.loading)
   } else {
-    const groups = new Map()
-    for (const entry of visible) {
-      const key = `${entry.track}/${entry.scope}`
-      const list = groups.get(key)
-      if (list === undefined) groups.set(key, [entry])
-      else list.push(entry)
-    }
     const children = []
     if (state.truncated) children.push(jsx('div', { key: 'truncated', className: 'mem-text' }, S.truncated(state.entries.length, state.total)))
-    for (const [key, list] of groups) {
-      children.push(jsx('div', { key: `g:${key}` }, groupHeading(primitives, key, list.length, S)))
-      for (const entry of list) {
-        const agentTag = typeof entry.agentKey === 'string' && entry.agentKey.length > 0 ? ` · agent ${entry.agentKey}` : ''
-        children.push(jsx('div', { key: entry.id, className: 'mem-entry', title: entry.text },
-          jsx('span', { className: 't' }, entry.text),
-          jsx('span', { className: 'm' }, `${entry.source}${agentTag} · ${formatTime(entry.createdAt)}`)))
+    if (shown.length === 0) {
+      children.push(jsx('div', { key: 'empty', className: 'mem-text' },
+        filtering ? S.emptyFiltered : (tab === 'experience' ? S.emptyExperience : S.empty)))
+    } else if (tab === 'experience') {
+      // 经验世界：按话题分桶；话题标 = tags 里第一个非保留标（约定见 skills/yammory-experience）。
+      for (const [topic, list] of groupByTopic(shown)) {
+        const key = `topic:${topic}`
+        const open = filtering || expanded.has(key)
+        children.push(treeNode(primitives, key, topic === '' ? S.topicsUnfiled : topic, list.length, open, toggleNode, S))
+        if (open) children.push(jsx('div', { key: `${key}:body`, className: 'mem-tree-body' }, list.map(entryRow)))
       }
+    } else {
+      // 记忆世界：七面固定板块按序排列，空面也显示（把架构摆上前端），未分类垫底。
+      for (const [facet, list] of groupByFacet(shown, state.facets)) {
+        if (facet === '' && list.length === 0) continue
+        const key = `facet:${facet}`
+        const open = filtering || expanded.has(key)
+        children.push(treeNode(primitives, key, facet === '' ? S.treeUnfiled : facet, list.length, open, toggleNode, S))
+        if (open) {
+          children.push(list.length === 0
+            ? jsx('div', { key: `${key}:body`, className: 'mem-tree-empty' }, '—')
+            : jsx('div', { key: `${key}:body`, className: 'mem-tree-body' }, list.map(entryRow)))
+        }
+      }
+      // 知识水位：单独一块（不是条目），展开态与条目树分开记。
+      const levelsOpen = expanded.has('levels')
+      const scored = Array.isArray(state.profile) ? state.profile.length : 0
+      children.push(treeNode(primitives, 'levels', S.levels, scored, levelsOpen, toggleNode, S))
+      if (levelsOpen) children.push(jsx('div', { key: 'levels:body', className: 'mem-tree-body' }, renderLevels(S, state)))
     }
     if (state.budgets.length > 0) {
       children.push(jsx('div', { key: 'budgets' }, groupHeading(primitives, S.budgets, state.budgets.length, S),
@@ -570,9 +727,7 @@ function PanelContent(props) {
       children.push(jsx('div', { key: 'proposals' }, groupHeading(primitives, S.proposals, '', S), jsx(ProposalsSection, { primitives, S, state })))
       children.push(jsx('div', { key: 'stats' }, groupHeading(primitives, S.stats, '', S), jsx(StatsSection, { primitives, S, state })))
     }
-    body = visible.length === 0
-      ? jsx('div', { className: 'mem-text' }, state.filter.trim() === '' ? S.empty : S.emptyFiltered)
-      : jsx(react.Fragment, null, children)
+    body = jsx(react.Fragment, null, children)
   }
   return jsx(react.Fragment, null,
     jsx('div', { className: 'mem-head' },
@@ -587,6 +742,11 @@ function PanelContent(props) {
       defaultValue: state.filter,
       onInput: (event) => onFilter(event.target.value),
     }),
+    jsx('div', { className: 'mem-tabs' },
+      jsx(primitives.Pill, { className: 'mem-tab', active: tab !== 'experience', onClick: () => switchTab('memory') },
+        `${S.tabMemory} (${state.entries.filter((entry) => entry.track === 'user').length})`),
+      jsx(primitives.Pill, { className: 'mem-tab', active: tab === 'experience', onClick: () => switchTab('experience') },
+        `${S.tabExperience} (${state.entries.filter((entry) => entry.track !== 'user').length})`)),
     countLine === null ? null : jsx('div', { className: 'mem-count' }, countLine),
     jsx('div', { ref: rootRef, className: 'mem-body' }, body),
     jsx(BatchesSection, { primitives, S, state }),
@@ -668,7 +828,7 @@ function PanelButton(props) {
 function Drawer(props) {
   const { primitives, S, onLanguage, onClose } = props
   const [counter, setCounter] = react.useState(0)
-  const [state, setState] = react.useState({ fresh: false, busy: false, error: null, entries: [], total: 0, truncated: false, budgets: [], filter: '' })
+  const [state, setState] = react.useState({ fresh: false, busy: false, error: null, entries: [], total: 0, truncated: false, budgets: [], facets: [], categories: [], profile: [], filter: '' })
   const bodyRef = react.useRef(null)
   react.useEffect(() => {
     let alive = true
@@ -690,6 +850,9 @@ function Drawer(props) {
           total: Number.isInteger(data.total) ? data.total : (Array.isArray(data.entries) ? data.entries.length : 0),
           truncated: data.truncated === true,
           budgets: Array.isArray(data.budgets) ? data.budgets : [],
+          facets: Array.isArray(data.facets) ? data.facets : [],
+          categories: Array.isArray(data.categories) ? data.categories : [],
+          profile: Array.isArray(data.profile) ? data.profile : [],
           filter: prev.filter,
         }))
       } catch (error) {

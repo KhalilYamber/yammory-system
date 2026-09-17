@@ -23,6 +23,7 @@ import {
   EXPORT_SCHEMA,
   MAX_IMPORT_ENTRIES,
   PROFILE_FACETS,
+  KNOWLEDGE_CATEGORIES,
   KNOWLEDGE_DOMAINS,
   KNOWLEDGE_TIERS,
   OBSERVATION_FACE_VALUES,
@@ -3571,7 +3572,19 @@ export function registerWebRoutes(ctx, service, options) {
             ...filter,
             ...(limit === undefined ? {} : { limit }),
           })
-          return panelJson(200, { entries, total, truncated, budgets: service.budgets(), language: service.language, panel: { enabled: options.panel.enabled } })
+          // 面板要的两份「划分」随响应下发（单一出处仍是 lib/constants.mjs）：
+          // facets = 七面多边形（记忆树的主干），categories = 八大类 31 子领域（知识水位块）。
+          return panelJson(200, {
+            entries,
+            total,
+            truncated,
+            budgets: service.budgets(),
+            facets: PROFILE_FACETS,
+            categories: KNOWLEDGE_CATEGORIES,
+            profile: service.listProfiles(),
+            language: service.language,
+            panel: { enabled: options.panel.enabled },
+          })
         } catch (error) {
           return panelJson(500, { error: error instanceof Error ? error.message : String(error) })
         }
