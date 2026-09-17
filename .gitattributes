@@ -1,0 +1,7 @@
+# 行尾策略。
+#
+# SKILL.md 的 frontmatter 解析只认 `---\n`：scripts/verify-skill.mjs 这么判，DSH 的
+# skill 提供方也一样（CRLF 的 frontmatter 会让该 skill 不被发布）。本仓库原本没有
+# 这个文件、行尾交给各机 core.autocrlf，于是 Windows 新克隆会把三份 SKILL.md 一起
+# 弄成 CRLF 并打红 verify:skill。这里把 skill 文件钉成 LF，其余文件仍按各机策略。
+skills/**/SKILL.md text eol=lf
