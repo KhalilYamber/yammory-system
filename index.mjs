@@ -98,6 +98,7 @@ import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, Vector
  * @property {() => MemoryEntry[]} allEntries
  * @property {(row: object) => object} auditAppend
  * @property {(limit?: number) => object[]} auditList
+ * @property {(action: string) => object | null} lastAuditOf
  * @property {(batchId: string) => object[]} auditByBatch
  * @property {(batchId: string) => MemoryEntry[]} entriesByBatch
  * @property {(input?: {source?: string, limit?: number}) => string[]} batchIds
@@ -235,8 +236,6 @@ export const TIDY_NOTICE_INTERVAL = 3600000
 export const OBSERVE_DUE_DAYS = 7
 export const OBSERVE_DUE_SESSIONS = 3
 export const OBSERVE_NOTICE_INTERVAL = 3600000
-/** 查「上次观察」时回看的审计行数（与 TIDY_AUDIT_WINDOW 同口径）。 */
-export const OBSERVE_AUDIT_WINDOW = 200
 
 /** F6 整理机的开工线（规格 3.5.1 的三个可调默认，出处单一：lib/consolidate.mjs）。 */
 export const TIDY_LINES = TIDY_DEFAULTS
@@ -366,27 +365,25 @@ function readTidyBacklog(store, now = Date.now()) {
 }
 
 /**
- * 取上次观察时间（audit 行按 seq 倒序）：观察落 `action='observed'`，窗口内没有就返回 0
- * （= 从没观察过）。
- * @param {Array<{action?: string, ts?: number}>} auditRows - 审计行。
+ * 取上次观察时间：`action='observed'` 的**最近一行**（按动作精确取，与审计窗口无关——
+ * 审计流每天都在长，固定窗口一满就会把更早的记录挤出去，从而读成「从没观察过」）。
+ * @param {StoreHandle} store - Provider。
  * @returns {number} 上次观察时间戳；无记录为 0。
  */
-function lastObserveTs(auditRows) {
-  for (const row of auditRows) {
-    if (row.action === 'observed' && typeof row.ts === 'number') return row.ts
-  }
-  return 0
+function lastObserveTs(store) {
+  const row = /** @type {{ts?: number} | null} */ (store.lastAuditOf('observed'))
+  return row !== null && typeof row.ts === 'number' ? row.ts : 0
 }
 
 /**
- * 只读算一次观察到没到期（预热段末行提示与 turn-stopping 共用）：O(n) 读审计窗口，不写库、
- * 不落审计。天数同步可算；「本工作区可读会话数」要问异步的 sessionQuery，不在这里。
+ * 只读算一次观察到没到期（预热段末行提示与 turn-stopping 共用）：一次按动作的精确读，
+ * 不写库、不落审计。天数同步可算；「本工作区可读会话数」要问异步的 sessionQuery，不在这里。
  * @param {StoreHandle} store - Provider。
  * @param {number} [now] - 当前时间（测试注入）。
  * @returns {{lastAt: number, days: number | null, due: boolean}} 上次观察时间、距今天数（从没观察过为 null）与是否过线。
  */
 function readObserveDue(store, now = Date.now()) {
-  const lastAt = lastObserveTs(store.auditList(OBSERVE_AUDIT_WINDOW))
+  const lastAt = lastObserveTs(store)
   const days = lastAt === 0 ? null : Math.floor((now - lastAt) / 86400000)
   return { lastAt, days, due: lastAt === 0 || days >= OBSERVE_DUE_DAYS }
 }

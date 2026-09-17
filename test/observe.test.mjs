@@ -780,6 +780,22 @@ test('L2 预热段：距上次观察过线时末行提一句并随快照落审�
   assert.ok(after.length > 0, '其余预热块照常渲染')
 })
 
+test('L2 到期判定按动作精确读：审计流涨过任何固定窗口，也不会把「观察过」读成「从没观察过」', async (t) => {
+  const mounted = mount({ language: 'zh' })
+  t.after(() => teardown(mounted))
+  const { mock } = mounted
+  const service = mountedService(mounted)
+  await service.add({ track: 'user', scope: 'user-global', text: '常驻画像：偏好先给结论' }, { agent: makeAgent(makeSession({ id: 's-window-seed' })) })
+  service.store.auditAppend({ action: 'observed', track: null, scope: null, entryId: null, text: 'scan days=14', outcome: 'ok', source: OBSERVATION_SOURCE, sessionId: 's-old' })
+  // 灌进远多于任何固定窗口的审计行：旧的 observed 行会被窗口挤出去（按窗口读的写法正是这样读错的）
+  for (let index = 0; index < 260; index += 1) {
+    service.store.auditAppend({ action: 'snapshot', track: null, scope: null, entryId: null, text: `noise ${index}`, outcome: 'ok', source: 'dsh-memento', sessionId: 's-old' })
+  }
+  const text = warmupText(mock, makeSession({ id: 's-window' }))
+  assert.equal(text.includes('该做观察了'), false, '刚观察过（0 天）→ 不提示')
+  assert.equal(text.includes('还没有跑过一次行为观察'), false, '更不该谎称从没观察过：窗口读不通是读法的问题，不是事实')
+})
+
 test('L2 触发检测：turn-stopping 只读算本工作区可读会话数，够数才落 observe-due 审计', async (t) => {
   const mounted = mount({ language: 'zh' })
   t.after(() => teardown(mounted))
