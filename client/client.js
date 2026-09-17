@@ -285,11 +285,19 @@ const PANEL_LAYOUT_CSS = `
       是 28×28 圆图标钮、内容居中、flex: none；若这里摆一条占满整行的 42px 长条，行高会被它
       顶到 42px，而 W 有显式 height: 28px、在 cross 轴上按起点对齐，两个钮便一高一低。
       故这里只跟 W 对齐**竖向几何**（同高 28px、同顶、内容居中），宽度按自己内容取；
-      左 4px 间距取自侧栏自身分组习惯（.panelList 的 gap 也是 4px），不是随手数。 */
+      左 4px 间距取自侧栏自身分组习惯（.panelList 的 gap 也是 4px），不是随手数。
+   ③ 收起态另说：窄栏的内容盒就是 36px（rail 56px 减两侧 10px 内边距），装不下两个 36px 的钮，
+      而宿主的行容器（.footerActions）没有 flex-wrap——并排在窄栏里无解。唯一在自己这侧能做到的
+      是把那一行改成竖排，见下面那条 :has() 规则（只在窄栏档生效，宽栏一字不动）。 */
 .mem-side-entry { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; margin: 0 0 0 4px; padding: 0 10px; border: none; border-radius: 14px; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer; }
 .mem-side-entry:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .mem-side-entry:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
-.mem-side-entry--rail { width: 36px; height: 36px; gap: 0; padding: 0; border-radius: 50%; color: var(--dsw-alias-label-primary); }
+/* 窄栏档不再留那 4px 左边距：36+4 会超出 36px 内容盒，整枚钮被挤到右边界上。 */
+.mem-side-entry--rail { width: 36px; height: 36px; margin: 0; gap: 0; padding: 0; border-radius: 50%; color: var(--dsw-alias-label-primary); }
+/* 收起态：把承载本钮的那条行容器改成竖排，两个插件的钮上下排。slot 的包装是 display:contents 的
+   [data-slot] 锚点（宿主契约写明它就是动态样式的寻址缝），故按锚点选它所属的行容器，不去猜宿主的
+   哈希类名；:has(> .mem-side-entry--rail) 保证只在窄栏档生效。 */
+div:has(> [data-slot="sidebar.footer.action"] > .mem-side-entry--rail) { flex-direction: column; align-items: center; gap: 4px; }
 .mem-side-entry-label { overflow: hidden; text-overflow: ellipsis; }
 .mem-side-entry svg { flex: none; }
 #mem-drawer { position: fixed; right: 0; top: 0; bottom: 0; width: 460px; max-width: 92vw; display: flex; flex-direction: column;
