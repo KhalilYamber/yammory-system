@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-18
+
 ### Added
 
 - **The panel drawer now shows two worlds, and the memory one is a tree instead of a list.** The drawer used to render every entry as one flat list grouped by `track/scope`, which said nothing about what the plugin actually stores. It now opens on two tabs — **Memory** (the `user` track) and **Experience** (the `agent` track) — because the two carry different knowledge with different consumption patterns: the profile has to be present every turn, a lesson only when the matching work comes up. The Memory tab renders the seven-facet polygon as a collapsible tree over the fixed facet list (empty facets included, so the architecture is visible rather than inferred), files entries without a facet under **Unfiled**, and keeps the knowledge-level table as its own collapsed block over the 8 categories × 31 subdomains. Clicking a node reveals its entries; nothing expands by default, which is what makes the first screen a map instead of a wall. The Experience tab buckets by topic tag under the same rule. Both tabs share one filter, one expanded-state memory (module-level, kept while the drawer is closed and reopened) and the existing budget / audit / stats / batch blocks. No new route: the entries response now carries `facets`, `categories` and `profile` from `lib/constants.mjs` and `service.listProfiles()`, so the client keeps a single source of truth — and stays zero-build (still hand-written `react.createElement`, still no bundler, no new dependency). Panel read-only discipline unchanged.
