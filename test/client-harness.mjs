@@ -184,6 +184,11 @@ export function makeDom() {
     innerHeight: 800,
     addEventListener() {},
     removeEventListener() {},
+    // 面板的「运行中轮询」用 setInterval：假窗口给一对不落地的计时器（记账但不真跑），
+    // 于是轮询那条路径能被渲染到，又不会让测试陷进定时器循环（清理走 clearInterval 的桩）。
+    setInterval() { return ++win.__timerSeq },
+    clearInterval() {},
+    __timerSeq: 0,
     __ModuleLoader__: { load(/** @type {object} */ definition) { win.plugin = definition } },
     plugin: /** @type {any} */ (null),
   }

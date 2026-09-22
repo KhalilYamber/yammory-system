@@ -9,9 +9,9 @@
 // 右下角悬浮按钮（降级路径），两条路径共用同一套显隐与语言开关。
 // 面板只读：条目浏览/搜索/预算条/审计尾/可观测三数，全部走本插件自注册的
 // /api/memento/* JSON 路由（只走公开 API）。写与审批在 DSH 内置审批 UI 完成，
-// 面板不产生任何模型可见内容、不做任何审批决策。唯一的非只读动作是「整理全库」
-// 按钮（收边 §2）：它只登记一条待整理标记，不调模型、不改任何条目——整理本身
-// 仍由模型在会话内显式跑（审计红线）。
+// 面板不产生任何模型可见内容、不做任何审批决策。唯一的用户动作是「整理全库」
+// 按钮（F9）：它请服务端登记待整理标记并起一轮无头会话，本组件只显示那一轮的
+// 状态行与批次块——不调模型、不碰条目，写路径全在服务端。
 // 面板文案随 Config.language（en/zh）切换，语言来自 entries 路由响应。
 // 设置页经 ctx.settingsScope 读/写用户层（settings.yaml），暂存—保存语义
 // 与宿主内置卡片一致；factory 的 require 由宿主模块系统提供（react 为平台
@@ -92,10 +92,11 @@ const STRINGS = {
     statsEmpty: 'The stats route returned nothing.',
     statsFailed: (message) => `Numbers unavailable: ${message}`,
     tidyRequest: 'Tidy the whole library',
-    tidyHint: 'Queues one marker: the next session is asked to run the tidy — nothing is merged from here.',
-    tidyQueued: 'Queued. The next session will ask the model to tidy the whole library.',
-    tidyAlreadyQueued: 'Already queued — no duplicate marker.',
-    tidyBusy: 'Queueing…',
+    tidyRetry: 'Retry',
+    tidyDot: 'Tidy round',
+    tidyHint: 'One click hands it to the background: a headless session does the tidy — no conversation, no context cost. Every batch can be rolled back.',
+    tidyExecutorOff: 'The background executor is off (tidy.enabled: false): this queues a marker and the next session is asked to run the tidy instead.',
+    tidyBusy: 'Starting…',
     tidyFailed: (message) => `Not queued: ${message}`,
     tabMemory: 'Memory',
     tabExperience: 'Experience',
@@ -130,10 +131,11 @@ const STRINGS = {
     statsEmpty: 'stats 路由没有返回内容。',
     statsFailed: (message) => `三数不可用：${message}`,
     tidyRequest: '整理全库',
-    tidyHint: '只登记一条待整理标记：下次会话会请模型跑整理——这里不会合并任何条目。',
-    tidyQueued: '已登记。下次会话会请模型整理全库。',
-    tidyAlreadyQueued: '已在队列里了，不重复登记。',
-    tidyBusy: '登记中…',
+    tidyRetry: '重试',
+    tidyDot: '整理轮',
+    tidyHint: '点一下就交给后台：由一轮无头会话去整理——不起对话、不占上下文。每一批都能整批撤回。',
+    tidyExecutorOff: '后台执行体已关（tidy.enabled: false）：这一下只登记标记，改由下次会话开口时整理。',
+    tidyBusy: '启动中…',
     tidyFailed: (message) => `未登记：${message}`,
     tabMemory: '记忆',
     tabExperience: '经验',
@@ -616,21 +618,44 @@ function ProposalsSection(props) {
   }))
 }
 
-/** 「整理全库」按钮 ＋ 状态说明（收边 §2 的同一套行为，改成 React 状态驱动）。 */
+/**
+ * 「整理全库」按钮 ＋ 后台轮的运行状态（F9）。
+ *
+ * 点一下：登记标记 ＋ 服务端起一轮无头会话（`dsh --profile headless`）去整理。本组件只做三件事——
+ * 发那一下、把服务端算好的状态行照抄出来、在运行中轮询到出结果为止。前端不留对话、不占上下文。
+ *
+ * 轮询的节制：抽在后端着（每 4 秒一次，最多 3 分钟），关掉抽屉即停；超时后不再自转，
+ * 面板顶部那颗状态点与点一下「刷新」都还是看得到结果。状态行不会被本地文案覆盖——
+ * 本地那几句只在还没取到数据时兜底。
+ */
 function TidyRow(props) {
-  const { primitives, S, onLanguage } = props
+  const { primitives, S, onLanguage, refreshKey } = props
   const [busy, setBusy] = react.useState(false)
-  const [pending, setPending] = react.useState(null)
+  const [snapshot, setSnapshot] = react.useState(null)
   const [note, setNote] = react.useState(null)
+  const [polling, setPolling] = react.useState(false)
   const [alive, setAlive] = react.useState(true)
   react.useEffect(() => () => { setAlive(false) }, [])
   react.useEffect(() => {
-    void fetch('/api/memento/tidy-request')
+    let cancelled = false
+    const controller = new AbortController()
+    void fetch('/api/memento/tidy-request', { signal: controller.signal })
       .then((res) => res.json())
-      .then((data) => { if (data.error === undefined) setPending(data.pending ?? null) })
+      .then((data) => {
+        if (cancelled || data === null || typeof data !== 'object' || data.error !== undefined) return
+        setSnapshot(data)
+        onLanguage(data.language)
+      })
       .catch(() => {})
-  }, [])
-  const request = async () => {
+    return () => { cancelled = true; controller.abort() }
+  }, [refreshKey])
+  // 状态行未拿到时的兜底文案：排队中两档（执行体开 / 关）。
+  const executorOff = snapshot !== null && snapshot.executorEnabled === false
+  const lines = Array.isArray(snapshot?.lines) ? snapshot.lines.map(String) : []
+  const state = typeof snapshot?.state === 'string' ? snapshot.state : (snapshot === null ? 'idle' : 'pending')
+  const running = state === 'running'
+  const defaultNote = executorOff ? S.tidyExecutorOff : S.tidyHint
+  const request = async (/** @type {boolean} */ retry) => {
     if (busy) return
     setBusy(true)
     setNote(S.tidyBusy)
@@ -644,8 +669,10 @@ function TidyRow(props) {
       const data = await response.json()
       if (!response.ok || data.error !== undefined) throw new Error(data.error === undefined ? `tidy-request ${response.status}` : data.error)
       onLanguage(data.language)
-      setPending(data.pending ?? null)
-      setNote(data.created === true ? S.tidyQueued : S.tidyAlreadyQueued)
+      setSnapshot(data)
+      setNote(null)
+      if (data.state === 'running' || data.state === 'pending') setPolling(true)
+      else if (data.state === 'failed') setNote(retry ? null : S.tidyFailed(String(data.failureDetail ?? data.failure ?? '')))
     } catch (error) {
       failed = S.tidyFailed(String(error && error.message ? error.message : error))
     } finally {
@@ -655,10 +682,43 @@ function TidyRow(props) {
       }
     }
   }
+  // 运行中轮询：服务端算状态，面板照抄；到顶或组件卸载即停。
+  react.useEffect(() => {
+    if (!polling || typeof window === 'undefined') return
+    let ticks = 0
+    const timer = window.setInterval(() => {
+      ticks += 1
+      if (ticks > 45) {
+        window.clearInterval(timer)
+        setPolling(false)
+        return
+      }
+      void fetch('/api/memento/tidy-request')
+        .then((res) => res.json())
+        .then((data) => {
+          if (data === null || typeof data !== 'object' || data.error !== undefined) return
+          setSnapshot(data)
+          if (data.state !== 'running' && data.state !== 'pending') {
+            window.clearInterval(timer)
+            setPolling(false)
+          }
+        })
+        .catch(() => {})
+    }, 4000)
+    return () => { window.clearInterval(timer) }
+  }, [polling])
+  const button = jsx(primitives.Button, {
+    className: 'mem-tidy-btn',
+    variant: 'outline',
+    size: 'sm',
+    disabled: busy || running,
+    onClick: () => { void request(false) },
+  }, running ? S.tidyBusy : (state === 'failed' ? S.tidyRetry : S.tidyRequest))
   return jsx('div', { className: 'mem-tidy' },
     jsx('div', { className: 'mem-tidy-row' },
-      jsx(primitives.Button, { className: 'mem-tidy-btn', variant: 'outline', size: 'sm', disabled: busy, onClick: () => { void request() } }, S.tidyRequest)),
-    jsx('p', { className: 'mem-tidy-note' }, note ?? (pending === null ? S.tidyHint : S.tidyAlreadyQueued)))
+      button,
+      jsx(primitives.StateDot, { state: running || busy ? 'ongoing' : (state === 'failed' ? 'error' : 'done') })),
+    jsx('p', { className: 'mem-tidy-note' }, note ?? (lines.length > 0 ? lines.join(' ') : defaultNote)))
 }
 
 /** 抽屉正文：两个世界（记忆＝七面结构树／经验＝话题树）＋ 预算条 ＋ 审计尾 ＋ 提案区 ＋ 三数行。 */
@@ -758,7 +818,7 @@ function PanelContent(props) {
     countLine === null ? null : jsx('div', { className: 'mem-count' }, countLine),
     jsx('div', { ref: rootRef, className: 'mem-body' }, body),
     jsx(BatchesSection, { primitives, S, state }),
-    jsx(TidyRow, { primitives, S, onLanguage }))
+    jsx(TidyRow, { primitives, S, onLanguage, refreshKey: state.fresh === true ? state.entries.length : -1 }))
 }
 
 // ── 入口：侧栏底部槽位（主路径）＋ 右下角悬浮按钮（降级路径）────────────────
@@ -890,7 +950,7 @@ function Drawer(props) {
 
 /**
  * 浮层抽屉挂载：入口按钮 ＋ 抽屉共用一个 react-dom/client 根（createRoot）。
- * 面板只读（除「整理全库」只登记标记），所有动作仍走 /api/memento/* 路由。
+ * 面板只读（除「整理全库」请服务端起一轮后台轮），所有动作仍走 /api/memento/* 路由。
  */
 function installPanel(state) {
   if (document.getElementById(PANEL_ID)) return

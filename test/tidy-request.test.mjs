@@ -13,6 +13,8 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -108,7 +110,26 @@ test('收边迁移：v6 库升到 v7 建出 tidy_requests 表，旧数据原样�
 
 // ── 集成挂载：预热段 / 协议面 / 路由 ─────────────────────────────────────────
 
-/** 集成挂载：临时库 + 全放行审批 + 路由捕获（与 session-switch 测试同一套形状）。 */
+/**
+ * 假子进程：F9 起的那一轮无头会话在测试里绝不能是真进程。
+ * 真 spawn 在测试机上会去拉 `dsh --profile headless`（要跑一轮真模型），所以 mount 一律注入这个桩，
+ * 并把调用记在 `spawnCalls` 里——「路由确实请了执行体」这件事仍被钉住。
+ */
+function fakeChildProcess() {
+  const emitter = new EventEmitter()
+  // stdout/stderr 必须是可 pipe 的真流：实现用管道接日志（Windows 上 detached 子进程会丢
+  // 继承的 fd），假进程若少了这两个面，push 到 pipe 时会抛。
+  const child = {
+    pid: 9090,
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    on: (event, fn) => { emitter.on(event, fn); return child },
+    kill: () => true,
+  }
+  return child
+}
+
+/** 集成挂载：临时库 + 全放行审批 + 路由捕获 + 假执行体（与 session-switch 测试同一套形状）。 */
 function mount(opts = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'yammory_system-tidy-request-'))
   const mock = createMockCtx()
@@ -123,6 +144,8 @@ function mount(opts = {}) {
   /** @type {object[]} */
   const routes = []
   mock.ctx.provide('connection', { fetch: { register(route) { routes.push(route); return async () => {} } } })
+  /** @type {Array<[string, string[]]>} */
+  const spawnCalls = []
   apply(mock.ctx, {
     enabled: true,
     dbPath: path.join(dir, 'memory.db'),
@@ -137,8 +160,10 @@ function mount(opts = {}) {
     panelEntriesLimit: 200,
     panelAuditLimit: 20,
     auditRetentionDays: 0,
+    tidy: { logsDir: path.join(dir, 'tidy-runs'), ...(opts.tidy ?? { enabled: true, exec: 'dsh-stub' }) },
+    tidySpawnFn: (/** @type {string} */ command, /** @type {string[]} */ args) => { spawnCalls.push([command, args]); return fakeChildProcess() },
   })
-  return { dir, mock, approvals, routes, service: mock.services.get('memory') }
+  return { dir, mock, approvals, routes, spawnCalls, service: mock.services.get('memory') }
 }
 
 function teardown(mounted) {
@@ -294,7 +319,7 @@ test('收边预热段：中文文案；标记存在时空块也照常带提示�
 test('收边路由：GET 读标记、POST 登记、多余字段与坏 body 一律 400', async (t) => {
   const mounted = mount()
   t.after(() => teardown(mounted))
-  const { service, routes } = mounted
+  const { service, routes, spawnCalls } = mounted
   const route = routes.find((/** @type {{path: string}} */ candidate) => candidate.path === '/api/memento/tidy-request')
   assert.ok(route, '路由已注册（且经 connection.fetch 注册表——mock 只提供这一个注册面）')
   assert.deepEqual([...route.methods].sort(), ['GET', 'POST'])
@@ -307,7 +332,16 @@ test('收边路由：GET 读标记、POST 登记、多余字段与坏 body 一�
 
   const empty = await get()
   assert.equal(empty.status, 200)
-  assert.deepEqual(await empty.json(), { pending: null, language: 'en' }, '没有标记时 pending 为 null，并带 language')
+  const emptyBody = await empty.json()
+  assert.equal(emptyBody.pending, null, '没有标记时 pending 为 null')
+  assert.equal(emptyBody.language, 'en', '响应带 language（面板文案随它切）')
+  // F9：GET 现在把「这一轮到哪了」也算好（标记 ＋ tidy-run 审计行 ＋ 批次账本三样），
+  // 面板那一行照抄 lines，不在前端拼状态。没有这一轮的痕迹时是 idle。
+  assert.equal(emptyBody.state, 'idle', '没有标记、也没有整理轮审计行 → idle')
+  assert.deepEqual(emptyBody.batchId === null && emptyBody.rolledBack === false, true, '完成态字段在 idle 下如实为空')
+  assert.equal(Array.isArray(emptyBody.lines) && emptyBody.lines.length > 0, true, '带渲染好的状态行')
+  assert.equal(emptyBody.executorEnabled, true, '执行体默认开着')
+  assert.equal(emptyBody.taskPreview.includes('auto-tidy'), true, '任务预览里能看到要用的动作')
 
   const created = await post('{}')
   assert.equal(created.status, 200)
@@ -319,8 +353,13 @@ test('收边路由：GET 读标记、POST 登记、多余字段与坏 body 一�
   const again = await (await post('{}')).json()
   assert.equal(again.created, false, '再点一次不堆行')
   assert.equal(service.store.tidyRequestList().length, 1)
+  assert.equal(spawnCalls.length, 1, 'F9：首次登记起一轮后台会话（第二次点击不会叠进程）')
+  assert.equal(spawnCalls[0][0], 'dsh-stub', '用的是配置里的执行体（不是按平台猜的那个）')
+  assert.deepEqual(spawnCalls[0][1].slice(0, 2), ['--profile', 'headless'], '命令行形态：启动器参数在前、profile 名在后')
+  assert.equal(spawnCalls[0][1][2].startsWith('【无人值守轮】'), true, '交给无头会话的任务文本带无人值守标记')
 
-  assert.equal((await post('{"unexpected":1}')).status, 400, '按钮不带参数：多余字段被拒')
+  assert.equal((await post('{"unexpected":1}')).status, 400, '按钮只认可选 cwd：多余字段被拒')
+  assert.equal((await post('{"cwd":123}')).status, 400, 'cwd 必须是字符串')
   assert.equal((await post('not json')).status, 400, '坏 body 响亮报错')
   assert.equal((await post('[]')).status, 400, '数组不是合法 body')
 
@@ -378,7 +417,7 @@ function findByClass(/** @type {any} */ node, /** @type {string} */ className) {
   return null
 }
 
-test('收边面板：三数行照抄 stats 响应的 lines；「整理全库」按钮 POST 登记并就地回显', async (t) => {
+test('收边面板：三数行照抄 stats 响应的 lines；「整理全库」按钮起一轮后台轮并回显即时报文', async (t) => {
   /** @type {Array<{url: string, method: string}>} */
   const calls = []
   const responses = {
@@ -396,17 +435,34 @@ test('收边面板：三数行照抄 stats 响应的 lines；「整理全库」�
       lines: ['可观测三数（只读、零模型、不落审计）：', '① 重复率：0.00%', '② 召回命中率：无样本', '③ 注入量：还没有 snapshot 审计行。', '成功率：需反馈通道，待定义——本行刻意不报别的数。'],
       language: 'zh',
     },
-    'GET /api/memento/tidy-request': { pending: null, language: 'zh' },
+    // F9：面板不再自己拼状态——GET 拿服务端算好的 lines 与 state，没标记时是 idle。
+    'GET /api/memento/tidy-request': {
+      pending: null,
+      state: 'idle',
+      batchId: null,
+      batchCount: null,
+      rolledBack: false,
+      failure: null,
+      lines: ['点一下就交给后台：由一轮无头会话去整理——不起对话、不占上下文。每一批都能整批撤回。'],
+      executorEnabled: true,
+      language: 'zh',
+    },
   }
   let registrations = 0
   const app = await mountClient(async (/** @type {string} */ key) => {
     const [method, url] = key.split(' ')
     calls.push({ url, method })
-    // 登记端点的幂等语义照实现来：第二次 POST 返回 created=false，面板应回显「已在队列里」。
+    // 登记端点：第一次 POST 起了一轮（state=running，线程里有 started 行），第二次不再起。
     if (key === 'POST /api/memento/tidy-request') {
       registrations += 1
       const pending = { id: 'req-1', createdAt: Date.now(), status: 'pending' }
-      return { ok: true, status: 200, json: async () => ({ pending, created: registrations === 1, language: 'zh' }) }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => (registrations === 1
+          ? { pending, created: true, state: 'running', spawned: true, executorEnabled: true, lines: ['整理中…（后台会话在跑，本行自己会更新）'], language: 'zh' }
+          : { pending, created: false, state: 'pending', spawned: false, executorEnabled: true, lines: ['已排队，正在等后台会话起来…'], language: 'zh' }),
+      }
     }
     const payload = responses[key]
     assert.ok(payload, `未预置响应：${key}`)
@@ -461,14 +517,16 @@ test('收边面板：三数行照抄 stats 响应的 lines；「整理全库」�
   assert.equal(drawer.textContent.includes('12 / 2000'), true, '预算条照抄预算数')
   assert.equal(findByClass(drawer, 'mem-count').textContent, '共 1 条', '过滤计数行按可见/总数出数')
 
-  // ⑤「整理全库」按钮：点一下只登记一条标记，就地回显。
+  // ⑤「整理全库」按钮：点一下登记标记 ＋ 起一轮后台轮，响应里的状态行就地照抄（前端不自己拼状态）。
+  // 完成态（做完之后那行「已完成 · 批次 …」）由 test/spawn.test.mjs 的路由用例钉住——那边能
+  // 直接读服务端响应；这里只钉面板这一侧：显示服务端给的 idle 行、点一下变「整理中」、运行中禁用。
   const tidyBtn = app.dom.document.getElementById('ui-button')
   assert.ok(tidyBtn, '「整理全库」按钮已渲染')
   assert.equal(tidyBtn.textContent, '整理全库')
   assert.equal(
     findByClass(drawer, 'mem-tidy-note').textContent,
-    '只登记一条待整理标记：下次会话会请模型跑整理——这里不会合并任何条目。',
-    '未登记时说明排队语义',
+    '点一下就交给后台：由一轮无头会话去整理——不起对话、不占上下文。每一批都能整批撤回。',
+    '未点击时照抄服务端状态行（空闲态的动作说明）',
   )
 
   tidyBtn.click()
@@ -476,12 +534,8 @@ test('收边面板：三数行照抄 stats 响应的 lines；「整理全库」�
   const posts = calls.filter((call) => call.method === 'POST')
   assert.equal(posts.length, 1, '点一下只发一次登记')
   assert.equal(posts[0].url, '/api/memento/tidy-request')
-  assert.equal(findByClass(drawer, 'mem-tidy-note').textContent, '已登记。下次会话会请模型整理全库。', '就地回显登记结果')
-  assert.equal(tidyBtn.disabled, false, '登记完成后按钮恢复可用')
-
-  tidyBtn.click()
-  await app.render()
-  assert.equal(calls.filter((call) => call.method === 'POST').length, 2, '再点一次会再发一次（幂等由服务端保证）')
-  assert.equal(findByClass(drawer, 'mem-tidy-note').textContent, '已在队列里了，不重复登记。', '第二次登记如实回显「已排队」')
+  assert.equal(findByClass(drawer, 'mem-tidy-note').textContent, '整理中…（后台会话在跑，本行自己会更新）', '就地照抄「整理中」')
+  assert.equal(tidyBtn.disabled, true, '运行中按钮禁用（重复点击不叠进程）')
+  assert.equal(tidyBtn.textContent, '启动中…', '运行中按钮改文案')
 })
 

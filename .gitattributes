@@ -1,3 +1,8 @@
+# 全仓行尾钉成 LF（下面两类显式例外除外）。这一条防的是「一次 Windows 侧保存，整个仓库的
+# diff 变成两万行噪音」：编辑器把 LF 存成 CRLF 是常态，而各机 core.autocrlf 未必开着，
+# 于是文字没改、diff 却覆盖整文件。frontmatter 与批处理两类除外，见下方各自的理由。
+* text=auto eol=lf
+
 # 行尾策略。
 #
 # SKILL.md 的 frontmatter 解析只认 `---\n`：scripts/verify-skill.mjs 这么判，DSH 的
@@ -5,3 +10,9 @@
 # 这个文件、行尾交给各机 core.autocrlf，于是 Windows 新克隆会把三份 SKILL.md 一起
 # 弄成 CRLF 并打红 verify:skill。这里把 skill 文件钉成 LF，其余文件仍按各机策略。
 skills/**/SKILL.md text eol=lf
+
+# 批处理文件钉成 CRLF：cmd.exe 不认 LF 换行的 .cmd（实测报「'.cmd' 不是内部或外部命令」，
+# 批处理头几行被当成一行乱码），而 checkout 走的是「各机 core.autocrlf」——不钉住的话，
+# 一个用 LF 检出仓库的机器上，F9 端到端用例的假启动器会神秘失败。
+*.cmd text eol=crlf
+*.bat text eol=crlf

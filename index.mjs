@@ -15,6 +15,8 @@ import Schema from '@deepseek-ai/schemastery'
 import { KNOWN_SESSION_EVENT_TYPES } from '@deepseek-ai/dsh-session'
 import * as dshSettings from '@deepseek-ai/dsh-settings'
 import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { basename, join } from 'node:path'
 import {
   TOOL_NAME,
   DEFAULT_SOURCE,
@@ -32,6 +34,10 @@ import {
   MAX_SWITCH_SESSION_ID,
   MAX_QUERY_LIMIT,
   GAP_TAG,
+  TIDY_RUN_SOURCE,
+  TIDY_RUN_OUTCOMES,
+  TIDY_RUN_FAILURES,
+  SCHEDULED_ROUND_MARKER,
 } from './lib/constants.mjs'
 import { COMMAND_TEXT } from './lib/strings.mjs'
 // CommandTextBundle 与 COMMAND_TEXT 同住 lib/strings.mjs（JSDoc typedef 随模块可见）。
@@ -60,7 +66,8 @@ import { renderSnapshot, renderWarmup, visibleEntries, visibleProposals } from '
 import { openMemoryStore, resolveDbPath } from './lib/store.mjs'
 import { workspaceKeyOf, agentKeyOf } from './lib/workspace.mjs'
 import { extractEventText } from './lib/extract.mjs'
-import { backlogOf, buildTidyPlan, TIDY_DEFAULTS } from './lib/consolidate.mjs'
+import { backlogOf, buildTidyPlan, buildTidyRunState, TIDY_DEFAULTS, TIDY_RUN_AUDIT_WINDOW, TIDY_RUN_DEFAULT_TIMEOUT_MS } from './lib/consolidate.mjs'
+import { launchTidyRound, tidyRoundActive } from './lib/spawn.mjs'
 import { AUDIT_WINDOW, buildStats } from './lib/stats.mjs'
 import {
   buildObservationSlice,
@@ -148,6 +155,9 @@ import { RetrievalProviderRegistry, KeywordRetriever, SubstringRetriever, Vector
  * @property {number} [panelBatchLimit]
  * @property {number} [auditRetentionDays]
  * @property {{enabled?: boolean, maxChars?: number, maxPending?: number}} [proposals]
+ * @property {{enabled?: boolean, profile?: string, exec?: string, timeoutMs?: number, task?: string}} [tidy]
+ * @property {typeof import('node:child_process').spawn} [tidySpawnFn] - 进程工厂（测试注入；不进用户设置面）
+ * @property {Record<string, string>} [tidyEnv] - 子进程额外环境变量（测试注入；不进用户设置面）
  * @property {{enabled?: boolean}} [panel]
  * @typedef {{action: string, track: string, scope: string, text: string, count?: number, source?: string}} WritePayload
  * @typedef {{agent?: {session?: MemorySessionLike | null} | null, callId?: unknown, signal?: AbortSignal}} AskWrite
@@ -240,6 +250,66 @@ export const OBSERVE_NOTICE_INTERVAL = 3600000
 
 /** F6 整理机的开工线（规格 3.5.1 的三个可调默认，出处单一：lib/consolidate.mjs）。 */
 export const TIDY_LINES = TIDY_DEFAULTS
+
+/**
+ * 后台整理轮的默认值（F9「点一下即跑」）。
+ *
+ * `exec` 默认空串 = 自动探测（配置点名 → 宿主自身的 CLI 入口 → PATH 里的 `dsh`）；要覆盖就在
+ * 设置页填绝对路径，或指向一个你自己包好的启动脚本——探测只该是起点，不该是唯一出路。`task` 空串 = 用内置任务文本，
+ * 填了就用填的那份（这句是**给模型的任务说明**，不是给用户的文案，故不走 Config 的文案面）。
+ */
+export const DEFAULT_TIDY_RUN = Object.freeze({
+  enabled: true,
+  profile: 'headless',
+  exec: '',
+  timeoutMs: TIDY_RUN_DEFAULT_TIMEOUT_MS,
+  args: Object.freeze(['--profile']),
+  task: '',
+})
+
+/**
+ * 后台整理轮的日志目录（相对 $DSH_HOME）：与记忆库同处一个主目录，备份与清场时不会漏。
+ */
+export const TIDY_RUN_LOG_DIR = 'dsh-memento/tidy-runs'
+
+/** 面板返回的任务文本预览长度（只给人扫一眼「交了什么活」，不搬全文；够看到动作与硬杠纪律）。 */
+export const TIDY_TASK_PREVIEW_CHARS = 800
+
+/**
+ * 无人值守整理轮的任务文本（en 源文 / zh 译文）。
+ *
+ * 开头必带 `SCHEDULED_ROUND_MARKER`：无头轮的位置参数会被内核记成一条 `user/message`
+ * （`source.kind === 'user'`），不带标记的话，这段任务说明下一轮观察就会当成「用户本人的发言」
+ * 拿去当证据——自产文本不许回流当证据，排除是响亮的（闸二按前缀整条排除并计入 injected 账单）。
+ */
+export const TIDY_ROUND_TASK = {
+  en: [
+    `${SCHEDULED_ROUND_MARKER} Background tidy round (unattended, started from the memory panel). This session is doing exactly one thing:`,
+    '',
+    '1) Read the plan first: `memory { action: \'tidy\' }`. The plan is read-only and free: it lists the backlog plus per-bucket candidates and in-bucket similarity hints.',
+    '2) Work bucket by bucket (never cross buckets: track x scope x agentKey, plus workspaceKey on the workspace layer). Inside a bucket, merge the entries that say THE SAME THING with `memory { action: \'auto-tidy\', ids: [...], text: \'<the merged text>\' }`. The core re-runs the hard gates on the real stored entries and refuses anything that does not grade `auto` — a rewritten paraphrase is a refusal, so do not fight it: leave it where it is.',
+    '3) Never merge entries that merely look similar, never invent text: `text` must stay literally identical to every member once whitespace and punctuation are stripped. When in doubt, leave them alone.',
+    '4) Entries already carrying the `merged` tag are skipped by the plan; do not touch them again, and never edit any other entry.',
+    '5) This round is allowed to write without a human (granular policy `source:tidy-auto`): the approval gate is not bypassed, it is resolved by that key. Every landed batch carries a batch id, so a whole batch can be rolled back afterwards.',
+    '6) Scope: this round sees one workspace only — the one it was started from (plus the user-global layer). Entries under other working directories are out of sight; do not try to reach them.',
+    '7) Do not write files, do not run any other command, do not modify anything outside the memory store.',
+    '',
+    'Finish with exactly one line: `DONE merged=<number of batches landed> superseded=<number of entries demoted>` — or `NOTHING` when there was nothing to merge. NOTHING is a legitimate outcome; padding is not.',
+  ].join('\n'),
+  zh: [
+    `${SCHEDULED_ROUND_MARKER}后台整理轮（无人值守，由记忆面板点出）。本会话只做这一件事：`,
+    '',
+    '1) 先读计划：`memory { action: \'tidy\' }`。计划只读、免费：报出积压、分桶候选与桶内相似线索。',
+    '2) 逐桶处理（桶内不跨：track × scope × agentKey，workspace 层再加 workspaceKey）。桶内把**讲同一件事**的条目用 `memory { action: \'auto-tidy\', ids: [...], text: \'<合并后的文本>\' }` 合并。内核会拿库里真实条目重跑硬杠，不是 auto 档一律拒绝——改写过的同义句会被拒，别跟它较劲，留在原地即可。',
+    '3) 不要只因「看着像」就合并，也不要自己造文本：`text` 去掉空白与标点后必须与每条成员逐字一致。拿不准就留着。',
+    '4) 已带 `merged` 标的条目计划会跳过，不要再动它们；也不要改任何别的条目。',
+    '5) 本轮无需人在场即可写入（粒度策略 `source:tidy-auto`）：审批门没有被绕过，是由那个键裁决的。每一批都有批次号，事后可整批撤回。',
+    '6) 范围：本轮只看得见它启程时所在的那一个工作区（外加 user-global 层）。别的 cwd 下的条目不在视野里，别去够。',
+    '7) 不要写文件，不要跑别的命令，不要改记忆库以外的任何东西。',
+    '',
+    '最后只回一行：`DONE merged=<落下的批次组数> superseded=<降级条数>`；没有可合的条目就回 `NOTHING`。NOTHING 是合法输出，凑数不是。',
+  ].join('\n'),
+}
 
 /**
  * F6/F7 的命令面、提示行与工具渲染文案（en/zh）。
@@ -390,6 +460,42 @@ function readObserveDue(store, now = Date.now()) {
 }
 
 /**
+ * 算一轮后台整理的运行态（F9）：标记、整理轮审计行与批次账目三样喂进纯函数
+ * `buildTidyRunState`。只读、零模型、不落审计——面板状态行的每个字都有库里的凭据。
+ *
+ * 组数与时间都取自批次账本本身（`batchReport`）：产出条目一条即一组，撤回过的那批按
+ * 「已撤回」如实报出。不解析摘要行正文——账本已经回答了这件事，去正则一份英文摘要
+ * 是把一句话的措辞当成数据结构用。
+ * @param {MemoryService} service - ctx.memory。
+ * @param {{tidy: {timeoutMs: number}, language: 'en'|'zh'}} live - 运行期可变值容器。
+ * @param {number} [now] - 当前时间（测试注入）。
+ * @returns {ReturnType<typeof buildTidyRunState> & {rolledBack: boolean}} 状态与状态行。
+ */
+function readTidyRunState(service, live, now = Date.now()) {
+  const store = service.store
+  /** @type {Array<{batchId: string, at: number, count: number | null}>} */
+  const batches = []
+  /** 批次号 → 是否已撤回（只报「状态行这条」那一批，别的批撤回与否与它无关）。 */
+  const rolledBackById = new Map()
+  for (const batchId of store.batchIds({ source: AUTO_TIDY_SOURCE, limit: 5 })) {
+    const report = service.batchReport(batchId)
+    if (report === null) continue
+    const produced = report.entries.filter((entry) => report.producedIds.includes(entry.id)).length
+    rolledBackById.set(batchId, report.rolledBack)
+    batches.push({ batchId, at: report.endedAt, count: produced })
+  }
+  const state = buildTidyRunState({
+    pending: store.tidyRequestPending(),
+    auditRows: /** @type {Array<{action?: string, outcome?: string, ts?: number, text?: string}>} */ (store.auditList(TIDY_RUN_AUDIT_WINDOW * 2)),
+    batches,
+    now,
+    timeoutMs: live.tidy.timeoutMs,
+    language: live.language,
+  })
+  return { ...state, rolledBack: state.state === 'done' && state.batchId !== null && rolledBackById.get(state.batchId) === true }
+}
+
+/**
  * 只读算「本工作区近观察窗口内还有几个可读会话」：闸一口径（cwd 精确相等）＋ 已关记忆的
  * 会话不算（历史半边，与 scan 的选区过滤一致）。要问 sessionQuery，故只能在异步路径上走。
  * 读不到（服务缺失/拒绝/超时）一律记 0，且**不落审计**——只读辅助检查绝不打断一轮对话。
@@ -480,6 +586,10 @@ function statsLines(stats, language) {
  * @property {number} [auditRetentionDays] 审计保留天数（默认 0 = 不限；变更时随 dbPath 重开 store，即时生效）。
  * @property {{enabled?: boolean, maxChars?: number, maxPending?: number}} [proposals]
  *   auto-capture 压缩记忆提案（默认 true / 2000 / 8；热生效）。
+ * @property {{enabled?: boolean, profile?: string, exec?: string, timeoutMs?: number, task?: string}} [tidy]
+ *   后台整理轮（F9「点一下即跑」）：enabled=false 时点按钮只登记标记（退回排队式）；
+ *   profile 是无头轮用的执行体 profile 名；exec 为空则自动探测（宿主自身的 CLI 入口 → PATH 里的 dsh），
+ *   要覆盖就在设置页填绝对路径；timeoutMs 是判活窗口（到点杀掉并如实落失败行）。（热生效）
  * @property {{enabled?: boolean}} [panel] Web 面板入口（侧栏底部那枚「记忆」；热生效；false 时入口消失，仅记忆面板，设置卡片不受影响）。
  */
 const SHARED_CONFIG_FIELDS = {
@@ -534,6 +644,15 @@ const SHARED_CONFIG_FIELDS = {
     enabled: Schema.boolean().default(true),
     maxChars: Schema.number().default(2000),
     maxPending: Schema.number().default(8),
+  }),
+  tidy: Schema.object({
+    enabled: Schema.boolean().default(DEFAULT_TIDY_RUN.enabled),
+    profile: Schema.string().default(DEFAULT_TIDY_RUN.profile),
+    exec: Schema.string().default(DEFAULT_TIDY_RUN.exec),
+    timeoutMs: Schema.number().default(DEFAULT_TIDY_RUN.timeoutMs),
+    // 任务文本属于「给模型的作业说明」而非用户面文案，故不进设置卡片（SettingsSchema），
+    // 只在组合配置里留一个可覆盖的口子：想换一段任务说明就改 profile 的 cordis.patch.yml。
+    task: Schema.string().default(DEFAULT_TIDY_RUN.task),
   }),
 }
 
@@ -2036,8 +2155,19 @@ export function renderMemoryObserveResult(/** @type {object} */ _args, /** @type
  * @property {number} panelBatchLimit
  * @property {number} auditRetentionDays
  * @property {{enabled: boolean, maxChars: number, maxPending: number}} proposals
+ * @property {{enabled: boolean, profile: string, exec: string, timeoutMs: number, task: string}} tidy
  * @property {{enabled: boolean}} panel
  * @property {import('./lib/retrieval.mjs').RetrievalProvider | null} [retriever] - 当前检索器：keyword（默认）或 vector（vector 开启且探测到 embedding 时），非空；运行面非配置面。
+ * @property {typeof import('node:child_process').spawn} [tidySpawnFn] - 后台轮的进程工厂（测试注入；不进用户设置面）。
+ * @property {Record<string, string>} [tidyEnv] - 后台轮子进程的额外环境变量（测试注入；不进用户设置面）。
+ */
+/**
+ * 后台整理轮的运行期配置面（热生效；settings 变更后由 live 容器同步）。
+ * 只描述 `tidy` 这个字段本身的形状——拿它拼「含 tidy 的配置面」时用交叉类型，
+ * 别把它当成整个配置对象（那会让每次引用都少一层 `tidy`）。
+ * @typedef {object} TidyRuntimeConfig
+ * @property {{enabled: boolean, profile: string, exec: string, timeoutMs: number, task: string}} tidy
+ * @property {Record<string, string>} [tidyEnv] - 子进程额外环境变量（测试注入；不进用户设置面）。
  */
 /**
  * 组合配置补默认（与 SettingsSchema 默认值同源，SHARED_CONFIG_FIELDS / DEFAULT_*）。
@@ -2098,6 +2228,17 @@ function resolveComposed(config) {
       maxChars: config.proposals?.maxChars ?? 2000,
       maxPending: config.proposals?.maxPending ?? 8,
     },
+    tidy: {
+      enabled: config.tidy?.enabled ?? DEFAULT_TIDY_RUN.enabled,
+      profile: config.tidy?.profile ?? DEFAULT_TIDY_RUN.profile,
+      exec: config.tidy?.exec ?? DEFAULT_TIDY_RUN.exec,
+      timeoutMs: config.tidy?.timeoutMs ?? DEFAULT_TIDY_RUN.timeoutMs,
+      task: config.tidy?.task ?? DEFAULT_TIDY_RUN.task,
+    },
+    // 进程工厂：默认 undefined = 用真的 node:child_process.spawn；集成测试注入假进程用。
+    // 它不是业务配置，故不进 Config schema，只在组合面透传。
+    tidySpawnFn: config.tidySpawnFn,
+    tidyEnv: config.tidyEnv,
     panel: { enabled: config.panel?.enabled ?? true },
   }
 }
@@ -2171,6 +2312,22 @@ function validateMemoryConfig(values) {
   }
   if (values.panel !== undefined && typeof values.panel.enabled !== 'boolean') {
     throw new InvalidInputError('yammory_system config: panel.enabled must be a boolean')
+  }
+  if (values.tidy !== undefined) {
+    // 后台轮：三处形状（profile 名、exec 路径、判活窗口）都在加载期定死，运行期不再解释。
+    // 判活窗口给 30 秒的下限：比这更短只会把一整轮整理误杀成「超时」。
+    if (typeof values.tidy.enabled !== 'boolean') {
+      throw new InvalidInputError('yammory_system config: tidy.enabled must be a boolean')
+    }
+    if (typeof values.tidy.profile !== 'string' || !/^[A-Za-z0-9._-]+$/.test(values.tidy.profile)) {
+      throw new InvalidInputError('yammory_system config: tidy.profile must be a name of letters, digits, dots, underscores or dashes')
+    }
+    if (typeof values.tidy.exec !== 'string') {
+      throw new InvalidInputError('yammory_system config: tidy.exec must be a string (empty means "pick the platform default")')
+    }
+    if (!Number.isInteger(values.tidy.timeoutMs) || values.tidy.timeoutMs < 30000) {
+      throw new InvalidInputError('yammory_system config: tidy.timeoutMs must be an integer of at least 30000 (30 seconds)')
+    }
   }
 }
 
@@ -2476,10 +2633,12 @@ export function apply(ctx, /** @type {PluginConfig} */ config = {}) {
   })
 
   // V2 观察面：/memory 命令（用户触发）、memory_recall 工具、面板 JSON 路由。
-  // commands/webServer 为可选服务，缺失（headless）自动跳过。
+  // commands/webServer 为可选服务，缺失（headless）自动跳过。`activeTidyRounds` 是后台整理轮的
+  // 单飞锁：同一进程里已有一轮在跑时，再点按钮只回报「运行中」，绝不叠进程。
+  const activeTidyRounds = new Set()
   registerCommands(ctx, service, live)
   ctx.tools.register(/** @type {import('@deepseek-ai/dsh-tools').ToolDefinition} */ (makeMemoryRecallTool(service, ctx, live)))
-  registerWebRoutes(ctx, service, live)
+  registerWebRoutes(ctx, service, live, activeTidyRounds, resolved.tidySpawnFn)
 
   // auto-capture：监听会话事件火线，压缩结束后生成记忆提案（只落提案，不写记忆、不调模型）。
   const summaries = new WeakMap()
@@ -3533,16 +3692,169 @@ export function renderMemoryRecallResult(/** @type {object} */ _args, /** @type 
 }
 
 /**
- * 注册面板 JSON 路由（F9；webServer 缺失的 profile 自动跳过）。
- * 除「整理全库」登记（收边 §2，用户动作、只写一条待整理标记）外全部只读：审批决策
- * 在 DSH 内置审批 UI 完成，面板不做任何审批决策、也不改记忆条目。路由随插件生命周期
- * 自动撤销。options 传 live（热字段：panelEntriesLimit/panelAuditLimit/panelBatchLimit/panel/language
- * 随设置变更即时生效）。
+ * 实际会交给无头会话的任务文本（面板预览与执行体共用这一处，绝不各算一份）。
+ * @param {import('@deepseek-ai/cordis').Context} ctx - Cordis 上下文（本函数不用，保留签名一致性）。
+ * @param {MemoryService} service - ctx.memory。
+ * @param {TidyRuntimeConfig & {language: 'en'|'zh'}} options - 后台整理轮的配置面（热生效）。
+ * @returns {string} 任务文本。
+ */
+function tidyTaskOf(ctx, service, options) {  if (typeof options.tidy.task === 'string' && options.tidy.task.trim().length > 0) return options.tidy.task.trim()
+  return builtInTidyTask(options.language)
+}
+
+/**
+ * 备一轮后台整理要用的全部参数（纯组装，不碰进程）：执行体、日志目录、任务文本与环境。
+ * 日志目录与记忆库同处 $DSH_HOME：备份与清场时不会漏掉一处。
+ * @param {import('@deepseek-ai/cordis').Context} ctx - Cordis 上下文（读 loader 基目录；取不到就退回进程环境）。
+ * @param {MemoryService} service - ctx.memory。
+ * @param {TidyRuntimeConfig & {language: 'en'|'zh', dbPath?: string}} live - 运行期可变值容器。
+ * @param {string | undefined} cwd - 会话工作目录（子进程 cwd；闸一口径：一轮只看它自己的工作区）。
+ * @returns {import('./lib/spawn.mjs').TidySpawnConfig} 执行体配置。
+ */
+function tidySpawnConfigOf(ctx, service, live, cwd) {
+  const dsHome = dshHomeOf(ctx)
+  // 子进程的工作目录：路由给不出工作区（connection.fetch 没有会话上下文），故落在
+  // **启动器自己的 cwd** 上（`dsh web` 的约定：运行命令所在目录即默认 workspace 根）。
+  // 这一条决定后台轮看得见哪个工作区的记忆（闸一口径），别的 cwd 下的 workspace 层条目
+  // 这一轮看不到——不是遗漏，是范围。换个工作区整理就从那个目录起一次整理。
+  const workdir = typeof cwd === 'string' && cwd.length > 0 ? cwd : process.cwd()
+  return {
+    enabled: live.tidy.enabled,
+    profile: live.tidy.profile,
+    // 空串一律交下去探测（配置点名 → 宿主自身 → PATH）：宿主未必是全局安装的 dsh，在这一层
+    // 按平台猜一个命令名，等于把「这个命令恰好躺在 PATH 里」当成了前提。
+    exec: live.tidy.exec,
+    args: [...DEFAULT_TIDY_RUN.args],
+    task: builtInTidyTask(live.language),
+    taskOverride: live.tidy.task,
+    logsDir: join(dsHome, TIDY_RUN_LOG_DIR),
+    timeoutMs: live.tidy.timeoutMs,
+    dsHome,
+    ...(typeof live.dbPath === 'string' && live.dbPath.length > 0 ? { dbPath: live.dbPath } : {}),
+    cwd: workdir,
+  }
+}
+
+/**
+ * 内置任务文本（按语言）。
+ * @param {'en'|'zh'} language - 语言。
+ * @returns {string} 任务文本。
+ */
+function builtInTidyTask(language) {
+  return (TIDY_ROUND_TASK[language] ?? TIDY_ROUND_TASK.en).trim()
+}
+
+/**
+ * DSH 主目录：优先问 loader 的基目录，取不到就退回环境变量与 `~/.dsh`。
+ * 与 `lib/store.mjs` 的 `resolveDbPath` 同口径——子进程与插件必须落在同一个主目录上，
+ * 否则无头会话会拿到另一套 profile（甚至另一个库）。
+ * @param {import('@deepseek-ai/cordis').Context} ctx - Cordis 上下文。
+ * @returns {string} 主目录。
+ */
+function dshHomeOf(ctx) {
+  const baseDir = /** @type {{baseDir?: unknown} | null | undefined} */ (/** @type {{loader?: unknown}} */ (ctx).loader)?.baseDir
+  if (typeof baseDir === 'string' && baseDir.length > 0) return baseDir
+  const fromEnv = process.env.DSH_HOME
+  if (typeof fromEnv === 'string' && fromEnv.length > 0) return fromEnv
+  return join(homedir(), '.dsh')
+}
+
+/**
+ * 起一轮后台整理（F9）：把标记、审计与执行体三处收在这里，路由只负责回话。
+ * 返回的 `spawned` 是「这一次真的起了进程没有」——重复点击共用一轮，绝不叠进程。
+ *
+ * 三行审计的分工写实：`started` 是「执行体已拉起」（不是「整理成功」），`failed` 带上
+ * 失败码与日志文件名（带 `error` 事件的 spawn 对进程来说已经结束，两行合一行不会被
+ * 后来的 `exit` 覆盖），`exit` 是「进程非零退了」。成功收尾不落行——批次的
+ * `consolidation` 行本来就是收尾凭据，再写一行等于把同一件事记两遍。
  * @param {import('@deepseek-ai/cordis').Context} ctx - Cordis 上下文。
  * @param {MemoryService} service - ctx.memory。
- * @param {{panelEntriesLimit: number, panelAuditLimit: number, panelBatchLimit: number, panel: {enabled: boolean}, language: 'en'|'zh'}} options - 运行期可变值容器。
+ * @param {TidyRuntimeConfig & {language: 'en'|'zh', dbPath?: string}} live - 运行期可变值容器。
+ * @param {Set<import('node:child_process').ChildProcess>} active - 在跑的进程集合（单飞锁）。
+ * @param {string | undefined} cwd - 子进程工作目录。
+ * @param {typeof import('node:child_process').spawn} [spawnFn] - 进程工厂（默认真 spawn；测试注入用）。
+ * @returns {{spawned: boolean, failure: string | null, detail: string | null, logPath: string | null, pid: number | null}} 结果。
  */
-export function registerWebRoutes(ctx, service, options) {
+function fireTidyRound(ctx, service, live, active, cwd, spawnFn) {
+  const store = service.store
+  const audit = (/** @type {{outcome: string, text: string | null}} */ fields) => {
+    store.auditAppend({
+      action: TIDY_RUN_SOURCE,
+      track: null,
+      scope: null,
+      entryId: null,
+      text: fields.text,
+      outcome: fields.outcome,
+      source: PANEL_SOURCE,
+      sessionId: null,
+    })
+  }
+  if (tidyRoundActive(active)) return { spawned: false, failure: null, detail: null, logPath: null, pid: null }
+  const result = launchTidyRound(tidySpawnConfigOf(ctx, service, live, cwd), {
+    active,
+    ...(spawnFn === undefined ? {} : { spawnFn }),
+    ...(live.tidyEnv === undefined ? {} : { env: { ...process.env, ...live.tidyEnv } }),
+    onFailure: (failure, detail) => {
+      // 子进程自己报上来的失败：exit 码单独给文案，其余（起不来 / 被杀）对用户是同一件事。
+      audit({
+        outcome: TIDY_RUN_OUTCOMES.failed,
+        text: failure === TIDY_RUN_FAILURES.exit
+          ? `${TIDY_RUN_FAILURES.exit}: ${detail}`
+          : `${failure}: ${detail}`,
+      })
+    },
+    onExit: (code, logPath) => {
+      // 正常退出也要落一行：有产出的轮次另有批次的 `consolidation` 行收尾，可**没有产出**的
+      // 轮次（模型回 NOTHING）本来一条凭据都没有，面板就只能永远停在「整理中」。这一行是
+      // 「这一轮到这儿为止」的凭据，不是「整理成功」的凭据——成功与否由批次说了算。
+      audit({ outcome: TIDY_RUN_OUTCOMES.exited, text: `exit code ${code}; log ${basename(logPath)}` })
+      // 一轮跑完就意味着「用户点过的那次请求」已经有会话响应过了，标记在这里收掉。有产出的
+      // 轮次由 supersede 收尾先清过一次，这里拿到 null 就不重复落行——清标记是幂等的。
+      let cleared = null
+      try {
+        cleared = store.tidyRequestClear()
+      } catch {
+        // 空 catch 语义：标记清不掉不改判「进程已正常退出」这条事实，exited 行已经落了。
+      }
+      if (cleared !== null) {
+        store.auditAppend({
+          action: 'tidy-request',
+          track: null,
+          scope: null,
+          entryId: null,
+          text: null,
+          outcome: 'cleared (round exited)',
+          source: PANEL_SOURCE,
+          sessionId: null,
+        })
+      }
+    },
+  })
+  if (result.ok !== true) {
+    // 显式收窄成失败形状再读两个字段：这个联合的判别键就是 `ok`，
+    // 直接读会把成功分支的字段也当成可选（checkJs 下每个都是 TS2339）。
+    const failure = /** @type {{ok: false, failure: string, detail: string}} */ (/** @type {unknown} */ (result))
+    audit({ outcome: TIDY_RUN_OUTCOMES.failed, text: `${failure.failure}: ${failure.detail}` })
+    return { spawned: false, failure: failure.failure, detail: failure.detail, logPath: null, pid: null }
+  }
+  audit({ outcome: TIDY_RUN_OUTCOMES.started, text: `spawned ${result.command.join(' ')}; log ${basename(result.logPath)}` })
+  return { spawned: true, failure: null, detail: null, logPath: result.logPath, pid: result.pid }
+}
+
+/**
+ * 注册面板 JSON 路由（F9；webServer 缺失的 profile 自动跳过）。
+ * 除「整理全库」外全部只读：审批决策在 DSH 内置审批 UI 完成，面板不做任何审批决策。
+ * 唯一的写动作是「整理全库」——它登记一条待整理标记，并**起一轮无头会话**去整理：那一轮是
+ * 插件之外的执行体（`dsh --profile headless`），会话里的模型自己读计划、自己经审批门放行口
+ * `source:tidy-auto` 落写；插件本体不加定时器、不加常驻进程（见 AGENTS.md 的红线改写）。
+ * 路由随插件生命周期自动撤销。options 传 live（热字段：tidy 配置、各 limit、language…随设置变更即时生效）。
+ * @param {import('@deepseek-ai/cordis').Context} ctx - Cordis 上下文。
+ * @param {MemoryService} service - ctx.memory。
+ * @param {TidyRuntimeConfig & {panelEntriesLimit: number, panelAuditLimit: number, panelBatchLimit: number, panel: {enabled: boolean}, language: 'en'|'zh'}} options - 运行期可变值容器。
+ * @param {Set<import('node:child_process').ChildProcess>} activeRounds - 在跑的整理轮进程集合（单飞锁；随插件生命周期）。
+ * @param {typeof import('node:child_process').spawn} [spawnFn] - 进程工厂（默认真 spawn；测试注入用）。
+ */
+export function registerWebRoutes(ctx, service, options, activeRounds = new Set(), spawnFn) {
   withService(ctx, 'connection', (/** @type {{fetch?: {register?: (route: object) => (() => Promise<void>) | undefined}} | null | undefined} */ connection) => {
     if (typeof connection?.fetch?.register !== 'function') return
     // 走 ctx.connection.fetch 而不是 webServer.register(exact)：exact 路由匹配优先于
@@ -3692,11 +4004,14 @@ export function registerWebRoutes(ctx, service, options) {
         }
       },
     }))
-    // 收边 §2（规格 3.5.9 的排队式按钮）：GET 读待整理标记，POST 登记一条。
-    // 面板按钮是**用户动作**，不是模型回合：connection.fetch 路由没有会话上下文，故写
-    // 上下文用不含 session 的占位 agent，走 turn 外 gate（与 /memory 命令同一条
-    // approval/request waterfall 与同一套 writePolicy）。只写标记——不调模型、不碰条目；
-    // 「整理全库」本身仍由模型在会话内显式跑（审计红线），跑完 supersede 清掉标记。
+    // F9：点一下即跑。GET 读「这一轮到哪了」（标记 ＋ 整理轮审计行 ＋ 批次账本三样算出来，
+    // 不落第四份状态）；POST 登记一条待整理标记并**起一轮无头会话**去整理——那一轮在插件之外，
+    // 会话里的模型自己读计划、自己经 `source:tidy-auto` 放行口落写。前端不留对话、不占上下文，
+    // 只有这里的一行状态与批次块。
+    //
+    // 面板按钮是**用户动作**，不是模型回合：connection.fetch 路由没有会话上下文，故登记走
+    // turn 外 gate（与 /memory 命令同一条 approval/request waterfall 与同一套 writePolicy），
+    // 审计行的 sessionId 如实为 null。
     routeDisposers.push(connection.fetch.register({
       path: '/api/memento/tidy-request',
       methods: ['GET', 'POST'],
@@ -3704,26 +4019,80 @@ export function registerWebRoutes(ctx, service, options) {
       fetch: async (/** @type {Request} */ request) => {
         try {
           if (request.method === 'GET') {
-            return panelJson(200, { pending: service.store.tidyRequestPending(), language: service.language })
+            const state = readTidyRunState(service, options)
+            return panelJson(200, {
+              pending: service.store.tidyRequestPending(),
+              state: state.state,
+              batchId: state.batchId,
+              batchCount: state.batchCount,
+              rolledBack: state.rolledBack,
+              failure: state.failure,
+              lines: state.lines,
+              taskPreview: tidyTaskOf(ctx, service, options).slice(0, TIDY_TASK_PREVIEW_CHARS),
+              executorEnabled: options.tidy.enabled,
+              language: service.language,
+            })
           }
           /** @type {unknown} */
           let body
           try {
             body = await request.json()
           } catch {
-            return panelJson(400, { error: 'body must be an empty JSON object {}' })
+            return panelJson(400, { error: 'body must be a JSON object {} (optionally {"cwd": "<absolute path>"})' })
           }
           const input = /** @type {{[key: string]: unknown}} */ (body)
           if (input === null || typeof input !== 'object' || Array.isArray(input)) {
-            return panelJson(400, { error: 'body must be an empty JSON object {}' })
+            return panelJson(400, { error: 'body must be a JSON object {} (optionally {"cwd": "<absolute path>"})' })
           }
-          // 按钮不带任何参数：多余字段一律 400（同 /api/memento/session 的严格度）。
-          if (Object.keys(input).length !== 0) {
-            return panelJson(400, { error: 'body must be an empty JSON object {} (the button carries no arguments)' })
+          // 按钮只带一个可选字段：cwd 是页面自己报的工作目录，用来决定后台轮看哪个工作区
+          // （无头会话的可见集按 cwd 分）。多余字段一律 400，不静默忽略。
+          const keys = Object.keys(input)
+          if (keys.length > 1 || (keys.length === 1 && keys[0] !== 'cwd')) {
+            return panelJson(400, { error: 'body must be a JSON object with the single optional key "cwd"' })
+          }
+          let cwd
+          if (input.cwd !== undefined) {
+            // eslint-disable-next-line no-control-regex
+            if (typeof input.cwd !== 'string' || input.cwd.length === 0 || input.cwd.length > 500 || /[\u0000-\u001f\u007f]/u.test(input.cwd) || !isAbsolutePathLike(input.cwd)) {
+              return panelJson(400, { error: 'cwd must be an absolute path (a non-empty string of at most 500 characters)' })
+            }
+            cwd = input.cwd
           }
           const write = { agent: PANEL_AGENT, gate: makeCommandGate(ctx, { agent: PANEL_AGENT }) }
           const result = await service.requestTidy({ source: PANEL_SOURCE }, write)
-          return panelJson(200, { pending: result.request, created: result.created, language: service.language })
+          // 首次登记就起一轮；重复点击共用同一轮（已在跑就不叠进程）。第一次尝试失败过
+          // （spawn 起不来 / 超时）或进程已经死了，再点一次即重试——不需要用户先「取消」什么。
+          const before = readTidyRunState(service, options)
+          let spawned = false
+          let spawnFailure = null
+          let spawnDetail = null
+          let logPath = null
+          // 执行体关掉时连 fire 都不进：那把「关掉」当成一次失败会把失败行写进审计，而没人失败过。
+          // 关掉是配置状态，排队的标记照旧留着等下一次会话的模型接手。
+          if ((result.created || before.state === 'pending' || before.state === 'failed') && options.tidy.enabled === true) {
+            const fired = fireTidyRound(ctx, service, options, activeRounds, cwd, spawnFn)
+            spawned = fired.spawned
+            spawnFailure = fired.failure
+            spawnDetail = fired.detail
+            logPath = fired.logPath
+          }
+          const state = readTidyRunState(service, options)
+          return panelJson(200, {
+            pending: result.request,
+            created: result.created,
+            state: state.state,
+            batchId: state.batchId,
+            batchCount: state.batchCount,
+            rolledBack: state.rolledBack,
+            failure: spawnFailure ?? (options.tidy.enabled === true ? state.failure : TIDY_RUN_FAILURES.disabled),
+            failureDetail: spawnDetail,
+            lines: state.lines,
+            spawned,
+            logPath,
+            executorEnabled: options.tidy.enabled,
+            taskPreview: tidyTaskOf(ctx, service, options).slice(0, TIDY_TASK_PREVIEW_CHARS),
+            language: service.language,
+          })
         } catch (error) {
           return panelJson(500, { error: error instanceof Error ? error.message : String(error) })
         }
@@ -3803,6 +4172,11 @@ function shortSessionId(/** @type {string} */ sessionId) {
 /** 会话开关路由的 sessionId 校验（非空字符串且 ≤ 200 字符，否则 400）。 */
 function validSwitchSessionId(/** @type {unknown} */ value) {
   return typeof value === 'string' && value.length > 0 && value.length <= MAX_SWITCH_SESSION_ID
+}
+
+/** 路径像绝对路径吗（POSIX 的 `/` 或 Windows 的 `X:\` / `\\server`；两平台都要认）。 */
+function isAbsolutePathLike(/** @type {string} */ path) {
+  return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('\\\\')
 }
 
 /**

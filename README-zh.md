@@ -54,7 +54,7 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 |---|---|
 | 侧栏底部 | 设置旁边的一个**记忆**入口（它开关抽屉；可用 `panel.enabled` 隐藏） |
 | 会话标题栏 | 会话级的记忆开关——关掉即停掉该会话的注入、召回、写入与观察 |
-| 侧栏底部 → 该入口 | 抽屉：按轨道与层级列出的条目、搜索、预警线用量、近期审计、三个可观测数，以及一个只排队登记的**整理全库**按钮 |
+| 侧栏底部 → 该入口 | 抽屉：按轨道与层级列出的条目、搜索、预警线用量、近期审计、三个可观测数，以及一个点一下就交给后台的**整理全库**按钮（起一轮无头会话，回来只留一行状态与批次号） |
 | DSH 设置 → `yammory-system` | 每一个配置项，各自带一个问号，用大白话解释它 |
 | `/memory` | `list`、`query`、`stats`、`audit`、`session on|off`、`export` / `import <path>`，以及更多 |
 
@@ -93,7 +93,7 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 - **有界且诚实。** 每轨每层软预警线（默认 user 2000 / agent 4000）。越线绝不拦写——只提示这一格值得整合。绝不截断、绝不自动压缩。
 - **会话级开关。** 每个会话一个自己的记忆开关（插件自有 SQLite 表，schema v6；默认开）。关掉即四件同时停：**注入停**（该会话的冻结预热块立刻作废）、**召回禁**（`SESSION_MEMORY_OFF`）、**写入停**（与审批门同层拦截）、**观察不碰**（本会话不扫，历史选区也不选它）。管理面只读（`/memory list` / `budgets` / `audit` / `export`）照常可用。用 `/memory session on|off` 或输入框下方的开关切换；开关状态本身绝不进会话日志，审计行 `text` 恒为 `null`。
 - **观察，并让观察自己跑下去。** 观察通道读一段您自己的旧发言，落下面向「问卷够不到的那几面」的行为条目；现在有一条只读检查在距上次观察超过一周时提醒（一行 `observe-due` 审计 ＋ 下一次会话预热段末行一句），另有一条每周的计划任务能在**一个工作区**里无人值守地跑完它：无头 `dsh` 会话扫描、至多推断 3 条带证据的条目、过同一道审批门落库，放行靠它自己的写策略来源（`source:observation`，`auto` / `ask` / `off`）。插件里不装定时器；调度是一条 Windows 计划任务，与整理轮同理。
-- **整理与度量。** 模型驱动的整理把「在讲同一件事」的条目并成一条带 `merged` 标的条目，旧条目降级为 `superseded`——仍在库里，退出每个会话的可见集，绝不物理删。它不跨桶（`track × scope × agentKey`，workspace 层再加 `workspaceKey`），也绝不自动跑。合并能否不经人眼落写，由五根机械硬杠判定（同桶 / 条数 / 去标点、空白**与符号**后逐字一致 / 相似度 / 覆盖度），不由模型自报把握：只有「去过标点、空白与符号后逐字相同」的那一档判 `auto`、可以无人值守落写；改写过的同义句连 review 线都够不着，落 `skip`（原地不动）；一字之差落 `review`，等你过目。因此一个后台轮（由您自己的计划任务唤起的无头 `dsh` 会话）能自行合掉机制上明确无歧义的重复，硬杠不敢担保的部分则留着等您。写入把审计来源钉成 `tidy-auto`，所以粒度写策略（`source:tidy-auto`）可以只放行这一条路，其余写入仍留在审批门后。另有只读的 `agent/turn-stopping` 检查，它只提示积压过线（一行 `tidy-due` 审计 ＋ 下个会话预热段末行一句）。`/memory stats` 打印可观测三数（重复率 / 召回命中率 / 注入量），抽屉面板里同样有这三行；成功率刻意留白，因为本仓库没有「注入之后对方是否真听懂了」这条信号源。面板上的**整理全库**按钮是排队，不是动作：它按同一套审批策略只写一行标记（`tidy_requests`，schema v7），下次会话的预热段请模型跑一次全库整理，等真的有整理落写时标记转 `done`——面板这边一条都不会合并。
+- **整理与度量。** 模型驱动的整理把「在讲同一件事」的条目并成一条带 `merged` 标的条目，旧条目降级为 `superseded`——仍在库里，退出每个会话的可见集，绝不物理删。它不跨桶（`track × scope × agentKey`，workspace 层再加 `workspaceKey`），也绝不自动跑。合并能否不经人眼落写，由五根机械硬杠判定（同桶 / 条数 / 去标点、空白**与符号**后逐字一致 / 相似度 / 覆盖度），不由模型自报把握：只有「去过标点、空白与符号后逐字相同」的那一档判 `auto`、可以无人值守落写；改写过的同义句连 review 线都够不着，落 `skip`（原地不动）；一字之差落 `review`，等你过目。因此一个后台轮（由您自己的计划任务唤起的无头 `dsh` 会话）能自行合掉机制上明确无歧义的重复，硬杠不敢担保的部分则留着等您。写入把审计来源钉成 `tidy-auto`，所以粒度写策略（`source:tidy-auto`）可以只放行这一条路，其余写入仍留在审批门后。另有只读的 `agent/turn-stopping` 检查，它只提示积压过线（一行 `tidy-due` 审计 ＋ 下个会话预热段末行一句）。`/memory stats` 打印可观测三数（重复率 / 召回命中率 / 注入量），抽屉面板里同样有这三行；成功率刻意留白，因为本仓库没有「注入之后对方是否真听懂了」这条信号源。面板上的**整理全库**按钮现在真的会跑：点一下即登记标记（`tidy_requests`，schema v7）并起一轮无头会话去整理，会话里的模型自己读计划、自己合，跑完清标记、落批次号。面板只留一行状态（`排队中` → `整理中` → `已完成 · 合并 N 组`，或 `没有需要合并的条目`，失败则给「重试」）＋ 下方批次块里的整批撤回按钮；前端不冒对话、不占上下文。执行体是**探测**出来的而非按平台猜死（配置点名 → 宿主自身的 CLI 入口 → PATH），一轮没落下任何批次也会自己留一行「正常退出」凭据，**按钮不会卡死**。`tidy.enabled: false` 可退回旧的排队式。
 
 - **治理：把降级走回来，把冲突按面裁决。** `restore` 把一次降级走反方向（`superseded → active`，`version` 不动，重新进入每个会话的可见集），它是脱离降级态的唯一出口。`arbitrate` 处理「同一条事实、两个来源」：在**一个面**上裁决，方向由固定表决定——能力听观察、意愿听自陈，其余五面**两条都留**并各打 `gap` 标（落差本身即证据）。表即方向，所以没有反向参数可传；同组内保留 `updatedAt` 最新者。两者与所有写路径同门：同一审批门、同一会话开关、同一桶内边界；审计也逐条留痕——`restore` 每条一行，`arbitrate` 每次降级一行（`text` 恒为 `null`，只记 id）、打标一行 `arbitrate-tag`，收尾一行 `arbitrate` 摘要写清保留了谁、降级了谁、理由是什么。
 
@@ -150,6 +150,11 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 | `proposals.enabled` | `true` | 每次成功压缩后自动捕获一条记忆提案 |
 | `proposals.maxChars` | `2000` | 提案字符上限 |
 | `proposals.maxPending` | `8` | 待处理提案上限 |
+| `tidy.enabled` | `true` | **整理全库**按钮是否真的起一轮后台会话：`false` 退回旧行为（只登记标记，等下次会话开口） |
+| `tidy.profile` | `'headless'` | 后台轮用的执行体 profile 名 |
+| `tidy.exec` | `''` → 自动探测 | 执行体入口：空 = 自己探（先用宿主自己的启动器：宿主启动时那个 CLI 脚本，由同一份 node 执行；再找 PATH 里的 `dsh.cmd` / `dsh`）；填了就盖过这两条（绝对路径或你自己的启动脚本）。找不到它会如实报「执行体起不来」并给「重试」 |
+| `tidy.timeoutMs` | `480000` | 判活窗口：到点未退出即杀进程并如实报「超时」（下限 30 秒） |
+| `tidy.task` | `''` → 内置任务文本 | 覆盖交给无头会话的作业说明（只在 cordis.patch.yml 里可改，不进设置卡片） |
 
 ## Tools & surfaces
 
@@ -165,7 +170,7 @@ dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 | `yammory-experience` | skill | 把「干活的教训」收进 agent 轨（环境事实／约定／教训），与用户画像分家，判据只有一句：这条知识该不该每一轮都在场。源文件：`skills/yammory-experience/` |
 | `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `restore <id...>` · `arbitrate <id...>` · `tidy [--days=N]` · `stats` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` · `observe [--days=N]` · `session [on|off]` |
 | session switch | session header | 会话标题栏里的会话记忆开关，紧挨 Agent 预设（`conversation.session.header.actions`，session scope）：显示当前状态并点击切换，走 `GET`/`POST /api/memento/session`（与面板路由同一条 `connection.fetch` 信任栅栏） |
-| web panel | client drawer | 对记忆内容只读，且拆成两个世界：**记忆**页签是七面多边形结构树（先看分类、点开才见条目）＋ 知识水位块；**经验**页签把 agent 轨按话题分桶。两侧共用搜索、预算条、可观测三数与审计尾部；另有一个用户动作按钮，只登记一条全库整理标记；侧栏入口可隐藏（`panel.enabled`） |
+| web panel | client drawer | 对记忆内容只读，且拆成两个世界：**记忆**页签是七面多边形结构树（先看分类、点开才见条目）＋ 知识水位块；**经验**页签把 agent 轨按话题分桶。两侧共用搜索、预算条、可观测三数与审计尾部；另有一个用户动作按钮：起一轮后台整理并显示那一轮的状态行与批次块（写路径全在服务端）；侧栏入口可隐藏（`panel.enabled`） |
 | settings section | DSH 设置侧栏 → `yammory-system` | 免改文件编辑除 `enabled` 外的全部配置字段；即时/重载生效时机在页面内标注 |
 
 ## MCP server
@@ -209,7 +214,7 @@ Claude Desktop（`claude_desktop_config.json`）配置示例：
 
 ## Permissions & data
 
-- **Permissions**：workshop 清单声明 `harness:tool`、`filesystem:read`、`filesystem:write`，以及 `network:none` / `subprocess:none` / `shell:none` / `python:none` / `credentials:none`。写审批走官方审批接缝。
+- **Permissions**：workshop 清单声明 `harness:tool`、`filesystem:read`、`filesystem:write`，以及 `network:none` / `subprocess:none` / `shell:none` / `python:none` / `credentials:none`。写审批走官方审批接缝。这份声明有一处要照实读：**整理全库**按钮会起一轮一次性无头会话（`dsh --profile headless`）——它是本插件唯一的一次进程启动，由用户触发、落日志、可整批撤回，并可由 `tidy.enabled` 关掉。
 - **Data**：本地 SQLite 数据库（`0600`），零网络、零凭据。
 - **Session log**：审计完整性来自审批对（`approval/asked` + `approval/decided`）加插件自有审计表。
 
@@ -223,6 +228,7 @@ Claude Desktop（`claude_desktop_config.json`）配置示例：
 ## Known limitations
 
 - **会话事件已声明、尚未发出（rc.2）。** `memory/added|updated|removed|recalled|snapshot` 已合并声明，但 rc.2 没有仓库外事件类型的注册面；一旦 harness 构建收录这些类型即自动开启发出。
+- **一轮后台整理只覆盖一个工作区。** 闸一只读 `cwd` 与调用方精确相等的会话，所以从面板起的那一轮覆盖它启程时所在的工作目录（外加 user-global 层）。别的工作区各有各的一轮。
 - **`ask` 策略需要 answerer。** 未组合 UI/ACP answerer 时，写入失败关闭。
 - **无 FTS5 索引。** 子串搜索走大小写不敏感的 `instr`（对 CJK 正确）。
 - **观察面是白名单，而白名单有边界。** `memory_observe scan` 只保留 `source.kind` 为 `user` / `user-rpc` 的 `user/message` 事件；本机实测这一条会挡下全部 `user/message` 的 48%（运行时上下文、AGENTS.md、skill 目录、goal 轮次、子代理通知）。但它分不出「人打的」与「外部桥接注入、同样声明 `kind: 'user'` 的」——事件日志只带这一个信号。故单条引文只算弱证据；要下结论，须跨会话重复出现。
@@ -289,7 +295,7 @@ Claude Desktop（`claude_desktop_config.json`）配置示例：
 
 ```sh
 npm install              # node ^22.19 || >=24
-npm test                 # node --test: 365 tests
+npm test                 # node --test: 484 tests
 npm run lint             # oxlint
 npm run test:conformance # dsh-memory-protocol v1 conformance suite
 npm run typecheck        # tsc --checkJs gate
