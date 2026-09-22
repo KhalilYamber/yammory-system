@@ -11,7 +11,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -886,6 +886,11 @@ test('F9 端到端（真进程）：点击 → 真起一个子进程 → 它写�
     if (name.endsWith('.sh') && process.platform === 'win32') continue
     writeFileSync(path.join(sandbox, name), readFileSync(path.join(fixtures, 'fixtures', name)))
   }
+  if (process.platform !== 'win32') {
+    // POSIX 上「能不能执行」看权限位，而 writeFileSync 建出来的是 0644：不补这一位，端到端用例
+    // 在 CI 上就是 spawn EACCES（本地 Windows 走 .cmd 壳，从来看不见这一条）。
+    chmodSync(launcher, 0o755)
+  }
   const mounted = mount({
     tidy: { exec: launcher, timeoutMs: 30000 },
     tidyEnv: { YAMMORY_FAKE_LINE: 'e2e-ok', YAMMORY_FAKE_EXIT: '0' },
@@ -910,8 +915,20 @@ test('F9 端到端（真进程）：点击 → 真起一个子进程 → 它写�
     }
     assert.ok(log.includes('e2e-ok'), `日志文件里确实接住了子进程的 stdout（log=${JSON.stringify(log.slice(0, 200))}）`)
   } else {
-    // POSIX 上写流的落盘时机不保证在被测进程退出前，日志内容不作断言（那是 fs 的时序，不是本插件的语义）。
-    assert.ok(readFileSync(logPath, 'utf8') !== undefined, '日志路径可读（存在即通过）')
+    // POSIX 上写流的落盘时机不保证在被测进程退出前，日志**内容**不作断言（那是 fs 的时序，不是本
+    // 插件的语义）；但「文件最终落了盘」要等一等再判——createWriteStream 是异步 open，进程又退得
+    // 快，立刻读只会 ENOENT（CI 上实测），那不是没落盘，是还没轮到它。
+    let seen = false
+    for (let index = 0; index < 100; index += 1) {
+      try {
+        readFileSync(logPath)
+        seen = true
+        break
+      } catch {
+        await new Promise((resolve) => { setTimeout(resolve, 50) })
+      }
+    }
+    assert.ok(seen, '日志文件最终落盘（异步 open，给足时间再判）')
   }
   const rows = mounted.service.store.auditList().filter((row) => row.action === TIDY_RUN_SOURCE)
   assert.equal(rows.some((row) => row.outcome === TIDY_RUN_OUTCOMES.started), true, 'started 行已落（执行体已拉起）')
