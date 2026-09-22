@@ -45,7 +45,7 @@ Claude Code / Codex / OpenCode / Hermes 各自封闭记忆形态之间不存在�
 | 预算 | 各插件自定 | 每轨每层硬字符预算 + 结构化错误 |
 | 审计 | 各插件自定 | 审批审计对 + Provider 账本 + `<action>-denied` 行；重建有保证 |
 | 互操作 | 无 | 一致性套件 + 参考适配器（mem0、Hermes memory.md、CLAUDE.md） |
-| 会话事件 | — | `memory/added|updated|removed|recalled|snapshot` 词汇已声明合并；harness 收录类型后运行时自动开启派发 |
+| 会话事件 | — | `memory/added\|updated\|removed\|recalled\|snapshot` 词汇已声明合并；harness 收录类型后运行时自动开启派发 |
 
 ## 迁移路径
 

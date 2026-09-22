@@ -1,14 +1,14 @@
-// scripts/verify-readmes.mjs — 五语 README 一致性门（CI 与本地共用）。
+// scripts/verify-readmes.mjs — 四语 README 一致性门（CI 与本地共用）。
 // 机械检查：标题、语言互链、Topics、安装命令、库路径、许可证链接、
-// 关键配置/工具 token、恰好一个结尾换行。行为变更同 commit 更新五语 README
+// 关键配置/工具 token、恰好一个结尾换行。行为变更同 commit 更新四语 README
 // 的红线由本门在 CI 兜底。
 import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const FILES = ['README.md', 'README-zh.md', 'README-es.md', 'README-pt.md', 'README-hi.md']
-const SWITCHER = '[English](README.md) · [简体中文](README-zh.md) · [Español](README-es.md) · [Português](README-pt.md) · [हिन्दी](README-hi.md)'
+const FILES = ['README.md', 'README-en.md', 'README-ja.md', 'README-ru.md']
+const SWITCHER = '[简体中文](README.md) · [English](README-en.md) · [日本語](README-ja.md) · [Русский](README-ru.md)'
 
 let failed = 0
 for (const file of FILES) {

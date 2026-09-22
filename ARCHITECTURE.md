@@ -58,90 +58,171 @@ memory 工具(add)
 
 ## 关键设计决策
 
-1. **快照注入走 systemPrompt 段（而非 pre-step sourced message）**。
-   - `snapshotOrder` 直接映射段顺序语义（默认 -50：harness identity(-100) 之后、persona(0) 之前）；
-   - rc.6 已证明的路径：`assemble.agent.session.header.cwd` 提供工作区作用域（dsh-claude-move 同款）；
-   - 渲染文本随 `request/header` 事件逐字落会话日志（system 字段），加上 `audit(snapshot)` 行，S2 可重建有两条独立证据链；
-   - 冻结语义 = systemPrompt 全文会话内不变 = 前缀缓存稳定（这正是"冻结"的设计目的）。
-   代价与约束：提供者必须同步（rc.6 不 await），SQLite 同步读 + WeakMap 冻结满足 N1。
+### 1. 快照注入走 systemPrompt 段（而非 pre-step sourced message）
 
-   **S2 分路：预热段 + 按需**（冻结机制不变，只改内容构成）。
-   - 预热段（`renderWarmup`）=【表达约束】（profile 表分领域知识水平 → 四档说话要求，`lib/constraint.mjs`）+【常驻画像】（user 轨 × scope=user-global 条目）+ 待审批提案块（有则追加）；
-   - 按需那半沿用既有 `memory_recall` 工具 + retrieval seam，不进开场：工作区层（scope=workspace）与 agent 轨（环境事实/约定/教训）刻意不入预热段；
-   - 表达约束按 profile 表生成，仍在会话首次 assemble 时冻结——会话内新写入的 level 不改已注入文本；
-   - 常量纪律：`KNOWLEDGE_TIERS`（S1 常量）与 `TIER_RULES`（`lib/constraint.mjs`）的分档边界必须一致，`assertTierRules()` 在模块加载期逐值比对 `tierForLevel`，漂移即响亮抛出。
+> 一句话：注入点是 systemPrompt 里的一个段（`snapshotOrder` 默认 -50），不是一条独立消息——「冻结」与前缀缓存稳定因此天然成立。
 
-2. **审批门做在 Service 写方法内部，不在工具层**（对应 Hermes issue #48181 教训）。
-   - 任何路径（memory 工具、其它插件、未来 /memory 命令）只要调 `ctx.memory.add/replace/remove/seed` 就必然经过 `ctx.approval.request`；
-   - `writePolicy` 是 Config（ask/auto/off，默认 ask），模型不可见、不可改；
-   - 本插件在 `approval/request` 上注册 prepend answerer：只认领 toolName='memory' 且 reason 带 `[yammory_system]` 前缀的请求；ask 委托续链（人类 answerer），auto/off 直接裁决；
-   - 会话级 `approval/never` 由审批服务在 answerer 之前裁决，任何 answerer（含 prepend）都无法绕过——本插件遵从该硬不变量。
-   - **审批载荷完整化（approve-what-you-see）**：add/seed 载荷 = 新文本全文；replace 载荷 = `from:\n<旧条目全文>\n\nto:\n<新文本>`；remove 载荷 = 被删条目全文（不再是裸子串）；consolidate 载荷 = 每个目标的定位原文（单条 >300 字截断标注）+ 新文本。人批准的是具体变更而非抽象动作，approval/asked 的 reason 因此携带可重建变更的完整信息。
-   - **被拒写也留痕**：`rejected/cancelled/unavailable` 一律在抛出 WriteDeniedError 前落 `<action>-denied` 审计行（outcome 标注真实裁决来源）。turn 内路径另有 approval/asked+decided 审计对；turn 外 gate 路径（/memory 命令）没有审计对可落，denied 行是拒绝的唯一证据链。
+- `snapshotOrder` 直接映射段顺序语义（默认 -50：harness identity(-100) 之后、persona(0) 之前）；
+- rc.6 已证明的路径：`assemble.agent.session.header.cwd` 提供工作区作用域（dsh-claude-move 同款）；
+- 渲染文本随 `request/header` 事件逐字落会话日志（system 字段），加上 `audit(snapshot)` 行，S2 可重建有两条独立证据链；
+- 冻结语义 = systemPrompt 全文会话内不变 = 前缀缓存稳定（这正是「冻结」的设计目的）。
 
-3. **预算 = 软预警线，Provider 层绝不截断（v2 拆上限）**。
-   - 写入永不因容量被拒：越线只做提示，不拦写、不报错；`checkBudget` 只报「是否越线」；
-   - `Config.budgets` 语义由「硬上限」改「软预警线」（值不变：user 2000 / agent 4000）；`BUDGET_EXCEEDED` 保留码位但不再产生；
-   - 计数单位是 JS 字符（UTF-16 code unit）：中文场景一个汉字计 1，可预测；真正的收敛回路是整理机（F6）。
+**代价与约束**：提供者必须同步（rc.6 不 await），SQLite 同步读 + WeakMap 冻结满足 N1。
 
-4. **memory/* 会话事件：词汇已声明，运行时自适应派发（rc.6 约束）**。
-   - `types.d.ts` 声明合并了 `memory/added|updated|removed|recalled|snapshot` 的 SessionEventMap 词汇与载荷形状；
-   - rc.6 无插件事件注册面：`KNOWN_SESSION_EVENT_TYPES` 不含 memory/*，且 `Session.append` 无法标记 `ignorable`——append 未注册类型会让该会话下次加载被持久化层整体拒绝（read 路径 enforce，见 session-persistence coordinator）；
-   - 因此运行时只在 `KNOWN_SESSION_EVENT_TYPES.has(type)` 时才 append（未来 harness 收录后自动开启）；当前审计链 = approval/asked+decided（已知类型，reason 携带完整写载荷）+ 插件审计表 audit。这是与官方机制对齐后的必然选择，不是偷工减料。rc.1 / 0.1.3-alpha.1 复核（2026-09-04）：append 第三参仍为 surface-only SurfaceIntent、仍无 ignorable 写入通道，本决策不变。
+**S2 分路：预热段 ＋ 按需**（冻结机制不变，只改内容构成）：
 
-5. **审计 = 审批对 + 审计表 + 快照三条链**。
-   - 每次写：approval/asked（reason 全文载荷）→ approval/decided（结果）→ audit 行（outcome 含 policy 来源、entry id、会话 id）；
-   - 每次被拒写：`<action>-denied` audit 行（turn 外 gate 路径无审批审计对，这是拒绝证据链）；
-   - 每次 recall：audit(recalled) 行；每次快照：audit(snapshot) 行（与注入文本逐字一致）；
-   - 卸载插件后：记忆库与会话日志保留，旧会话可正常加载（因为从不 append 未注册事件类型）。
+- 预热段（`renderWarmup`）=【表达约束】（profile 表分领域知识水平 → 四档说话要求，`lib/constraint.mjs`）＋【常驻画像】（user 轨 × scope=user-global 条目）＋ 待审批提案块（有则追加）；
+- 按需那半沿用既有 `memory_recall` 工具 ＋ retrieval seam，不进开场：工作区层（scope=workspace）与 agent 轨（环境事实/约定/教训）刻意不入预热段；
+- 表达约束按 profile 表生成，仍在会话首次 assemble 时冻结——会话内新写入的 level 不改已注入文本；
+- 常量纪律：`KNOWLEDGE_TIERS`（S1 常量）与 `TIER_RULES`（`lib/constraint.mjs`）的分档边界必须一致，`assertTierRules()` 在模块加载期逐值比对 `tierForLevel`，漂移即响亮抛出。
 
-6. **替换/删除的并发与回滚**。
-   - replace/remove 在 Provider 层事务内"定位+变更"原子执行；Service 层审批前先定位（零/多命中不打扰用户）；
-   - 审批期间条目被并发写移除：审批后重定位失败即结构化报错（响亮，不静默）。
-   - seed 整批先全量预算预检，通过后同步插入（无 await 间隔），不存在部分写入。
-   - **写定位 = 会话可见集**（决策 11 的可见性语义扩展到写路径）：replace/remove/consolidate 的匹配只命中共享层 + 写方会话 agent 键的条目（显式 `input.agentKey` 覆盖），`workspace` 层再按写方会话 cwd 键过滤——跨 agent、跨工作区条目对会话不可见，也就不可能被误改。
-   - 提案裁决（`proposalDecide`）同样在事务内"定位+更新"原子执行：approve 与 dismiss 并发先到者赢；`/memory proposals approve` 在写成功后容忍提案已被并发裁决（不掩盖成功写）。
+### 2. 审批门做在 Service 写方法内部，不在工具层
 
-7. **工作区键**：workspace 条目按会话 cwd 的规范化绝对值隔离；Windows 下大小写不敏感（同一项目以不同大小写路径打开仍命中同一 workspace 层）。两个进程共用一个 `$DSH_HOME` 时，SQLite 以 busy_timeout 串行写，但"谁先写谁赢"，跨进程一致性不保证（学 Hermes 的官方警告，见 README 安全边界）。
+> 一句话：门在 `ctx.memory` 的写方法里面——任何调用路径都绕不过，工具层只是恰好也在路径上。（对应 Hermes issue #48181 的教训。）
 
-8. **V2 观察面的命令写路径（turn 外审批门）**：`/memory` 命令在模型回合之外执行，而审批服务 `ctx.approval.request` 要求 open turn（`approval/asked + approval/decided` 审计对必须被 turn 包围，这是 DSH 持久化日志的 commit/replay 硬边界）。命令写因此走**同一** `approval/request` waterfall（同一 answerer 链、同一 `writePolicy` 裁决），差异只在审计落点：turn 内路径落审批审计对，命令路径落插件审计表 + `command/done`；被拒的命令写落 `<action>-denied` 行（见决策 2）。会话级 `never` 策略按公开 API（`approval.overrideOf`）在派发前预检，与审批服务同语义、不可绕过。这是对审批 seam 约束（审计对需 turn 包围）的最小偏离，已文档化并测试（`test/v2.test.mjs`）。
-   - **export/import 备份迁移对**：`/memory export` 是纯只读路径（条目 + 预算的 JSON 导出，schema 标记 `memory-export-v1`，不落审计、不走审批门）。`/memory import <路径>` 或 `import '{...}'`（内联 JSON）读回该文档：校验 plugin/schema 标记与条目形状（未知 schema 版本响亮拒绝），条目数上限 `MAX_IMPORT_ENTRIES`（1000），然后经 `service.seed` 单次审批 + 全量预算预检 + 单事务原子落盘；source/workspaceKey/agentKey 随文档保留，条目获得新 id 与新时间戳、召回计数归零，提案/审计行不迁移（预算仍由 Config 决定）。
+- 任何路径（memory 工具、其它插件、未来 `/memory` 命令）只要调 `ctx.memory.add/replace/remove/seed`，就必然经过 `ctx.approval.request`；
+- `writePolicy` 是 Config（ask/auto/off，默认 ask），模型不可见、不可改；
+- 本插件在 `approval/request` 上注册 prepend answerer：只认领 toolName='memory' 且 reason 带 `[yammory_system]` 前缀的请求；ask 委托续链（人类 answerer），auto/off 直接裁决；
+- 会话级 `approval/never` 由审批服务在 answerer 之前裁决，任何 answerer（含 prepend）都无法绕过——本插件遵从该硬不变量。
 
-9. **V2 面板只读**：Web 面板（`dsh.client` 零构建抽屉）对记忆内容只读：条目浏览/搜索/预算条/可观测三数/审计尾；审批与写操作一律发生在 DSH 内置审批 UI + `memory` 工具（否则会与内置审批呈现重复并产生分歧）。唯一的非只读动作是「整理全库」按钮（决策 21）：它只登记一条待整理标记。
-    - **控件与颜色都借官方的（前端优化方案）**：控件一律 `require('@deepseek-ai/dsh-client-ui-primitives')`（宿主浏览器侧平台种子表：`Button`/`Input`/`Tag`/`StateDot`/`Switch`/`Tooltip`），抽屉经 `react-dom/client` 的 `createRoot` 渲染（`react.createElement`，不用 JSX——**零构建不变**：无打包器、无新依赖，`exports["./client"]` 仍指向手写 `client.js`）。色值一律 `--dsw-alias-*` / `--dsw-static-*` / `--dsw-elevation-*` 令牌，亮暗主题自动跟随；插件自造 CSS 只剩定位、滚动与排布。
-    - **抽屉挂官方通栏浮层（`shell.overlay`）**：与 `dsh-tidewatch` 同一席位（`kind: 'list'; scope: 'root'`，框架级悬浮层，条目自己 opt-in 指针事件）。插件注册一个只交容器的条目，抽屉按需渲染进去。**由此删掉了 `placeOpenButton` 那段「量 tidewatch 徽章高度、把按钮抬到它之上」的让位逻辑——两插件之间唯一的硬耦合解除**；入口按钮留在自建 fixed 层（定位与 id 不变）。
+**审批载荷完整化**（approve-what-you-see）：
 
-10. **检索引擎 = 大小写不敏感 instr + 召回计数排序，不用 FTS5**。
-    - 实测（Node 22 内置 SQLite，FTS5 可用）：trigram 分词器无法索引单字 CJK 字符——`'中文测试'` 中查 `'中文'` 零命中；unicode61 把 CJK 连续段当一个 token，仅前缀可查。本插件语料以中文记忆为主，子串语义必须对 CJK 成立，instr 是唯一正确的内置引擎。
-    - query 大小写不敏感（lower() 折叠 ASCII；CJK 无大小写不受影响），与面板过滤、sessionQuery 文本检索语义一致；replace/remove/consolidate 定位同语义（`lib/match.mjs` 的 `findUniqueMatch` 统一折叠，store 层 lower(instr) 与之一致）。
-    - 召回排序：query 命中页的条目 `recall_count` +1、`last_recalled` 落地（SCHEMA v3 列）；排序 `recall_count DESC, updated_at DESC`（高频即重要）。快照仍走 `listEntries` 创建序（冻结块稳定优先）。
-    - 未来真正的升级路径是 harness 出现 embedding seam 后的语义召回（Provider 角色天然兼容），不是 FTS5——本仓库已按决策 16 落地检索/嵌入 seam 的最小接入。
+| 动作 | 载荷内容 |
+|---|---|
+| `add` / `seed` | 新文本全文 |
+| `replace` | `from:\n<旧条目全文>\n\nto:\n<新文本>` |
+| `remove` | 被删条目全文（不再是裸子串） |
+| `consolidate` | 每个目标的定位原文（单条 >300 字截断标注）＋ 新文本 |
 
-11. **第三维 agentKey（per-agent 作用域，SCHEMA v3）**。
-    - 写方 session 的 `header.agentPreset` 经 `agentKeyOf` 规范化（缺失→'' 共享层）；条目与提案落 `agent_key`。
-    - 可见性：`agent_key === '' || === 会话 agentKey`，且 scope 规则不变；预算仍按 track×scope 计（agentKey 不新增预算维度）。
-    - **可见性对读与写定位一致生效（0.3.0）**：快照/提案沿用会话可见集；`memory` 工具与 `memory_recall` 的 query 按会话 agentPreset 过滤（`service.query` 的 `opts.agentKey`，显式给定才过滤）；replace/remove/consolidate 的匹配同样按可见集过滤（见决策 6）。管理面（`/memory` 命令、Web 面板）与未传 agentKey 的插件调用保持全量视图（向后兼容），面板与命令列表渲染非共享条目的 agent 键以便管理。
-    - 工具不暴露 agentKey 参数——由写方 session 自动决定，模型不可选，避免污染。
-    - **可见性对读与写定位一致生效（0.3.0）**：快照/提案沿用会话可见集；`memory` 工具与 `memory_recall` 的 query 按会话 agentPreset 过滤（`service.query` 的 `opts.agentKey`，显式给定才过滤）；replace/remove/consolidate 的匹配同样按可见集过滤（见决策 6）。管理面（`/memory` 命令、Web 面板）与未传 agentKey 的插件调用保持全量视图（向后兼容），面板与命令列表渲染非共享条目的 agent 键以便管理。
+人批准的是具体变更而非抽象动作，`approval/asked` 的 reason 因此携带可重建变更的完整信息。
 
-12. **语言面（Config.language，en/zh）与错误文案的分界**。
-    - 随语言切换的只有**模型可见/命令/面板**文案：`memory`/`memory_recall` 工具描述与参数说明、预热段（含表达约束，`lib/strings.mjs` 词表）、`/memory` 命令输出、Web 面板标签（语言经 `/api/memento/*` 响应的 `language` 字段下发）。en 为源文，zh 为对应译文；未知语言回退 en。
-    - **错误信息保持英文**：结构化错误码（`INVALID_INPUT`、`BUDGET_EXCEEDED`…）与 message 是跨语言的审计契约，模型按 code 分支（整合后重试等），不受 language 影响。
-    - 非法 `language` 值在加载期响亮失败（schema 层 union + apply 直调路径双保险）。默认 `en` 与 DSH 核心提示一致。
-    - `/memory export` 是纯只读路径（条目 + 预算的 JSON 导出，备份/迁移/透明性），不落审计、不走审批门——与 Claude Code/Codex"记忆是用户可读的纯文本"精神对齐。
+**被拒写也留痕**：`rejected/cancelled/unavailable` 一律在抛出 `WriteDeniedError` 前落 `<action>-denied` 审计行（outcome 标注真实裁决来源）。turn 内路径另有 `approval/asked+decided` 审计对；turn 外 gate 路径（`/memory` 命令）没有审计对可落，denied 行是拒绝的唯一证据链。
 
-13. **会话级记忆开关：关闭 = 注入停 + 召回禁 + 写入停 + 观察不碰（SCHEMA v6）**。
-    - **状态存哪**：插件自有 SQLite 新表 `session_switch(session_id PK, enabled, updated_at)`（v5 → v6）；**只保留「关」的行**，重开即删行，所以「无行即开」既是缺省语义也是唯一写入语义（常量锚点 `SESSION_DEFAULT_ENABLED`）。三个方法：`sessionEnabled`（无行/空 id/非字符串 → 开）、`sessionSetEnabled`（关→upsert 0 行；开→删行）、`disabledSessionIds`（观察选区过滤用）。
-    - **写入拦截在协议核心内部**（与决策 2 的审批门同级、在 gate 与任何落盘之前）：`MemoryProtocolCore.#assertSessionOn(action, write)`，挂载点是 `#validateEntry`（覆盖 add/replace/consolidate）与 `remove`/`seed`/`setProfile` 各自开头。因此工具路径、`/memory` 命令路径、`import`、提案 approve——任何调用路径都绕不过。拒绝时先落一行 `outcome='session-off'` 的审计（`text: null`）再抛 `SessionMemoryOffError`：**「这个会话不留痕」连被拒的正文也不留**。
-    - **注入拦截在预热段回调**，且**开关优先于会话内冻结**：开关关掉时删除该 Session 的 WeakMap 冻结快照并返回空串——已冻结的段立刻失效，后续 assemble 一律空段，且不落 `snapshot` 审计（关了就不再留痕）。已进历史轮次的文本不追溯清除（那是本期明确不做的边界）。
-    - **读侧拦截**：`memory_recall` 与 `memory` 工具的 `query` 动作属模型面读记忆，关则 `SESSION_MEMORY_OFF`，不检索、不 `bumpRecall`、不落 `recalled` 审计。管理面只读子命令（`/memory list|query|budgets|audit|adapters|export|proposals`）**不受影响**——它们是用户动作，开关管的是模型与会话，不是用户的检查权。
-    - **观察通道（规格 3.6）**：当前会话关闭 → `memory_observe.scan` 直接拒（「当下」半边）；选区先把 `disabledSessionIds` 命中的历史会话滤掉再截断（「历史」半边），被滤条数计入账单 `scanned.skippedOff`——少看了几个会话必须让人看见。
-    - **开关状态零会话事件**：决策 4 的自适应门不变，`/memory session` 与面板切换只落插件审计表（`session-switch`，`outcome='on'|'off'`，`text: null`）。UI 注册在 `conversation.session.header.actions`（session scope，`sessionId` 取 standard props；挂会话标题栏，Agent 预设占 order -10 的负序带、本钮取 0），`GET`/`POST /api/memento/session` 两条能力由**一条** `connection.fetch` 路由按 method 分派承载（注册表以 path 为键），与面板路由同栅栏（决策 9 的只读纪律不管这个开关：它改的是「本会话要不要记忆」，不是记忆内容）。
-    - **不新增 Config 项**：守「策略集中、不做开关」纪律；开关是会话级用户动作，不是部署策略。
+### 3. 预算 = 软预警线，Provider 层绝不截断（v2 拆上限）
+
+> 一句话：越线只提示、不拦写——「写不下」不是本插件的失败模式，收敛交给整理机。
+
+- 写入永不因容量被拒：越线只做提示，不拦写、不报错；`checkBudget` 只报「是否越线」；
+- `Config.budgets` 语义由「硬上限」改「软预警线」（值不变：user 2000 / agent 4000）；`BUDGET_EXCEEDED` 保留码位但不再产生；
+- 计数单位是 JS 字符（UTF-16 code unit）：中文场景一个汉字计 1，可预测；真正的收敛回路是整理机（F6）。
+
+### 4. `memory/*` 会话事件：词汇已声明，运行时自适应派发（rc.6 约束）
+
+> 一句话：事件类型已经声明在 `types.d.ts`，但运行时只在 harness 认它时才派发——否则那个会话下次加载会被持久化层整体拒绝。
+
+- `types.d.ts` 声明合并了 `memory/added|updated|removed|recalled|snapshot` 的 SessionEventMap 词汇与载荷形状；
+- rc.6 无插件事件注册面：`KNOWN_SESSION_EVENT_TYPES` 不含 `memory/*`，且 `Session.append` 无法标记 `ignorable`——append 未注册类型会让该会话下次加载被持久化层整体拒绝（read 路径 enforce，见 session-persistence coordinator）；
+- 因此运行时只在 `KNOWN_SESSION_EVENT_TYPES.has(type)` 时才 append（未来 harness 收录后自动开启）；当前审计链 = `approval/asked+decided`（已知类型，reason 携带完整写载荷）＋ 插件审计表 audit。
+
+**这是与官方机制对齐后的必然选择**，不是偷工减料。rc.1 / 0.1.3-alpha.1 复核（2026-09-04）：append 第三参仍为 surface-only SurfaceIntent、仍无 ignorable 写入通道，本决策不变。
+
+### 5. 审计 = 审批对 ＋ 审计表 ＋ 快照三条链
+
+> 一句话：写的证据链有三条，各自独立，谁断了都能从另外两条看出来。
+
+| 时机 | 落什么 |
+|---|---|
+| 每次写 | `approval/asked`（reason 全文载荷）→ `approval/decided`（结果）→ audit 行（outcome 含 policy 来源、entry id、会话 id） |
+| 每次被拒写 | `<action>-denied` audit 行（turn 外 gate 路径无审批审计对，这是拒绝证据链） |
+| 每次 recall | `audit(recalled)` 行 |
+| 每次快照 | `audit(snapshot)` 行（与注入文本逐字一致） |
+
+**卸载插件后**：记忆库与会话日志保留，旧会话可正常加载（因为从不 append 未注册事件类型）。
+
+### 6. 替换/删除的并发与回滚
+
+> 一句话：定位与变更在同一个事务里做；审批期间世界变了，就响亮报错，不静默改错东西。
+
+- replace/remove 在 Provider 层事务内「定位＋变更」原子执行；Service 层审批前先定位（零/多命中不打扰用户）；
+- 审批期间条目被并发写移除：审批后重定位失败即结构化报错（响亮，不静默）；
+- seed 整批先全量预算预检，通过后同步插入（无 await 间隔），不存在部分写入；
+- **写定位 = 会话可见集**（决策 11 的可见性语义扩展到写路径）：replace/remove/consolidate 的匹配只命中共享层 ＋ 写方会话 agent 键的条目（显式 `input.agentKey` 覆盖），`workspace` 层再按写方会话 cwd 键过滤——跨 agent、跨工作区条目对会话不可见，也就不可能被误改；
+- 提案裁决（`proposalDecide`）同样在事务内「定位＋更新」原子执行：approve 与 dismiss 并发先到者赢；`/memory proposals approve` 在写成功后容忍提案已被并发裁决（不掩盖成功写）。
+
+### 7. 工作区键
+
+> 一句话：workspace 条目按会话 cwd 的规范化绝对值隔离，Windows 下大小写不敏感。
+
+- workspace 条目按会话 cwd 的规范化绝对值隔离；Windows 下大小写不敏感（同一项目以不同大小写路径打开仍命中同一 workspace 层）；
+- 两个进程共用一个 `$DSH_HOME` 时，SQLite 以 busy_timeout 串行写，但「谁先写谁赢」，跨进程一致性不保证（学 Hermes 的官方警告，见 README 安全边界）。
+
+### 8. V2 观察面的命令写路径（turn 外审批门）
+
+> 一句话：`/memory` 命令不在模型回合里，但仍走**同一条**审批 waterfall——差异只在审计落点。
+
+- `/memory` 命令在模型回合之外执行，而审批服务 `ctx.approval.request` 要求 open turn（`approval/asked + approval/decided` 审计对必须被 turn 包围，这是 DSH 持久化日志的 commit/replay 硬边界）；
+- 命令写因此走**同一** `approval/request` waterfall（同一 answerer 链、同一 `writePolicy` 裁决），差异只在审计落点：turn 内路径落审批审计对，命令路径落插件审计表 ＋ `command/done`；被拒的命令写落 `<action>-denied` 行（见决策 2）；
+- 会话级 `never` 策略按公开 API（`approval.overrideOf`）在派发前预检，与审批服务同语义、不可绕过。
+
+这是对审批 seam 约束（审计对需 turn 包围）的最小偏离，已文档化并测试（`test/v2.test.mjs`）。
+
+**export/import 备份迁移对**：
+
+- `/memory export` 是纯只读路径（条目 ＋ 预算的 JSON 导出，schema 标记 `memory-export-v1`，不落审计、不走审批门）；
+- `/memory import <路径>` 或 `import '{...}'`（内联 JSON）读回该文档：校验 plugin/schema 标记与条目形状（未知 schema 版本响亮拒绝），条目数上限 `MAX_IMPORT_ENTRIES`（1000）；
+- 然后经 `service.seed` 单次审批 ＋ 全量预算预检 ＋ 单事务原子落盘；source/workspaceKey/agentKey 随文档保留，条目获得新 id 与新时间戳、召回计数归零，提案/审计行不迁移（预算仍由 Config 决定）。
+
+### 9. V2 面板只读
+
+> 一句话：面板对记忆内容只读，唯一的写动作是「整理全库」按钮登记一条标记（决策 21）；审批与写一律发生在 DSH 内置审批 UI ＋ `memory` 工具。
+
+- 面板（`dsh.client` 零构建抽屉）呈现：条目浏览/搜索/预算条/可观测三数/审计尾；
+- 审批与写操作一律发生在 DSH 内置审批 UI ＋ `memory` 工具（否则会与内置审批呈现重复并产生分歧）。
+
+**控件与颜色都借官方的**（前端优化方案）：
+
+- 控件一律 `require('@deepseek-ai/dsh-client-ui-primitives')`（宿主浏览器侧平台种子表：`Button`/`Input`/`Tag`/`StateDot`/`Switch`/`Tooltip`）；
+- 抽屉经 `react-dom/client` 的 `createRoot` 渲染（`react.createElement`，不用 JSX——**零构建不变**：无打包器、无新依赖，`exports["./client"]` 仍指向手写 `client.js`）；
+- 色值一律 `--dsw-alias-*` / `--dsw-static-*` / `--dsw-elevation-*` 令牌，亮暗主题自动跟随；插件自造 CSS 只剩定位、滚动与排布。
+
+**抽屉挂官方通栏浮层（`shell.overlay`）**：与 `dsh-tidewatch` 同一席位（`kind: 'list'; scope: 'root'`，框架级悬浮层，条目自己 opt-in 指针事件）；插件注册一个只交容器的条目，抽屉按需渲染进去。**由此删掉了 `placeOpenButton` 那段「量 tidewatch 徽章高度、把按钮抬到它之上」的让位逻辑——两插件之间唯一的硬耦合解除**；入口按钮留在自建 fixed 层（定位与 id 不变）。
+
+### 10. 检索引擎 = 大小写不敏感 instr ＋ 召回计数排序，不用 FTS5
+
+> 一句话：本仓库语料以中文为主，而内置 FTS5 的分词器对 CJK 子串查询无能为力——`instr` 才是对的引擎。
+
+- 实测（Node 22 内置 SQLite，FTS5 可用）：trigram 分词器无法索引单字 CJK 字符——`'中文测试'` 中查 `'中文'` 零命中；unicode61 把 CJK 连续段当一个 token，仅前缀可查；
+- query 大小写不敏感（lower() 折叠 ASCII；CJK 无大小写不受影响），与面板过滤、sessionQuery 文本检索语义一致；replace/remove/consolidate 定位同语义（`lib/match.mjs` 的 `findUniqueMatch` 统一折叠，store 层 lower(instr) 与之一致）；
+- 召回排序：query 命中页的条目 `recall_count` +1、`last_recalled` 落地（SCHEMA v3 列）；排序 `recall_count DESC, updated_at DESC`（高频即重要）。快照仍走 `listEntries` 创建序（冻结块稳定优先）；
+- 未来真正的升级路径是 harness 出现 embedding seam 后的语义召回（Provider 角色天然兼容），不是 FTS5——本仓库已按决策 16 落地检索/嵌入 seam 的最小接入。
+
+### 11. 第三维 agentKey（per-agent 作用域，SCHEMA v3）
+
+> 一句话：条目与提案多一维 agent 键，可见性与写定位都按它过滤；模型看不到这个参数，由写方会话自动决定。
+
+- 写方 session 的 `header.agentPreset` 经 `agentKeyOf` 规范化（缺失 → `''` 共享层）；条目与提案落 `agent_key`；
+- 可见性：`agent_key === '' || === 会话 agentKey`，且 scope 规则不变；预算仍按 track×scope 计（agentKey 不新增预算维度）；
+- 工具不暴露 agentKey 参数——由写方 session 自动决定，模型不可选，避免污染。
+
+**可见性与写定位（0.3.0 起一致生效）**：
+
+| 面 | 行为 |
+|---|---|
+| 快照 / 提案 | 沿用会话可见集 |
+| `memory` 工具的 `query`、`memory_recall` | 按会话 agentPreset 过滤（`service.query` 的 `opts.agentKey`，显式给定才过滤） |
+| replace / remove / consolidate 的匹配 | 同样按可见集过滤（见决策 6） |
+| 管理面（`/memory` 命令、Web 面板）与未传 agentKey 的插件调用 | 保持全量视图（向后兼容）；面板与命令列表渲染非共享条目的 agent 键以便管理 |
+
+### 12. 语言面（`Config.language`，en/zh）与错误文案的分界
+
+> 一句话：随语言切的只有给人看与给模型看的文案；**结构化错误码与 message 保持英文**，那是跨语言的审计契约。
+
+**随语言切换**（`lib/strings.mjs` 词表，en 为源文、zh 为译文、未知语言回退 en）：
+
+- `memory` / `memory_recall` 的工具描述与参数说明；
+- 预热段（含表达约束）；
+- `/memory` 命令输出；
+- Web 面板标签（语言经 `/api/memento/*` 响应的 `language` 字段下发）。
+
+**不随语言切换**：结构化错误码（`INVALID_INPUT`、`BUDGET_EXCEEDED`…）与 message——模型按 code 分支（整合后重试等），不受 language 影响。
+
+**其他**：非法 `language` 值在加载期响亮失败（schema 层 union ＋ apply 直调路径双保险）；默认 `en` 与 DSH 核心提示一致。`/memory export` 是纯只读路径（条目 ＋ 预算的 JSON 导出，备份/迁移/透明性），不落审计、不走审批门——与 Claude Code / Codex「记忆是用户可读的纯文本」的精神对齐。
 
 ## V3 协同（F12/F13，接口已就位，文档对齐）
 
 ### F12：seed 与 dsh-claude-move 的对接方式
+
+> 一句话：`ctx.memory.seed` 已就位——外部迁移只需把 `memory/*.md` 解析成条目数组喂进来，服务缺失时优雅跳过，不破坏对方现有行为。
 
 `ctx.memory.seed(entries, write)` 已在 V1 实现：一次 `ask` 审批整批、任一条超预算整批拒绝、逐条落审计（source 透传）。dsh-claude-move 接入时的对齐约定：
 
@@ -151,6 +232,8 @@ memory 工具(add)
 - v2 起 seed 不再因预算整批失败；越预警线照常落盘。
 
 ### F13：auto-review hook 点（不实现第二模型）
+
+> 一句话：未来的第二个模型想接管记忆写审批，只需在 `approval/request` 上挂自己的 answerer，本插件一行都不用改。
 
 本插件暴露的接缝：`write.gate`（写上下文里的可选函数）。默认走 `ctx.approval.request`（turn 内、落审批审计对）；`/memory` 命令在 turn 外以 `makeCommandGate` 注入同一 waterfall 的无审计对变体。未来的 dsh-auto-review 若想接管记忆写审批，可在 `approval/request` 上注册自己的 answerer（先于/取代人类 answerer），无需改本插件一行——审批 answerer 链本身就是 hook 点；`writePolicy` 为 `ask` 时 `applyWritePolicy` 委托 `next()`，任何挂链的第二模型 answerer 都能接管。
 
@@ -165,6 +248,8 @@ memory 工具(add)
 
 ### 13. 协议与实现分离：写语义抽进 lib/protocol.mjs（零 DSH 依赖）
 
+> 一句话：写语义整体抽进 `lib/protocol.mjs`，`index.mjs` 只剩薄薄一层 DSH 适配——协议文档与实现不可能各写一份。
+
 0.4.0 把 MemoryService 的写语义整体抽进 `lib/protocol.mjs` 的 `MemoryProtocolCore`：预算预检 →
 gate → 预算复审 → 落盘 → 审计的完整流水线、唯一子串定位、`<action>-denied` 审计行、协议级
 校验（`validateMemoryEntry` / `validateExportEnvelope` / `validateAuditRow` / `normalizeTags`）。
@@ -175,6 +260,8 @@ gate → 预算复审 → 落盘 → 审计的完整流水线、唯一子串定�
 
 ### 14. store schema v4：条目 tags + version（协议 v1 条目规范）
 
+> 一句话：条目多两列（标签与版本号）：标签有协议级上限并在协议层校验，版本号让审计链能重建同一条目的演进史。
+
 - `tags`：JSON 数组列；协议常量上限 16 个 × 每标签 32 字符，trim/去重/禁控制字符，
   协议层 `normalizeTags` 校验（预算只计 text，tags 不计）。
 - `version`：整数列，新条目 1；每次 `replace` 在 Provider 事务内 `version = version + 1`；
@@ -184,6 +271,8 @@ gate → 预算复审 → 落盘 → 审计的完整流水线、唯一子串定�
   过新版本照旧响亮拒绝。
 
 ### 15. 适配器注册表（ctx.memoryAdapters）与一致性套件
+
+> 一句话：适配器是纯数据转换器（只转换、绝不调模型抽事实），一致性套件可对外分发，第三方 Provider 拷贝目录即可跑。
 
 - `lib/registry.mjs` 的 `MemoryAdapterRegistry`：`register`（返回 disposer，id 冲突响亮）/
   `list` / `adapt` / `export`；index.mjs 经 `ctx.effect` 注册三个参考适配器
@@ -200,6 +289,8 @@ gate → 预算复审 → 落盘 → 审计的完整流水线、唯一子串定�
 ## P0：检索与嵌入 seam（可插拔检索 + 伪嵌入向量召回）
 
 ### 16. 检索 Provider seam（lib/retrieval.mjs）与嵌入 Provider seam（lib/embedding.mjs）
+
+> 一句话：检索与嵌入都做成完整的三角色 seam；默认主路径是零依赖的关键词检索器，向量召回只在真有语义嵌入时才启用。
 
 把 memory recall 的"检索"抽成可插拔检索器，并新增嵌入 Provider 接口，两者都是完整的
 三角色 seam（Service Definition / Provider / Consumer），零 DSH 依赖、零重依赖：
@@ -244,6 +335,8 @@ gate → 预算复审 → 落盘 → 审计的完整流水线、唯一子串定�
 
 ### 17. 观察通道（S4b）：读历史 → 让当前会话的模型推断 → 过审批门落库
 
+> 一句话：读你自己的历史发言 → 让当前会话的模型推断 → 过审批门落库；不新增基础设施，两道闸把「读谁的、读哪条」钉死。
+
 画像采集的第二条腿。问卷问「你想要什么」，观察看「你实际怎么做」；五个仅观察面（思维方式与思辨 /
 人格特质 / 情绪模式与心理强度 / 自我认知 / 决策与行动风格）自陈最不可靠，只由观察覆盖。方案与
 实测校准见 `docs/观察通道方案.md`、`施工清单.md` 的 S4b-0 行。
@@ -282,6 +375,8 @@ gate → 预算复审 → 落盘 → 审计的完整流水线、唯一子串定�
 
 ### 18. 整理机（F6）：合并 ＋ 降级留痕，语义判断归当前会话的模型
 
+> 一句话：记忆只增不减，整理机就是那条负反馈回路——合并讲同一件事的条目，旧条目降级留痕而非物理删。
+
 拆掉硬上限之后（决策 12 / v2 规格 3.1），记忆只增不减。整理机就是那条**负反馈回路**：把散落各处、
 其实在讲同一件事的条目并成一条，旧条目**降级留痕**而不是物理删。方案见 `docs/F6F7施工方案.md`。
 
@@ -311,10 +406,12 @@ gate → 预算复审 → 落盘 → 审计的完整流水线、唯一子串定�
   （自上次整理以来 ≥2000 字符或 ≥10 条，另加 12 小时兜底），过线时落一行 `tidy-due` 审计（同进程
   按小时节流）并让下一个会话的预热段末行带一句提示；真整理由 `/memory tidy` 或用户开口显式发起。
   监听器整体吞住异常——该事件是串行派发，抛错会以错误收尾该轮，只读检查不该有这个权力。
-- **v1 不做**：跨桶合并、Dream、回滚（S5）。全库整理的**排队式登记**由决策 21 补上（登记是标记表，整理仍由模型在会话内显式跑）。已降级条目不进
+- **v1 不做**：跨桶合并、Dream、回滚（S5）。全库整理的**登记**由决策 21 补上、**执行**由决策 25 补上（登记落标记表，整理由点击触发的那一轮无头会话做，或由模型在会话内显式跑）。已降级条目不进
   `/memory export`（导出信封没有 `status` 字段，导回来会变成在场条目）。
 
 ### 19. 可观测三数（F7）：重复率 / 召回命中率 / 注入量
+
+> 一句话：重复率 / 召回命中率 / 注入量三个数由纯函数从库里现成数据算出；成功率刻意留白，因为本仓库没有那条信号源。
 
 「更懂你」这件事要能被测量，否则调优全靠感觉。三个数都由**纯函数**从库里现成数据算出，零模型、
 零新表、不落审计（`/memory stats` 与 `GET /api/memento/stats` 同源，`lib/stats.mjs`）。
@@ -332,6 +429,8 @@ gate → 预算复审 → 落盘 → 审计的完整流水线、唯一子串定�
   比留白更坏。
 
 ### 20. 治理（S5）：回滚是单向逆运算，裁决方向是代码不变量
+
+> 一句话：回滚严格互逆（只允许 superseded → active），裁决方向由表决定——「能力听观察」是代码不变量，不是提示词纪律。
 
 F6 让记忆有了负反馈回路，但那条回路当时只能往一个方向走：`active → superseded` 有写入路径，
 反方向没有。S5 补上这一条，并把「观察与自陈打架时听谁」从 skill 里的软口径变成表驱动的机制。
@@ -374,17 +473,21 @@ F6 让记忆有了负反馈回路，但那条回路当时只能往一个方向�
 
 ### 21. 收边（面板两处 ＋ 门牌）：三数上屏，全库整理排队
 
-数据面早已就绪、界面上还空着的两处补上：面板读三数，面板按钮**排队**全库整理。方案见
+> 一句话：三数上屏、面板按钮登记全库整理标记。**按钮的行为后来在决策 25 升级为「点一下即跑」**，本节保留登记与门牌那一半。
+
+数据面早已就绪、界面上还空着的两处补上：面板读三数，面板按钮登记全库整理（执行部分见决策 25）。方案见
 `docs/收边方案.md`。
 
 - **三数行由服务端渲染，面板照抄**：`GET /api/memento/stats` 返回 `stats` 与渲染好的 `lines`
   （`statsLines` 与 `/memory stats` 同源）；`client/client.js` 把 `lines` 逐行贴进抽屉的「可观测三数」
   区，语言跟随响应的 `language`。措辞只有一处出处，命令面与面板不会漂移；面板不重算任何数。
-- **按钮是排队，不是动作**：点击 → `POST /api/memento/tidy-request` → 新表
+- **按钮登记标记**：点击 → `POST /api/memento/tidy-request` → 新表
   `tidy_requests(id, created_at, status)`（SCHEMA v6 → **v7**）落一条 `pending` 标记 → **下一个会话**
   的预热段末行追加一句「用户点过全库整理，请跑一次 memory tidy（全库）」→ 模型在会话内跑完落写
   （`supersede`）时标记转 `done` 并落一行 `tidy-request`/`cleared` 审计。登记只写标记：不调模型、
-  不碰条目、不经后台通道；整理动作永远是会话内、过审批门的显式写。
+  不碰条目、不经后台通道。
+  **决策 25 起语义升级**：同一次点击还会当场起一轮无头会话去整理（现为默认行为）；本节描述的「只排队」
+  退成 `tidy.enabled: false` 时的退回档。
 - **登记幂等**：已有 `pending` 就原样返回它（`created: false`），重复点击不堆行；`done` 行保留在库里，
   作为「用户点过、模型跑过」的痕迹（清除只改状态，绝不物理删）。
 - **面板动作没有会话，因此走 turn 外 gate**：`connection.fetch` 路由没有 agent，审批服务那条
@@ -400,6 +503,8 @@ F6 让记忆有了负反馈回路，但那条回路当时只能往一个方向�
   面板不做任何写记忆操作。
 
 ### 22. 红队第二轮修复（0914-18 战报的 6 条）：静默不一致的收口
+
+> 一句话：一轮敌对视角的只读红队撬出 2 高 4 中，六条同型——库、审计、会话可见集三处说法对不上，防线并没有被绕过。
 
 一轮敌对视角的只读红队（真 WebServer ＋ 真 `client-connection` ＋ 真 store 临时库）在 F5 / F6 / S5 /
 收边 / v7 迁移五个重点面上撬出 2 条高危、4 条中危。六条的病灶同型：**库、审计、会话可见集三处的
@@ -427,6 +532,8 @@ F6 让记忆有了负反馈回路，但那条回路当时只能往一个方向�
 - **中 1 · `facet` 可写是登记在案的设计边界**：详见决策 20。
 
 ### 23. 无头执行体与调度（F8）：机械硬杠定「够不够确定」，后台轮只走够确定那一档
+
+> 一句话：能不能不经人眼落写由五根机械硬杠判定，后台轮只走「够确定」那一档；执行体在插件之外（系统计划任务 ＋ 自带 `headless` profile）。
 
 - **判定归代码，语义归模型，两者不许互相顶替。** 合并提议仍由当前会话的模型给出（哪几条在讲同一件事），
   但**能不能不经人眼落写**由 `lib/consolidate.mjs` 的 `gradeMerge` 用五根硬杠判定：`same-bucket` /
@@ -462,6 +569,8 @@ F6 让记忆有了负反馈回路，但那条回路当时只能往一个方向�
   **生效**策略，不拿全局策略充数），不会有谁去改判据重试。
 
 ### 24. 观察通道的到期提示与无人值守轮（L2 ＋ L3）：提示归提示，自动跑的路同样在插件之外
+
+> 一句话：到期提示只报同步读得出的数，无人值守观察轮复用决策 23 的执行体与调度——两者都不在插件内起定时器或后台模型通道。
 
 **L2 到期提示（`observe-due`）。** 与整理机同形：`agent/turn-stopping` 只读算一次「距上次观察多久」，
 过 `OBSERVE_DUE_DAYS`（7 天）时落一行 `observe-due` 审计（同进程按 `OBSERVE_NOTICE_INTERVAL` 小时节流），
@@ -501,56 +610,39 @@ F6 让记忆有了负反馈回路，但那条回路当时只能往一个方向�
 一处（126 条，居首），其余工作区要另立任务；③ 观察轮自身的会话会进下一次扫描的候选（cwd 相同），
 内容靠任务文本标记排除——会话级开关（F5）只能整会话排除，而观察轮必须开着记忆才能扫描自己。
 
-### 25. 点一下即跑：入口在插件，执行体仍在插件之外（F9）
+### 25. 点一下即跑（F9）
 
-**从「排队」到「真跑」的差别只在触发者。** 决策 21 的按钮只登记标记，等下一个会话开口；本决策把
-用户点下的那一下接到执行体上：登记标记之后直接起一轮无头会话（决策 23 的同一形态，`dsh --profile
-headless "<任务>"`）。这不是新增第二种执行体，是把已有的那一个从「系统计划任务到点唤起」扩到
-「用户显式点击」。于是插件的红线从「不新增后台进程」改写成**「不新增看不见的后台工作」**：允许的
-只有用户触发的一次性、真实会话，且它全程留痕（`tidy-run` 审计行 ＋ 每次运行的日志文件）、产出归入
-批次号可整批撤回、要收口就改 `tidy.enabled` 或 headless profile 的粒度策略。
+> 一句话：面板按钮从「只登记标记」改成「登记 ＋ 当场起一轮无头会话」。触发者是用户，执行体仍在插件之外。
 
-**状态不落新表，由三样现成的凭据算出来。** `buildTidyRunState`（`lib/consolidate.mjs`，纯函数）
-把「待整理标记 ＋ `tidy-run` 起止行 ＋ 批次账本」折成 `idle / pending / running / done / failed`
-五档，面板那一行是它的输出。刻意不设第四份持久状态：多一份就要多一套对不上的可能。三个判据值得
-写进账：
-- **失败优先于进行中**：`started` 与 `failed` 撞在同一毫秒是常态（假执行体同步退出、真执行体秒退），
-  先判 running 会把「已经失败」读成「还在跑」，面板就此永远转圈；
-- **标记过期（判活窗口内没有任何 `started` 行）算失败**：标记是「有人点过」的凭据，过期说明执行体
-  没起来。说「没跑过」是把一件发生过的事抹掉。
-- **正常退出也是收尾凭据**：一轮跑完而没落下任何批次（模型回 `NOTHING`）时，批次收尾行不会出现；
-  缺它面板会永久停在「整理中」、按钮一并被禁掉。故 `tidy-run` 多一档 `exited`——它说的是「这一轮
-  到此为止」，不是「整理成功」，成功与否仍由批次说了算。
+| 项 | 内容 |
+|---|---|
+| **背景** | 决策 21 的按钮只登记标记，等下一个会话开口才整理：用户点下的那一下没有接到执行体上 |
+| **结论** | 点一下 = 登记标记 ＋ 起一轮无头会话（决策 23 的同一形态，`dsh --profile headless "<任务>"`）。没有新增第二种执行体，是把已有的那一个从「计划任务到点唤起」扩到「用户显式点击」 |
+| **红线改写** | 「不新增后台进程」→ **「不新增看不见的后台工作」**。允许的只有用户触发的一次性真实会话，且它全程留痕（`tidy-run` 审计行 ＋ 每次运行的日志文件）、产出归入批次号可整批撤回、要收口就改 `tidy.enabled` 或 headless profile 的粒度策略 |
+| **落点** | `index.mjs`（路由与 `fireTidyRound`）· `lib/spawn.mjs`（执行体解析）· `lib/consolidate.mjs`（`buildTidyRunState`）· `client/client.js`（状态行与按钮） |
 
-**真机上撞出来的五处坑（都有测试钉住，源码里也留了说明）。**
-- **`.cmd` 不能直接进 `spawn`**（`EINVAL`），而 Windows 上的候选执行体之一就是 `dsh.cmd`。走 shell，并把
-  可执行文件路径与任务文本各自双引号包住、整条命令作为单个参数 ＋ `windowsVerbatimArguments`——
-  于是路径里的空格与任务里的 `& % ^ | < >` 都是字面量。代价：任务文本不能含双引号（模板里包动作名
-  一律用反引号），触到即响亮拒绝。
-- **`detached: true` 会把子进程的输出一起丢掉**（实测：进程正常退出、日志一个字都没有；把日志 fd
-  交给 `stdio` 也一样）。故这一轮**不 detached**（父进程本就是常驻宿主），日志用管道接；到点收口改用
-  **进程树**（Windows `taskkill /T /F`，其余平台杀进程组），不留 shell 层的孤儿。
-- **批处理文件必须 CRLF**：LF 的 `.cmd` 报 `'.cmd' is not recognized...`（cmd.exe 按行读，头几行被并成
-  一行乱码）。`.gitattributes` 把 `*.cmd` / `*.bat` 钉成 CRLF——这事必须钉在仓库里，否则换台机器重新
-  检出就会神秘失败。
-- **非 ASCII 路径进不了 cmd 的解析**：仓库路径含中文时，命令被截断成 `'.cmd'`。端到端用例因此把启动器
-  壳复制到一个 ASCII 临时目录再跑；真实运行里这一条由用户自己的路径决定（`tidy.exec` 可指绝对路径）。
-- **写死一个命令名，不等于那个命令躺在 PATH 里**：执行体原先按平台猜一个名字（`dsh.cmd` / `dsh`），
-  而那个名字只在全局安装后才存在；宿主从源码直跑时（`node apps/cli/lib/bin.js web`）PATH 里没有它，
-  面板每点一次都换成一句 cmd.exe 的「不是内部或外部命令」，重试按钮永远等不到成功一次。现在改成
-  **探测**（`lib/spawn.mjs` 的 `resolveTidyExec`）：配置点名的 `tidy.exec` → 宿主自身（宿主启动命令
-  行里的 CLI 脚本 ＋ 宿主自己的 node，同一个 DSH、同一份代码与 profile 语义）→ PATH 上的 `dsh.cmd` /
-  `dsh.exe` / `dsh`。三条全不成立就在下发进程**之前**失败，并说清试过哪三条、哪个设置能覆盖它。
+**状态不落新表。** `buildTidyRunState`（`lib/consolidate.mjs`，纯函数）把「待整理标记 ＋ `tidy-run` 起止行 ＋ 批次账本」折成五档 `idle / pending / running / done / failed`，面板那一行就是它的输出。刻意不设第四份持久状态：多一份就要多一套对不上的可能。三条判据：
 
-**观察与自检的分工。** 一轮后台整理看得见哪个工作区，取决于启程时的 cwd（闸一口径）：面板按钮给不出
-工作区，故落在启动器自己的 cwd 上（`dsh web` 的约定：运行命令所在目录即默认 workspace 根）。别的
-cwd 下的 workspace 层条目这一轮看不到——这是范围，不是遗漏，任务文本里也如实告诉了那一轮的模型。
+| 判据 | 它挡的是什么 |
+|---|---|
+| **失败优先于进行中** | `started` 与 `failed` 撞在同一毫秒是常态（假执行体同步退出、真执行体秒退）。先判 running 会把「已经失败」读成「还在跑」，面板就此永远转圈 |
+| **标记过期算失败** | 判活窗口内没有任何 `started` 行，说明执行体没起来。标记是「有人点过」的凭据——说「没跑过」等于把一件发生过的事抹掉 |
+| **正常退出也是收尾凭据** | 一轮跑完却没落下任何批次（模型回 `NOTHING`）时，批次收尾行不会出现；缺它面板会永久停在「整理中」、按钮一并被禁。故 `tidy-run` 多一档 `exited`——它说的是「这一轮到此为止」，不是「整理成功」，成功与否仍由批次说了算 |
 
-**仍缺（诚实登记）**：① 面板的完成态由轮询（4 秒一次、最多 3 分钟）与下一次打开抽屉取到；更长的轮次
-不会自己把结果推进来，刷新一下即见。② 状态判活窗口取 `tidy.timeoutMs`（默认 8 分钟）；真跑很长的
-整理轮要把它调大，否则进程还在跑、状态行已经说「失败」。③ 一轮一个工作区，多工作区各自起一轮
-（与观察轮同一条边界）。④ 宿主自身那条执行体复刻的是「宿主自己的 node ＋ 它启动命令行里的 CLI
-脚本」，**不带 `process.execArgv`**（`--import tsx` 那类）。宿主若是 `node --import tsx app.ts` 起的，
-脚本后缀校验会把 `.ts` 挡下、退回 PATH 探测——退回是刻意的：宁可换一条路，也不硬拼一条跑不起来的
-命令。⑤ 起了进程却在判活窗口内一直没有收尾凭据的轮次（宿主重启、进程被外部结束），状态机会在窗口
-过后判 `abandoned` 并把按钮解开；窗口之内它仍算「在跑」，那一轮若真的还活着就不会被误报。
+**真机上撞出来的五处坑**（都有测试钉住，源码里也留了说明）：
+
+- **`.cmd` 不能直接进 `spawn`**：Windows 实测 `EINVAL`，而候选执行体之一就是 `dsh.cmd`。走 shell，把可执行文件路径与任务文本各自双引号包住、整条命令作为单个参数 ＋ `windowsVerbatimArguments`，于是路径里的空格与任务里的 `& % ^ | < >` 都成了字面量。代价是任务文本不能含双引号（模板里包动作名一律用反引号），触到即响亮拒绝。
+- **`detached: true` 会把子进程的输出一起丢掉**：实测进程正常退出、日志一个字都没有（把日志 fd 交给 `stdio` 也一样）。故这一轮**不 detached**（父进程本就是常驻宿主），日志用管道接；到点收口改用**进程树**（Windows `taskkill /T /F`，其余平台杀进程组），不留 shell 层的孤儿。
+- **批处理文件必须 CRLF**：LF 的 `.cmd` 报 `'.cmd' is not recognized...`（cmd.exe 按行读，头几行被并成一行乱码）。`.gitattributes` 把 `*.cmd` / `*.bat` 钉成 CRLF——这事必须钉在仓库里，否则换台机器重新检出就会神秘失败。
+- **非 ASCII 路径进不了 cmd 的解析**：仓库路径含中文时命令被截断成 `'.cmd'`。端到端用例因此把启动器壳复制到一个 ASCII 临时目录再跑；真实运行里这一条由用户自己的路径决定（`tidy.exec` 可指绝对路径）。
+- **写死一个命令名，不等于那个命令躺在 PATH 里**：执行体原先按平台猜一个名字（`dsh.cmd` / `dsh`），而它只在全局安装后才存在；宿主从源码直跑时（`node apps/cli/lib/bin.js web`）PATH 里没有它，面板每点一次都换成一句 cmd.exe 的「不是内部或外部命令」，重试按钮永远等不到成功一次。现在改成**探测**：配置点名的 `tidy.exec` → 宿主自身（宿主启动命令行里的 CLI 脚本 ＋ 宿主自己的 node，同一个 DSH、同一份代码与 profile 语义）→ PATH 上的 `dsh.cmd` / `dsh.exe` / `dsh`；三条全不成立就在下发进程**之前**失败，并说清试过哪三条、哪个设置能覆盖它。
+
+**观察与自检的分工（范围，不是遗漏）。** 一轮后台整理看得见哪个工作区，取决于启程时的 cwd（闸一口径）：面板按钮给不出工作区，故落在启动器自己的 cwd 上（`dsh web` 的约定——运行命令所在目录即默认 workspace 根）。别的 cwd 下的 workspace 层条目这一轮看不到，任务文本里也如实告诉了那一轮的模型。
+
+**仍缺（诚实登记）：**
+
+1. 面板的完成态由轮询（4 秒一次、最多 3 分钟）与下一次打开抽屉取到；更长的轮次不会自己把结果推进来，刷新一下即见。
+2. 状态判活窗口取 `tidy.timeoutMs`（默认 8 分钟）；真跑很长的整理轮要把它调大，否则进程还在跑、状态行已经说「失败」。
+3. 一轮一个工作区，多工作区各自起一轮（与观察轮同一条边界）。
+4. 宿主自身那条执行体复刻的是「宿主自己的 node ＋ 它启动命令行里的 CLI 脚本」，**不带 `process.execArgv`**（`--import tsx` 那类）。宿主若是 `node --import tsx app.ts` 起的，脚本后缀校验会把 `.ts` 挡下、退回 PATH 探测——退回是刻意的：宁可换一条路，也不硬拼一条跑不起来的命令。
+5. 起了进程却在判活窗口内一直没有收尾凭据的轮次（宿主重启、进程被外部结束），状态机会在窗口过后判 `abandoned` 并把按钮解开；窗口之内它仍算「在跑」，那一轮若真的还活着就不会被误报。

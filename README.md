@@ -2,9 +2,9 @@
 
 # yammory_system
 
-**Your assistant stops asking you what it should already know.**
+**您的助手不再追问那些它本该知道的事。**
 
-It remembers you across sessions — how deep you are in each subject, how you like to be spoken to, what you have already settled — and no write lands without your approval, so nothing about you is stored behind your back.
+它跨会话记得您——每个科目里您到了哪一层、您喜欢别人怎么跟您说话、哪些事您已经定下来了——并且没有您的批准，任何一条写入都不会落盘，所以关于您的事，不会被背着您存下来。
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![DSH plugin](https://img.shields.io/badge/dsh--plugin-✅-green)](https://github.com/topics/dsh-plugin)
@@ -12,9 +12,9 @@ It remembers you across sessions — how deep you are in each subject, how you l
 [![CI](https://img.shields.io/github/actions/workflow/status/KhalilYamber/yammory-system/ci.yml?branch=main&label=CI)](https://github.com/KhalilYamber/yammory-system/actions)
 [![Version](https://img.shields.io/github/v/tag/KhalilYamber/yammory-system?label=version)](https://github.com/KhalilYamber/yammory-system/releases)
 
-[English](README.md) · [简体中文](README-zh.md) · [Español](README-es.md) · [Português](README-pt.md) · [हिन्दी](README-hi.md)
+[简体中文](README.md) · [English](README-en.md) · [日本語](README-ja.md) · [Русский](README-ru.md)
 
-<sub>Distribution: the GitHub channel only — there is no npm package and no marketplace listing.</sub>
+<sub>分发渠道：仅 GitHub 一条——没有 npm 包，也没有市场上架。</sub>
 
 </div>
 
@@ -22,13 +22,13 @@ It remembers you across sessions — how deep you are in each subject, how you l
 
 ## Why this exists
 
-A capable assistant is still an assistant with amnesia. Every session it starts over: it does not know that you already understand eigenvectors but have never touched a tensor network, that you would rather be corrected than encouraged, or that you decided three weeks ago not to take that route. So you re-introduce yourself, again and again, and the conversation that could have started at the interesting part starts at zero.
+一个有本事的助手，依然是个失忆的助手。每次会话它都从头来过：不知道您已经懂了特征向量、却从没碰过张量网络；不知道您宁可被纠正、也不愿被鼓励；也不知道三周前您已经决定不走那条路。于是您一次次重新自我介绍，而这场本可以从有趣处开始的对话，从零开始。
 
-`yammory_system` gives DeepSeek Harness a place to keep that knowledge, and a way to use it without guessing. Three things separate it from a memory warehouse:
+`yammory_system` 给 DeepSeek Harness 一个地方存住这些知识，以及一套不去猜也能用上它的办法。三件事让它区别于一个记忆仓库：
 
-- **It decides how to speak before it searches.** A seven-facet profile carries a per-domain knowledge level, so the assistant knows what vocabulary you can take before it answers — the injection happens at prompt assembly, not after a retrieval step.
-- **Nothing is written without you.** Every write path is forced through DSH's own approval gate inside the service. A denied write leaves evidence too; a silent write is not a state this plugin can reach.
-- **You can check its work.** Everything the model saw is logged, the store is a plain SQLite file you can browse, export and audit, and a whole category of mistakes is prevented by design rather than by discipline.
+- **先决定怎么说话，再去检索。** 七面画像携带分领域知识水位，所以助手在开口之前就知道您能接住哪些词——注入发生在提示组装时，而非检索之后。
+- **没有您，什么都不写。** 每条写路径都被强制经过服务内部 DSH 自己的审批门。被拒的写同样留证；静默写入不是本插件能到达的状态。
+- **它的工作您可以查。** 模型看过的每一句都有记录，库是一个您可以浏览、导出与审计的普通 SQLite 文件，一整类错误由设计拦下，而非靠自觉。
 
 ## Install
 
@@ -36,27 +36,27 @@ A capable assistant is still an assistant with amnesia. Every session it starts 
 # 1. install the bundle into your profile
 dsh plugin --profile web add "github:KhalilYamber/yammory-system#main"
 
-# 2. restart, then verify the row
+# 2. restart and verify the row
 dsh --profile web --dump-config | grep -A3 'id: yammory_system'
 ```
 
-Other channels and removal:
+其他渠道与卸载：
 
-- **git channel** (latest `main`): `dsh plugin --profile web add git+https://github.com/KhalilYamber/yammory-system.git`.
-- **tarball channel**: `npm pack` in this repo, then `dsh plugin --profile web add ./yammory_system-<version>.tgz`.
-- **uninstall**: `dsh plugin --profile web remove yammory_system` (the memory database and session logs are kept).
+- **git channel**（最新 `main`）：`dsh plugin --profile web add git+https://github.com/KhalilYamber/yammory-system.git`。
+- **tarball channel**：在本仓库执行 `npm pack`，然后 `dsh plugin --profile web add ./yammory_system-<version>.tgz`。
+- **uninstall**：`dsh plugin --profile web remove yammory_system`（记忆库与会话日志保留）。
 
 ## The first minute
 
-After a restart you should see, without configuring anything:
+重启之后，什么都不用配，您就该看到：
 
-| Where | What |
+| 位置 | 是什么 |
 |---|---|
-| Sidebar foot | A **memory** entry beside Settings (it toggles the drawer; hide it with `panel.enabled`) |
-| Conversation header | A per-session memory switch — off stops injection, recall, writes and observation for that session |
-| Sidebar foot → the entry | The drawer: entries by track and layer, search, warning-line usage, recent audit, the three observability numbers, and a **Tidy the whole library** button that hands the work to the background (one headless session; it comes back as one status line plus a batch id) |
-| DSH settings → `yammory-system` | Every config field, each one with a question mark that explains it in plain words |
-| `/memory` | `list`, `query`, `stats`, `audit`, `session on|off`, `export` / `import <path>`, and more |
+| 侧栏底部 | 设置旁边的一个**记忆**入口（它开关抽屉；可用 `panel.enabled` 隐藏） |
+| 会话标题栏 | 会话级的记忆开关——关掉即停掉该会话的注入、召回、写入与观察 |
+| 侧栏底部 → 该入口 | 抽屉：按轨道与层级列出的条目、搜索、预警线用量、近期审计、三个可观测数，以及一个点一下就交给后台的**整理全库**按钮（起一轮无头会话，回来只留一行状态与批次号） |
+| DSH 设置 → `yammory-system` | 每一个配置项，各自带一个问号，用大白话解释它 |
+| `/memory` | `list`、`query`、`stats`、`audit`、`session on\|off`、`export` / `import <path>`，以及更多 |
 
 ## Table of contents
 
@@ -82,117 +82,130 @@ After a restart you should see, without configuring anything:
 
 ## How it works
 
-`yammory_system` is a capability seam, not another memory warehouse: a typed `ctx.memory` service, a local SQLite provider (`node:sqlite`, WAL, `0600`, at `$DSH_HOME/dsh-memento/memory.db`), and its consumers — the `memory` tool and a frozen snapshot injected into the system prompt.
+`yammory_system` 是能力接缝，不是又一个仓库：一个类型安全的 `ctx.memory` 服务、一个本地 SQLite 提供方（`node:sqlite`，WAL，`0600`，位于 `$DSH_HOME/dsh-memento/memory.db`），以及它的消费方——`memory` 工具与注入系统提示的冻结快照。
 
-Two tracks × two layers × per-agent key: a `user` track (facts about the user) and an `agent` track (environment facts and conventions), each split into `user-global` and `workspace` layers, isolated per `agentPreset`. The snapshot is frozen once per session at first prompt assembly and never changes mid-session. The warm-up block carries the speaking constraints and the standing profile, and closes with a one-line directory (`N more workspace / agent-track entries stay out of this block`) so the model knows there is something to fetch with `memory_recall` — the count is one line, the content stays on demand.
+两条轨道 × 两个层级 × 按 agent 隔离：`user` 轨（关于用户的事实）与 `agent` 轨（环境事实与约定），各自再分为 `user-global` 与 `workspace` 层，并按 `agentPreset` 隔离。快照在会话首次组装提示时冻结一次，会话中途不再变化。预热块承载表达约束与常驻画像，末行是一行目录（`本工作区与 agent 轨另有 N 条记忆不在本块`），让模型知道还有东西可按需取——只报条数，正文仍留在 `memory_recall` 那一侧。
 
 ## Capabilities
 
-- **The approval gate cannot be bypassed.** Every write path (`add` / `replace` / `remove` / `seed`) is forced through the approval waterfall inside the service, not in the tool layer. `writePolicy: ask | auto | off` is model-invisible configuration; `replace` / `remove` / `consolidate` carry the full text of the entries they change in the approval payload, and a denied write still lands a `*-denied` audit row.
-- **Model-visible ⟺ logged.** The injected snapshot lands verbatim in `system/message`; every write is reconstructable from `approval/asked` + `approval/decided` + the plugin's own audit table.
-- **Bounded and honest.** Soft per-track/per-layer warning lines (default user 2000 / agent 4000). Crossing one never blocks a write — it only flags that the layer is worth consolidating. Never truncated, never auto-compacted.
-- **Per-session switch.** Every session has its own memory switch (plugin-owned SQLite table, schema v6; default on). Off means injection stops (the frozen warm-up block is dropped at once), recall is refused (`SESSION_MEMORY_OFF`), writes are refused at the same layer as the approval gate, and the observation channel neither scans the session nor selects it as history. Management reads (`/memory list` / `budgets` / `audit` / `export`) stay available. Toggle with `/memory session on|off` or the header switch; the switch state itself never enters the session log, and its audit rows carry `text: null`.
-- **Watch, and let the watching run itself.** The observation channel reads a bounded slice of your own past messages and writes behavioural entries the questionnaire cannot reach; a read-only check now flags it when the last observation is over a week old (one `observe-due` audit row plus a line at the end of the next warm-up block), and a weekly scheduled round can run it unattended in ONE workspace: a headless `dsh` session scans, infers at most three evidence-backed entries and commits them through the same approval gate, allowed by its own write-policy source (`source:observation`, `auto` / `ask` / `off`). No timer lives inside the plugin; the schedule is a Windows Task Scheduler entry, exactly as for the tidy round.
-- **Tidy and measure.** A model-driven tidy pass merges entries that say the same thing into one `merged`-tagged entry and demotes the old ones to `superseded` — kept on disk, out of every session's view, never deleted. It never crosses buckets (`track × scope × agentKey`, plus `workspaceKey` on the workspace layer) and it never starts by itself. Whether a merge may be written without a human pass is decided by five mechanical hard gates (same bucket / member count / literal identity once punctuation, whitespace and symbols are stripped / similarity / coverage), never by the model's own confidence: only the tier whose members are identical after stripping punctuation, whitespace and symbols grades `auto` and may land unattended, while a fully paraphrased pair finishes below even the review line and simply grades `skip`, and a one-character change grades `review` and keeps the interactive route. A background round (a headless `dsh` session woken by your own scheduler) can therefore merge the mechanically unambiguous duplicates on its own, and leaves the rest waiting for you. The write pins its own audit source (`tidy-auto`), so a granular write policy (`source:tidy-auto`) can allow exactly that one path and keep every other write behind the approval gate. Separately, a read-only `agent/turn-stopping` check only flags that the backlog crossed the line (one `tidy-due` audit row plus a line at the end of the next warm-up block). `/memory stats` reports the three observability numbers (repetition rate, recall hit rate, injection volume) in the drawer too; the success rate is deliberately left blank, because this repo has no signal source for "did the injected block actually land". The panel's **Tidy the whole library** button now really runs: one click registers the marker (`tidy_requests`, schema v7) and starts a headless session that reads the plan and merges what it may, then clears the marker and leaves a batch id. The panel keeps one status line (`pending` → `running` → `done · merged N group(s)`, or `nothing needed merging`, and `failed` with a Retry button) plus the batch block's rollback button; no conversation, no context cost. The executor is **resolved** rather than guessed by platform (a configured `tidy.exec`, else the host's own launcher, else `dsh.cmd` / `dsh` on PATH), and a round that lands no batch still leaves its own `exited` receipt so the button cannot stay locked. `tidy.enabled: false` restores the queue-only behaviour.
-- **Govern the memory: roll a demotion back, arbitrate a conflict by facet.** `restore` walks a demotion the other way (`superseded → active`, `version` untouched, back into every session's view) and is the only route out of the demoted state. `arbitrate` settles the case where one fact carries two sources: it decides on **one facet**, and the direction comes from a fixed table — ability follows the observation, preference follows the self-report, and the other five facets keep **both** entries and tag each `gap` (the gap itself is the evidence). The table is the direction, so there is no reverse argument to pass, and inside a group the most recently updated entry is the one kept. Both actions ride the same approval gate, the same per-session switch and the same bucket rules as every other write, and both leave an audit trail: `restore` per entry, `arbitrate` per demotion (`text: null`, ids only), `arbitrate-tag` per tag, and one closing `arbitrate` summary naming who was kept, who was demoted and why.
+- **审批门不可绕过。** 每条写路径（`add` / `replace` / `remove` / `seed`）都被强制经过服务内部的审批 waterfall，而非工具层。`writePolicy: ask | auto | off` 是模型看不见的配置；`replace` / `remove` / `consolidate` 的审批载荷携带将被改动条目的全文，被拒的写同样落一条 `*-denied` 审计行。
+- **模型可见 ⟺ 已记录。** 注入的快照逐字进入 `system/message`；每次写都能从 `approval/asked` + `approval/decided` + 插件自有审计表重建。
+- **有界且诚实。** 每轨每层软预警线（默认 user 2000 / agent 4000）。越线绝不拦写——只提示这一格值得整合。绝不截断、绝不自动压缩。
+- **会话级开关。** 每个会话一个自己的记忆开关（插件自有 SQLite 表，schema v6；默认开）。关掉即四件同时停：**注入停**（该会话的冻结预热块立刻作废）、**召回禁**（`SESSION_MEMORY_OFF`）、**写入停**（与审批门同层拦截）、**观察不碰**（本会话不扫，历史选区也不选它）。管理面只读（`/memory list` / `budgets` / `audit` / `export`）照常可用。用 `/memory session on|off` 或输入框下方的开关切换；开关状态本身绝不进会话日志，审计行 `text` 恒为 `null`。
+- **观察，并让观察自己跑下去。** 观察通道读一段您自己的旧发言，落下面向「问卷够不到的那几面」的行为条目。
+  - **闹钟**：一条只读检查在距上次观察超过一周时提醒——一行 `observe-due` 审计 ＋ 下一次会话预热段末行一句。
+  - **无人值守轮**：一条每周的计划任务能在**一个工作区**里跑完它——无头 `dsh` 会话扫描、至多推断 3 条带证据的条目、过同一道审批门落库，放行靠它自己的写策略来源（`source:observation`，`auto` / `ask` / `off`）。
+  - **调度在哪**：插件里不装定时器；调度是一条 Windows 计划任务，与整理轮同理。
+- **整理与度量。** 模型驱动的整理把「在讲同一件事」的条目并成一条带 `merged` 标的条目，旧条目降级为 `superseded`——仍在库里，退出每个会话的可见集，绝不物理删。它不跨桶（`track × scope × agentKey`，workspace 层再加 `workspaceKey`），也绝不自动跑。
+  - **谁说了算**：合并能否不经人眼落写，由五根机械硬杠判定（同桶 / 条数 / 去标点、空白**与符号**后逐字一致 / 相似度 / 覆盖度），不由模型自报把握。只有「去过标点、空白与符号后逐字相同」的那一档判 `auto`、可以无人值守落写；改写过的同义句连 review 线都够不着，落 `skip`（原地不动）；一字之差落 `review`，等您过目。
+  - **后台轮**：由您自己的计划任务唤起的无头 `dsh` 会话自行合掉机制上明确无歧义的重复，硬杠不敢担保的部分留着等您。写入把审计来源钉成 `tidy-auto`，所以粒度写策略（`source:tidy-auto`）可以只放行这一条路，其余写入仍留在审批门后。
+  - **只提示，不动手**：只读的 `agent/turn-stopping` 检查只提示积压过线——一行 `tidy-due` 审计 ＋ 下个会话预热段末行一句。
+  - **三数**：`/memory stats` 打印可观测三数（重复率 / 召回命中率 / 注入量），抽屉面板里同样有这三行；成功率刻意留白，因为本仓库没有「注入之后对方是否真听懂了」这条信号源。
+  - **面板按钮**：**整理全库**现在真的会跑——点一下即登记标记（`tidy_requests`，schema v7）并起一轮无头会话去整理，会话里的模型自己读计划、自己合，跑完清标记、落批次号。面板只留一行状态（`排队中` → `整理中` → `已完成 · 合并 N 组`，或 `没有需要合并的条目`，失败则给「重试」）＋ 下方批次块里的整批撤回按钮；前端不冒对话、不占上下文。执行体是**探测**出来的而非按平台猜死（配置点名 → 宿主自身的 CLI 入口 → PATH），一轮没落下任何批次也会自己留一行「正常退出」凭据，**按钮不会卡死**。`tidy.enabled: false` 可退回旧的排队式。
+
+- **治理：把降级走回来，把冲突按面裁决。**
+  - **`restore`** 把一次降级走反方向（`superseded → active`，`version` 不动，重新进入每个会话的可见集），它是脱离降级态的唯一出口。
+  - **`arbitrate`** 处理「同一条事实、两个来源」：在**一个面**上裁决，方向由固定表决定——能力听观察、意愿听自陈，其余五面**两条都留**并各打 `gap` 标（落差本身即证据）。表即方向，所以没有反向参数可传；同组内保留 `updatedAt` 最新者。
+  - **与所有写路径同门**：同一审批门、同一会话开关、同一桶内边界。审计也逐条留痕——`restore` 每条一行，`arbitrate` 每次降级一行（`text` 恒为 `null`，只记 id）、打标一行 `arbitrate-tag`，收尾一行 `arbitrate` 摘要写清保留了谁、降级了谁、理由是什么。
 
 ## Compatibility
 
 | Surface | Status |
 |---|---|
-| Harness | DeepSeek Harness `dsh-v0.1.5-rc.2` (adapted 2026-09-09): the session envelope keeps its ignorable field for stored-log read compatibility only - Session.append still cannot stamp it, so audit-gate behavior is unchanged. Verified 2026-09-11 against the dsh-v0.1.5-rc.2 master checkout (full gate chain + profile install smoke). |
-| Node | `^22.19.0 || >=24.0.0` |
-| Platforms | Windows / macOS / Linux (pure host; no native code, no network) |
-| Model | Any |
+| Harness | DeepSeek Harness `dsh-v0.1.5-rc.2`（2026-09-09 已适配）：会话信封保留 ignorable 字段但仅用于存量日志读取兼容——Session.append 仍无法盖章，门控行为不变。 2026-09-11 已对照 dsh-v0.1.5-rc.2 master checkout 核验（全部门禁链 + profile 安装冒烟）。 |
+| Node | `^22.19.0 \|\| >=24.0.0` |
+| Platforms | Windows / macOS / Linux（纯 host；无原生代码、无网络） |
+| Model | 任意 |
 
 ## Configuration
 
-All tunables are Schemastery `Config` fields (changeable from cordis.yml). Invalid values fail loudly at load. Override under the `yammory_system` row.
+所有可调项均为 Schemastery `Config` 字段（可在 cordis.yml 中修改）。非法值在加载期响亮失败。在 `yammory_system` 行下覆盖。
 
-**Settings panel.** When the DSH settings service is mounted, every field below (except `enabled`) is editable from the plugin's own **`yammory-system` entry in the DSH settings sidebar** (a top-level section, like General or Plugins); edits land in the settings user layer (`settings.yaml`) and need no file editing. Nearly everything applies live (write policies, language, budgets, limits, proposals, panel, `dbPath` / `auditRetentionDays` via a store reopen, `retrieval.vector` via a retriever swap) — only `snapshotOrder` needs a DSH reload. Without the settings service everything falls back to the composed cordis config, exactly as before. The sidebar memory entry can be hidden from the same page (`panel.enabled`).
+**设置面板。** DSH 设置服务挂载时，下表除 `enabled` 外的全部字段可在 DSH 设置侧栏的插件一级项 **`yammory-system`**（与通用设置、插件等并列）中编辑；修改写入设置用户层（`settings.yaml`），无需改文件。几乎全部即时生效（写策略、语言、预算、各上限、提案、面板；`dbPath` / `auditRetentionDays` 经重开 store 生效；`retrieval.vector` 经重装检索器生效）——只有 `snapshotOrder` 需要 DSH 重载。设置服务缺失时一切回退组合配置，与从前完全一致。侧栏底部的记忆入口可在同一页面隐藏（`panel.enabled`）。
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enabled` | `true` | Master switch; `false` removes the service, tools, snapshot, command, panel, and answerer (not editable from the settings page — a disabled plugin has no settings entry) |
-| `panel.enabled` | `true` | Show the memory entry at the sidebar foot; saving `false` from the settings page hides it immediately, no reload needed (the settings page itself stays reachable) |
-| `dbPath` | `''` → `$DSH_HOME/dsh-memento/memory.db` | Absolute, or relative to `$DSH_HOME` (falls back to `~/.dsh` on Windows) |
-| `budgets.user.userGlobal` | `2000` | Soft warning line for the user track's user-global layer |
-| `budgets.user.workspace` | `2000` | Soft warning line for the user track's workspace layer |
-| `budgets.agent.userGlobal` | `4000` | Soft warning line for the agent track's user-global layer |
-| `budgets.agent.workspace` | `4000` | Soft warning line for the agent track's workspace layer |
-| `writePolicy` | `'ask'` | Default write policy: `ask` / `auto` / `off` (model-invisible) |
-| `writePolicies` | `{}` | Per-track/scope or per-source overrides (e.g. `user/workspace`, `source:claude`) |
-| `language` | `'en'` | Model-visible and command output language: `en` / `zh` |
-| `snapshotOrder` | `-50` | Snapshot section order (after harness identity, before persona) |
-| `maxEntriesPerQuery` | `20` | Default per-query result cap (hard-capped at 1000) |
-| `commandListLimit` | `50` | Entries rendered per `/memory list` / `query` |
-| `commandAuditLimit` | `10` | Audit rows rendered per `/memory audit` |
-| `recall.historyLimitDefault` | `8` | `memory_recall` sessions scanned by default |
-| `recall.snippetCap` | `5` | `memory_recall` snippets per session |
-| `recall.snippetChars` | `300` | `memory_recall` snippet characters |
-| `recall.windowDays` | `30` | `memory_recall` recency window in days |
-| `observe.days` | `14` | `memory_observe scan` window in days (hard-capped at 90) |
-| `observe.sessions` | `8` | Recent sessions sampled per scan (hard-capped at 20) |
-| `observe.perSession` | `12` | Messages sampled per session, spread evenly so the opening and the later corrections both survive (hard-capped at 20) |
-| `observe.messageChars` | `400` | Per-message character cap before truncation with an ellipsis (hard-capped at 800) |
-| `observe.totalChars` | `12000` | Character budget for the whole slice; the scan stops there and reports what it could not cover (hard-capped at 30000) |
-| `recall.weighting.heat` | `0.3` | Heat bonus ceiling (multiplicative; `0` turns it off). Heat = recalls (saturating) × half-life decay since the last recall, so a memory has to keep being recalled to keep its heat |
-| `recall.weighting.heatSaturation` | `10` | Recalls that saturate the heat bonus |
-| `recall.weighting.heatHalfLifeDays` | `14` | Heat half-life in days (an entry not recalled for a while goes cold) |
-| `recall.weighting.freshness` | `0.2` | Freshness bonus ceiling (multiplicative; `0` turns it off) |
-| `recall.weighting.freshnessHalfLifeDays` | `30` | Freshness half-life in days |
-| `recall.weighting.tagDiscount` | `0.5` | Weight a token scores when it matches only `tags` (a body match scores `1`) |
-| `retrieval.vector` | `false` | Semantic recall switch: `true` swaps in vector recall **only when a genuinely semantic embedding provider is registered** — a hash/fake provider is deliberately not enough, since it models no meaning and would silently zero CJK recall. Otherwise the zero-dependency keyword retriever stays in place (CJK bigram tokenizing, any-token match, heat/freshness weighting, relevance ranking) |
-| `panelEntriesLimit` | `200` | Web panel entries page size |
-| `panelAuditLimit` | `20` | Web panel audit rows by default |
-| `auditRetentionDays` | `0` | Audit retention (0 = keep forever) |
-| `proposals.enabled` | `true` | Auto-capture a memory proposal after each successful compaction |
-| `proposals.maxChars` | `2000` | Proposal character cap |
-| `proposals.maxPending` | `8` | Pending proposal cap |
-| `tidy.enabled` | `true` | Whether **Tidy the whole library** really starts a background round: `false` restores the old behaviour (marker only, waiting for the next session) |
-| `tidy.profile` | `'headless'` | Executor profile name used by the background round |
-| `tidy.exec` | `''` → auto-detected | Executor entry: empty means "work it out": the host's own launcher first (the CLI script it was started with, run by the same node), then `dsh.cmd` / `dsh` on PATH; a configured value (an absolute path, or your own launcher script) overrides both. A miss is reported honestly as "the executor could not be started", with a Retry button |
-| `tidy.timeoutMs` | `480000` | Wait window: the round is killed when it has not exited by then, and reported as "timeout" (minimum 30 seconds) |
-| `tidy.task` | `''` → built-in task text | Overrides the instruction handed to the headless session (config-only, not in the settings card) |
+| `enabled` | `true` | 总开关；`false` 移除服务、工具、快照、命令、面板与 answerer（设置页不可编辑——禁用的插件没有设置项） |
+| `panel.enabled` | `true` | 显示侧栏底部的记忆入口；在设置页保存 `false` 后立即隐藏，无需刷新（设置页本身不受影响） |
+| `dbPath` | `''` → `$DSH_HOME/dsh-memento/memory.db` | 绝对路径，或相对 `$DSH_HOME`（Windows 上回退到 `~/.dsh`） |
+| `budgets.user.userGlobal` | `2000` | user 轨 user-global 层的软预警线 |
+| `budgets.user.workspace` | `2000` | user 轨 workspace 层的软预警线 |
+| `budgets.agent.userGlobal` | `4000` | agent 轨 user-global 层的软预警线 |
+| `budgets.agent.workspace` | `4000` | agent 轨 workspace 层的软预警线 |
+| `writePolicy` | `'ask'` | 默认写策略：`ask` / `auto` / `off`（模型不可见） |
+| `writePolicies` | `{}` | 按轨/作用域或按来源的覆盖（如 `user/workspace`、`source:claude`） |
+| `language` | `'en'` | 模型可见文本与命令输出语言：`en` / `zh` |
+| `snapshotOrder` | `-50` | 快照段顺序（在 harness 身份之后、persona 之前） |
+| `maxEntriesPerQuery` | `20` | 每次查询默认结果上限（硬上限 1000） |
+| `commandListLimit` | `50` | 每次 `/memory list` / `query` 渲染的条目数 |
+| `commandAuditLimit` | `10` | 每次 `/memory audit` 渲染的审计行数 |
+| `recall.historyLimitDefault` | `8` | `memory_recall` 默认扫描的会话数 |
+| `recall.snippetCap` | `5` | `memory_recall` 每个会话的片段数 |
+| `recall.snippetChars` | `300` | `memory_recall` 片段字符数 |
+| `recall.windowDays` | `30` | `memory_recall` 近期窗口天数 |
+| `observe.days` | `14` | `memory_observe scan` 的回看天数（硬上限 90） |
+| `observe.sessions` | `8` | 单次扫描采样最近多少个会话（硬上限 20） |
+| `observe.perSession` | `12` | 每个会话采样几条发言，均匀分布，好让开场与中后段的改口都留得下（硬上限 20） |
+| `observe.messageChars` | `400` | 单条发言超过多少字符即截断加省略号（硬上限 800） |
+| `observe.totalChars` | `12000` | 整段切片的字符预算；到顶即停并报出未覆盖范围（硬上限 30000） |
+| `recall.weighting.heat` | `0.3` | 热度加成上限（乘性；`0` = 关闭）。热度 = 召回次数（封顶）× 距上次召回的半衰期衰减——记忆要靠持续被召回才保得住热度 |
+| `recall.weighting.heatSaturation` | `10` | 吃满热度加成所需的召回次数 |
+| `recall.weighting.heatHalfLifeDays` | `14` | 热度半衰期（天）：久未被召回即失温 |
+| `recall.weighting.freshness` | `0.2` | 新旧加成上限（乘性；`0` = 关闭） |
+| `recall.weighting.freshnessHalfLifeDays` | `30` | 新旧半衰期（天） |
+| `recall.weighting.tagDiscount` | `0.5` | 词元只在 `tags` 命中时的权重（正文命中记 `1`） |
+| `retrieval.vector` | `false` | 语义召回开关：`true` **且注册了真语义嵌入 provider** 时才换装向量召回——伪嵌入（哈希袋）刻意不算数，它不做语义建模、会让中文召回静默归零；否则保持零依赖 keyword 检索器（中文二字分词、任一词元命中、热度/新旧加权、相关度排序） |
+| `panelEntriesLimit` | `200` | Web 面板条目分页大小 |
+| `panelAuditLimit` | `20` | Web 面板默认审计行数 |
+| `auditRetentionDays` | `0` | 审计保留天数（0 = 永久保留） |
+| `proposals.enabled` | `true` | 每次成功压缩后自动捕获一条记忆提案 |
+| `proposals.maxChars` | `2000` | 提案字符上限 |
+| `proposals.maxPending` | `8` | 待处理提案上限 |
+| `tidy.enabled` | `true` | **整理全库**按钮是否真的起一轮后台会话：`false` 退回旧行为（只登记标记，等下次会话开口） |
+| `tidy.profile` | `'headless'` | 后台轮用的执行体 profile 名 |
+| `tidy.exec` | `''` → 自动探测 | 执行体入口：空 = 自己探（先用宿主自己的启动器：宿主启动时那个 CLI 脚本，由同一份 node 执行；再找 PATH 里的 `dsh.cmd` / `dsh`）；填了就盖过这两条（绝对路径或你自己的启动脚本）。找不到它会如实报「执行体起不来」并给「重试」 |
+| `tidy.timeoutMs` | `480000` | 判活窗口：到点未退出即杀进程并如实报「超时」（下限 30 秒） |
+| `tidy.task` | `''` → 内置任务文本 | 覆盖交给无头会话的作业说明（只在 cordis.patch.yml 里可改，不进设置卡片） |
 
 ## Tools & surfaces
 
 | Surface | Kind | Notes |
 |---|---|---|
-| `memory` | tool | add/replace/remove/consolidate/supersede/auto-tidy/restore/arbitrate/query/tidy with Save/Skip guidance; entries may carry profile coordinates (`facet` = one of the seven facets, `level` = per-domain knowledge level); `supersede` merges 1..20 entries into one `merged`-tagged entry and demotes the old ones to `superseded` (kept, never deleted), `restore` brings a demoted entry back, `arbitrate` settles a two-source conflict on one facet with a direction fixed by the arbitration table, `tidy` returns a read-only tidy plan; writes ride the approval gate |
-| `memory_profile` | tool | Per-domain knowledge level over the 31-subdomain scale (`set` / `list` / `get`); `set` is approval-gated and audited, `tier` derives from `level` |
-| `yammory-survey` | skill | User-initiated profile questionnaire covering the 24 questionnaire-legal sub-blocks; writes through `memory` + `memory_profile`. Source: `skills/yammory-survey/` |
-| `memory_recall` | tool | Bounded memory matches (query tokenized: CJK bigrams, Latin words as-is; any token recalls, ranked by relevance) plus recent session-history matches |
-| `memory_observe` | tool | Observation channel: `scan` reads a bounded slice of the user's OWN past messages (read-only, `cwd`-scoped, system-injected pseudo messages filtered out and counted, budget shortfall reported); `commit` writes 1..8 evidence-backed entries in one approval-gated atomic batch with `source: observation` |
-| `yammory-observe` | skill | User-initiated behavioural observation writing the five observation-only faces (thinking style, character under difficulty, emotional patterns, self-image, decision style) through `memory_observe`. Source: `skills/yammory-observe/` |
-| `yammory-tidy` | skill | User-initiated memory tidy: reads the read-only plan, merges what says the same thing, demotes the old entries (kept, never deleted), never crosses buckets. Source: `skills/yammory-tidy/`; judgement rules in `references/merge-rules.md` |
-| `yammory-experience` | skill | Records reusable lessons about doing the work into the agent track (environment facts, conventions, lessons), kept apart from the user profile by one question: does this knowledge need to be present in every turn? Source: `skills/yammory-experience/` |
-| `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `restore <id...>` · `arbitrate <id...>` · `tidy [--days=N]` · `stats` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` · `observe [--days=N]` · `session [on|off]` |
-| session switch | session header | Per-session memory switch in the conversation header, right after the agent-preset label (`conversation.session.header.actions`, session scope): shows the current state and toggles it through `GET`/`POST /api/memento/session` (the route rides the same `connection.fetch` trust fence as the panel routes) |
-| web panel | client drawer | Read-only for memory content, split into two worlds: the **memory** tab is a collapsible seven-facet tree (categories first, entries on click) plus a knowledge-level block; the **experience** tab buckets the agent track by topic. Both share search, budget bars, the three observability numbers and the audit tail; one user-action button starts a background tidy round and shows that round's status line and batch block (every write path stays on the server); the sidebar entry can be hidden (`panel.enabled`) |
-| settings section | DSH settings sidebar → `yammory-system` | Edit every config field (except `enabled`) without touching files; live vs reload-required timing is marked on the page |
+| `memory` | tool | 带 Save/Skip 指引的 add/replace/remove/consolidate/supersede/auto-tidy/restore/arbitrate/query/tidy；条目可带画像坐标（`facet` 七面之一、`level` 分领域知识水平）；`supersede` 把 1..20 条并成一条带 `merged` 标的条目、旧条目降级为 `superseded`（留痕不删），`restore` 把降级条目救回，`arbitrate` 按裁决表在一个面上裁两个来源的冲突，`tidy` 返回只读整理计划；写入走审批门 |
+| `memory_profile` | tool | 31 个子领域刻度上的分领域知识水平（`set` / `list` / `get`）；`set` 走审批门并落审计，`tier` 由 `level` 推导 |
+| `yammory-survey` | skill | 用户主动激发的画像问卷，覆盖 24 个问卷合法子板块；经 `memory` + `memory_profile` 落库。源文件：`skills/yammory-survey/` |
+| `memory_recall` | tool | 有界的记忆匹配（查询按词元切分：中文二字、英文整词；任一词元命中即召回，按相关度排序）+ 近期会话历史匹配 |
+| `memory_observe` | tool | 观察通道：`scan` 只读取「用户本人」旧发言的有界切片（`cwd` 精确收窄、系统注入的伪发言过滤并计数、预算缺口如实报出）；`commit` 以一次审批、一次原子写落 1..8 条带证据的条目，`source` 固定 `observation` |
+| `yammory-observe` | skill | 用户主动发起的行为观察，把五个仅观察面（思维方式与思辨 / 人格特质 / 情绪模式与心理强度 / 自我认知 / 决策与行动风格）经 `memory_observe` 落库。源文件：`skills/yammory-observe/` |
+| `yammory-tidy` | skill | 用户主动发起的记忆整理：读只读计划、把讲同一件事的条目并成一条、旧条目降级留痕（不删、不跨桶）。源文件：`skills/yammory-tidy/`；判据表在 `references/merge-rules.md` |
+| `yammory-experience` | skill | 把「干活的教训」收进 agent 轨（环境事实／约定／教训），与用户画像分家，判据只有一句：这条知识该不该每一轮都在场。源文件：`skills/yammory-experience/` |
+| `/memory` | command | `list` · `query` · `add` · `remove` · `consolidate` · `restore <id...>` · `arbitrate <id...>` · `tidy [--days=N]` · `stats` · `proposals` · `budgets` · `audit` · `export` · `import <path>` · `adapters` · `observe [--days=N]` · `session [on\|off]` |
+| session switch | session header | 会话标题栏里的会话记忆开关，紧挨 Agent 预设（`conversation.session.header.actions`，session scope）：显示当前状态并点击切换，走 `GET`/`POST /api/memento/session`（与面板路由同一条 `connection.fetch` 信任栅栏） |
+| web panel | client drawer | 对记忆内容只读，且拆成两个世界：**记忆**页签是七面多边形结构树（先看分类、点开才见条目）＋ 知识水位块；**经验**页签把 agent 轨按话题分桶。两侧共用搜索、预算条、可观测三数与审计尾部；另有一个用户动作按钮：起一轮后台整理并显示那一轮的状态行与批次块（写路径全在服务端）；侧栏入口可隐藏（`panel.enabled`） |
+| settings section | DSH 设置侧栏 → `yammory-system` | 免改文件编辑除 `enabled` 外的全部配置字段；即时/重载生效时机在页面内标注 |
 
 ## MCP server
 
-`yammory_system` ships a read-only stdio **MCP server** (`yammory_system-mcp`) so external MCP clients (Claude, Codex, …) can search the memory store without a harness. It speaks JSON-RPC 2.0 over newline-delimited JSON (NDJSON) — one JSON object per line, no `Content-Length` framing.
+`yammory_system` 附带一个只读 stdio **MCP 服务器**（`yammory_system-mcp`），让外部 MCP 客户端（Claude、Codex 等）无需 harness 即可检索记忆库。它通过 newline-delimited JSON（NDJSON）承载 JSON-RPC 2.0——每行一个 JSON 对象，不支持 `Content-Length` 分帧。
 
-**Read-only.** The database is opened with `node:sqlite` `readOnly: true` (no migrations, no WAL writes, no recall-count bump); a missing database returns empty results instead of crashing.
+**只读。** 数据库以 `node:sqlite` 的 `readOnly: true` 打开（不跑迁移、不写 WAL、不 bump recall-count）；库文件不存在时返回空结果而非崩溃。
 
-| Tool | Purpose |
+| 工具 | 用途 |
 |---|---|
-| `memory_search` | `{query, limit?}` → ranked entries (case-insensitive substring via the retrieval Provider seam) |
-| `memory_stats` | `{}` → `{total, namespaces}` entry count + per-track/scope overview |
+| `memory_search` | `{query, limit?}` → 排序后的条目（经检索 Provider seam 的大小写不敏感子串检索） |
+| `memory_stats` | `{}` → `{total, namespaces}` 条目总数 + 按轨道/作用域概览 |
 
-Run it directly:
+直接运行：
 
 ```sh
 node bin/mcp-server.mjs
-# or, through the GitHub channel: npx -y -p github:KhalilYamber/yammory-system yammory_system-mcp
+# 或从 GitHub 渠道装好之后：npx yammory_system-mcp
+#（本仓库尚未发布到 npm 注册表；上面的 -p github:… 就是取包来源）
 ```
 
-The database path is `$DSH_MEMENTO_DB_PATH` (absolute, or relative to `$DSH_HOME`); it defaults to `$DSH_HOME/dsh-memento/memory.db`.
+数据库路径取自 `$DSH_MEMENTO_DB_PATH`（绝对路径，或相对 `$DSH_HOME`）；默认为 `$DSH_HOME/dsh-memento/memory.db`。
 
-Claude Desktop (`claude_desktop_config.json`) example:
+Claude Desktop（`claude_desktop_config.json`）配置示例：
 
 ```json
 {
@@ -208,88 +221,86 @@ Claude Desktop (`claude_desktop_config.json`) example:
 }
 ```
 
-`npx` resolves the package through the GitHub channel here (this repo is not on the npm registry), so the `-p github:…` spec is what fetches it.
-
-The server is read-only: no network, no writes, no approval gate — search and stats only.
+服务器只读：无网络、无写入、无审批门——仅检索与统计。
 
 ## Permissions & data
 
-- **Permissions**: declares `harness:tool`, `filesystem:read`, `filesystem:write`, and `network:none` / `subprocess:none` / `shell:none` / `python:none` / `credentials:none` in its workshop manifest. Write approval rides the official approval seam. Read that literally with one exception: the **Tidy the whole library** button starts one one-shot headless session (`dsh --profile headless`) — the plugin's only process spawn, user-triggered, logged to its own file, batch-rollbackable and switchable off with `tidy.enabled`.
-- **Data**: local SQLite database (`0600`), zero network, zero credentials.
-- **Session log**: audit completeness comes from the approval pair (`approval/asked` + `approval/decided`) plus the plugin's own audit table.
+- **Permissions**：workshop 清单声明 `harness:tool`、`filesystem:read`、`filesystem:write`，以及 `network:none` / `subprocess:none` / `shell:none` / `python:none` / `credentials:none`。写审批走官方审批接缝。这份声明有一处要照实读：**整理全库**按钮会起一轮一次性无头会话（`dsh --profile headless`）——它是本插件唯一的一次进程启动，由用户触发、落日志、可整批撤回，并可由 `tidy.enabled` 关掉。
+- **Data**：本地 SQLite 数据库（`0600`），零网络、零凭据。
+- **Session log**：审计完整性来自审批对（`approval/asked` + `approval/decided`）加插件自有审计表。
 
 ## Security boundaries
 
-- **Public services only.** Consumes `tools`, `systemPrompt`, and the approval seam; no engine / agent-loop / apiproxy / official-UI changes.
-- **Zero network, zero credentials.** Local database with POSIX file mode `0600`.
-- **Fail loud.** Corrupt DB, newer schema, or invalid config fails at load; ambiguous substring matches fail with structured errors. Crossing a warning line never fails a write.
-- **One process, one store.** Multiple sessions share the SQLite store; two processes sharing one `$DSH_HOME` write the same file (last-writer-wins under SQLite locking).
+- **仅公开服务。** 只消费 `tools`、`systemPrompt` 与审批接缝；不改 engine / agent-loop / apiproxy / 官方 UI。
+- **零网络、零凭据。** 本地数据库，POSIX 文件权限 `0600`。
+- **失败要大声。** 库损坏、schema 过新或非法配置在加载期抛错；子串歧义返回结构化错误。越预警线不拦写。
+- **一进程一库。** 多个会话共享 SQLite 库；共享同一 `$DSH_HOME` 的两个进程写同一文件（SQLite 锁下后写覆盖）。
 
 ## Known limitations
 
-- **Session events are declared, not yet emitted (rc.2).** `memory/added|updated|removed|recalled|snapshot` are merge-declared, but rc.2 has no registration surface for out-of-repo event types; emission turns on once a harness build registers them.
-- **A background tidy round sees one workspace.** Gate one reads only sessions whose `cwd` equals the caller's, so the round started from the panel covers the working directory it was started from (plus the user-global layer). Other workspaces keep their own rounds.
-- **`ask` policy needs an answerer.** With no UI/ACP answerer composed, writes fail closed.
-- **No FTS5 indexing.** Substring search runs on case-insensitive `instr` (correct for CJK).
-- **Observation is a whitelist, and the whitelist has an edge.** `memory_observe scan` keeps only `user/message` events whose `source.kind` is `user` or `user-rpc`; measured on this machine, that drops 48% of all `user/message` events (runtime context, AGENTS.md, skill catalogs, goal rounds, subagent notices). It cannot, however, separate a human-typed message from an externally bridged one that also declares `kind: 'user'` — the kind is the only signal the log carries. Treat a single quoted line as weak evidence; require repetition across sessions.
-- **The retrieval half called "semantic" is not semantic yet.** `retrieval.vector` engages only with a provider that declares itself semantic, and the only provider shipped here declares `false`, so today the switch falls back to keyword recall by design. Enabling real semantic recall needs an embedding source this repo has not chosen.
+- **会话事件已声明、尚未发出（rc.2）。** `memory/added|updated|removed|recalled|snapshot` 已合并声明，但 rc.2 没有仓库外事件类型的注册面；一旦 harness 构建收录这些类型即自动开启发出。
+- **一轮后台整理只覆盖一个工作区。** 闸一只读 `cwd` 与调用方精确相等的会话，所以从面板起的那一轮覆盖它启程时所在的工作目录（外加 user-global 层）。别的工作区各有各的一轮。
+- **`ask` 策略需要 answerer。** 未组合 UI/ACP answerer 时，写入失败关闭。
+- **无 FTS5 索引。** 子串搜索走大小写不敏感的 `instr`（对 CJK 正确）。
+- **观察面是白名单，而白名单有边界。** `memory_observe scan` 只保留 `source.kind` 为 `user` / `user-rpc` 的 `user/message` 事件；本机实测这一条会挡下全部 `user/message` 的 48%（运行时上下文、AGENTS.md、skill 目录、goal 轮次、子代理通知）。但它分不出「人打的」与「外部桥接注入、同样声明 `kind: 'user'` 的」——事件日志只带这一个信号。故单条引文只算弱证据；要下结论，须跨会话重复出现。
+- **被叫作「语义」的那半边召回还不语义。** `retrieval.vector` 只在注册了真正声明为语义的嵌入 provider 时才生效，而本仓库自带的那个 provider 声明 `false`，所以今天这个开关是**按设计**回落到关键词召回。要开真正的语义召回，得先有一个本仓库尚未选定的嵌入来源。
 
 ## How it's different
 
-| Plugin | What it is | yammory_system's difference |
+| Plugin | 是什么 | yammory_system 的差异 |
 |---|---|---|
-| dsh-mneme | self-evolving memory with a broad feature surface | small-corpus profile only: it competes by speaking at the user's measured level, not by widening features |
-| dsh-meow-memory | seven-layer store with BM25 retrieval | no retrieval engineering: a per-domain level table plus facet arbitration |
-| dsh-persona-memory | persona injection into the prompt | one layer deeper: a **per-domain knowledge level** and **facet arbitration** on top of the standing profile |
-| dsh-memory-evolve | memory warehouse / evolution loops | a typed service seam, approval gate, and session-log audit; no warehouse ambition |
-| dsh-mnemon | memory store helper | protocol + gate + audit, not another store |
-| dsh-kb-sieve | knowledge-base sieving | no retrieval engineering: small-corpus substring search, cross-session recall via `session_search`/`sessionQuery` |
-| dsh-tdai-memory | task-driven memory tooling | budgets are per track×layer and enforced in the service, not best-effort |
-| claude-bridge | Claude Code bridging | DSH-native; a future `seed(source:'claude')` path lets a bridge feed the same store |
-| dsh-external/Recall | external agent memory | local-first, zero-network, rides DSH's own approval seam |
-| Official MCP memory examples | DSH's stated "memory = external MCP" position | the **native first-party** complement: same goal, no external server; both coexist |
+| dsh-mneme | 自进化记忆，功能面宽 | 只做小语料画像：靠「按用户水平说话」差异化，不靠加功能 |
+| dsh-meow-memory | 七层库、BM25 检索 | 不做检索工程：分领域水位表 ＋ 分面裁决 |
+| dsh-persona-memory | 画像注入 | 多一层：常驻画像之上再带**分领域知识水位**与**分面裁决** |
+| dsh-memory-evolve | 记忆仓库 / 进化循环 | 类型化服务接缝、审批门与会话日志审计；无仓库野心 |
+| dsh-mnemon | 记忆存储助手 | 协议 + 门 + 审计，而非又一个 store |
+| dsh-kb-sieve | 知识库筛选 | 无检索工程：小语料子串搜索，经 `session_search`/`sessionQuery` 跨会话召回 |
+| dsh-tdai-memory | 任务驱动记忆工具 | 预算按 track×layer 且在服务内强制执行，而非尽力而为 |
+| claude-bridge | Claude Code 桥接 | DSH 原生；未来的 `seed(source:'claude')` 路径让桥接写入同一 store |
+| dsh-external/Recall | 外部 agent 记忆 | 本地优先、零网络、走 DSH 自有审批接缝 |
+| Official MCP memory examples | DSH 宣称的"memory = 外部 MCP"立场 | **原生第一方**补充：同目标、无外部服务器；两者共存 |
 
-The two differences that hold against today's field are the last pair in the table above: a **seven-facet profile carrying a per-domain knowledge level** (it decides how the assistant speaks, before any retrieval happens), and **facet arbitration** (it decides how a two-source conflict settles — ability follows observation, preference follows the self-report, the other five facets keep both and tag each `gap`).
+今天真正立得住的差异是上表最后两条：**带分领域知识水位的七面画像**（在任何检索发生之前就决定助手该用什么口吻说话），以及**分面裁决**（同一条事实有两个来源时怎么收场——能力听观察、意愿听自陈，其余五面两条都留、各打一个 `gap` 标）。
 
-The name is **`yammory_system`** (installed from the GitHub channel; not on the npm registry). Not `dsh-recall` (confusable with dsh-external/Recall), not the deleted legacy name `dsh-memory`.
+名称是 **`yammory_system`**（走 GitHub 渠道安装；尚未发布到 npm 注册表）。不是 `dsh-recall`（易与 dsh-external/Recall 混淆），也不是已删除的旧名 `dsh-memory`。
 
 ## dsh-memory-protocol v1
 
-`yammory_system` is the community rehearsal of the DSH memory protocol — a candidate shape for an official `ctx.memory` seam. The protocol normalizes this plugin's seam into a cross-plugin contract:
+`yammory_system` 是 DSH 记忆协议的社区预演——官方 `ctx.memory` 接缝的一个候选形态。该协议把本插件的接缝规范化为跨插件契约：
 
-- **Entry spec** — two tracks × two layers × per-agent key, plus short `tags` (≤16 × ≤32 chars) and a per-entry `version` that increments on every `replace`.
-- **Write semantics** — idempotent unique-substring conditional writes; approve-what-you-see payloads (`replace` / `remove` / `consolidate` carry the full text they change).
-- **Audit contract** — every write reconstructable from `approval/asked` + `approval/decided` + the provider ledger.
-- **Warning-line model** — soft per-layer warning lines / `AMBIGUOUS_MATCH` semantics.
-- **Schema versioning** — migration rules with loud version checks.
+- **Entry spec** — 两条轨道 × 两个层级 × 按 agent 隔离，外加短 `tags`（≤16 × ≤32 字符）与每次 `replace` 递增的每条目 `version`。
+- **Write semantics** — 幂等的唯一子串条件写；批准即所见载荷（`replace` / `remove` / `consolidate` 携带将被改动的全文）。
+- **Audit contract** — 每次写都能从 `approval/asked` + `approval/decided` + 提供方账本重建。
+- **预警线模型** — 每层软预警线 / `AMBIGUOUS_MATCH` 语义。
+- **Schema versioning** — 带响亮版本检查的迁移规则。
 
-- **Spec** — [docs/protocol-v1.md](docs/protocol-v1.md) (中文: [protocol-v1.zh.md](docs/protocol-v1.zh.md)); normative JSON Schema at [docs/schemas/dsh-memory-protocol-v1.schema.json](docs/schemas/dsh-memory-protocol-v1.schema.json).
+- **Spec** — [docs/protocol-v1.md](docs/protocol-v1.md)（中文: [protocol-v1.zh.md](docs/protocol-v1.zh.md)）；规范性 JSON Schema 见 [docs/schemas/dsh-memory-protocol-v1.schema.json](docs/schemas/dsh-memory-protocol-v1.schema.json)。
 
-**Adapter registry** — `ctx.memoryAdapters` (`register` / `list` / `adapt` / `export`) lets third-party memory plugins speak the protocol by registering a pure data converter (reversible `register()`; import rides the approval-gated `seed`, export is read-only). Onboarding: [docs/adapters-guide.md](docs/adapters-guide.md) (中文: [adapters-guide.zh.md](docs/adapters-guide.zh.md)).
+**Adapter registry** — `ctx.memoryAdapters`（`register` / `list` / `adapt` / `export`）让第三方记忆插件通过注册纯数据转换器接入协议（可逆 `register()`；导入走审批门 `seed`，导出只读）。接入指南：[docs/adapters-guide.md](docs/adapters-guide.md)（中文: [adapters-guide.zh.md](docs/adapters-guide.zh.md)）。
 
 | Built-in adapter | External format | Notes |
 |---|---|---|
-| `mem0` | mem0 fact collections (`{facts: [{memory, metadata?}]}`) | `metadata.category` / `metadata.tags` become tags; raw `messages` arrays are rejected — adapters convert, never extract |
-| `hermes-memory-md` | Hermes `memory.md` (`## section` + bullets) | section names become tags; non-bullet prose fails loudly |
-| `claude-code-memory-md` | `CLAUDE.md`-style markdown (headings, bullets, paragraphs) | bullets and paragraphs become entries; section names become tags |
+| `mem0` | mem0 fact collections（`{facts: [{memory, metadata?}]}`） | `metadata.category` / `metadata.tags` 成为 tags；原始 `messages` 数组被拒绝——适配器只转换、绝不抽取 |
+| `hermes-memory-md` | Hermes `memory.md`（`## section` + 列表项） | 章节名成为 tags；非列表散文响亮失败 |
+| `claude-code-memory-md` | `CLAUDE.md` 风格 markdown（标题、列表、段落） | 列表项与段落成为条目；章节名成为 tags |
 
-**Conformance suite** — [test/protocol-conformance/](test/protocol-conformance/README.md): a distributable case set any provider claiming compatibility runs (`node test/protocol-conformance/run.mjs --provider ./your-factory.mjs`); this repo's CI runs it against its own provider as the golden reference (`npm run test:conformance`).
+**Conformance suite** — [test/protocol-conformance/](test/protocol-conformance/README.md)：可分发用例集，任何声明兼容的提供方都能跑（`node test/protocol-conformance/run.mjs --provider ./your-factory.mjs`）；本仓库 CI 以自有提供方为黄金参考运行它（`npm run test:conformance`）。
 
-- **Upstream proposal** — [docs/upstream-proposal.md](docs/upstream-proposal.md) (中文: [upstream-proposal.zh.md](docs/upstream-proposal.zh.md)): why the official `ctx.memory` seam should adopt the protocol, the differences, and the migration path.
+- **Upstream proposal** — [docs/upstream-proposal.md](docs/upstream-proposal.md)（中文: [upstream-proposal.zh.md](docs/upstream-proposal.zh.md)）：为何官方 `ctx.memory` 接缝应采纳该协议、差异与迁移路径。
 
 ## What we learned from the terminal memories
 
-`yammory_system` is not a port of Claude Code, Codex, or Hermes — but its design deliberately absorbed the parts each got right, and refused the parts that hurt:
+`yammory_system` 不是 Claude Code、Codex 或 Hermes 的移植——但其设计刻意吸收了它们各自做对的部分，并拒绝有害的部分：
 
-| Terminal memory | What it got right | What yammory_system adopted |
+| Terminal memory | 做对了什么 | yammory_system 采纳了什么 |
 |---|---|---|
-| **Claude Code** — `CLAUDE.md` | hierarchical plain-text memory files (user-level → project-level), human-readable and human-editable, merged automatically into every session | plain-text entries; `user-global` / `workspace` layers merged per session; a store you can browse, `export`, and audit — transparency as a feature |
-| **Codex** — `AGENTS.md` | per-directory scoped instructions auto-discovered and injected with zero model friction | the `workspace` layer keyed by the session cwd (Windows case-insensitive); the frozen snapshot injected automatically at session start |
-| **Hermes** — `memory.md` | proactive memory saves and the security lesson that a gate enforced only in the tool layer is bypassable by late tool injection | the `memory` tool with Save/Skip guidance + approval-gated auto-capture proposals; the gate lives inside `ctx.memory`'s write methods, not in the tool layer |
+| **Claude Code** — `CLAUDE.md` | 分层纯文本记忆文件（用户级 → 项目级），人类可读、可编辑，自动合并进每个会话 | 纯文本条目；`user-global` / `workspace` 层按会话合并；可浏览、`export`、审计的 store——透明即特性 |
+| **Codex** — `AGENTS.md` | 按目录作用域自动发现并注入的指令，零模型摩擦 | 按会话 cwd 隔离的 `workspace` 层（Windows 大小写不敏感）；会话开始时自动注入冻结快照 |
+| **Hermes** — `memory.md` | 主动记忆保存，以及"只在工具层强制门可被后期工具注入绕过"的安全教训 | 带 Save/Skip 指引的 `memory` 工具 + 审批门控的自动捕获提案；门位于 `ctx.memory` 写方法内部，而非工具层 |
 
-Sources: [Claude Code memory](https://code.claude.com/docs/en/memory) · [Codex AGENTS.md](https://developers.openai.com/codex/cli/agents-md) · [Hermes memory](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/memory.md) · [Hermes #48181](https://github.com/NousResearch/hermes-agent/issues/48181).
+来源：[Claude Code memory](https://code.claude.com/docs/en/memory) · [Codex AGENTS.md](https://developers.openai.com/codex/cli/agents-md) · [Hermes memory](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/memory.md) · [Hermes #48181](https://github.com/NousResearch/hermes-agent/issues/48181)。
 
-And the parts deliberately refused: hidden auto-summarization into model-private state (compaction summaries here become **pending proposals** that wait for a human approve/dismiss), warehouse/vector-store ambitions, and any write that lacks a human-visible approval or audit trail. Also adopted: Hermes's documented caveat that two processes sharing one home directory write the same memory file — see Security boundaries.
+刻意拒绝的部分：隐藏地自动摘要进模型私有状态（此处压缩摘要成为等待人类 approve/dismiss 的**待处理提案**）、仓库/向量库野心，以及任何缺少人类可见审批或审计链的写入。也采纳了：Hermes 记载的"两个进程共享一个主目录写同一记忆文件"的告诫——见 Security boundaries。
 
 ## Development
 
@@ -305,7 +316,7 @@ npm run verify:self-contained # reject out-of-repo dependency specs
 npm run verify:artifacts # artifact presence + syntax + import
 ```
 
-`lib/` is zero-DSH-dependency (node: builtins only); DSH imports exist only in `index.mjs`.
+`lib/` 零 DSH 依赖（仅 node: 内置模块）；DSH 导入只出现在 `index.mjs`。
 
 ## Topics
 
@@ -313,7 +324,7 @@ npm run verify:artifacts # artifact presence + syntax + import
 
 ## Contributors
 
-- [@Niuniu-Sir](https://github.com/Niuniu-Sir) — the boot-crash report in [issue #1](https://github.com/PerryLink/dsh-memento/issues/1) that led to the `~/.dsh` fallback shipped in 0.3.1.
+- [@Niuniu-Sir](https://github.com/Niuniu-Sir) — [issue #1](https://github.com/PerryLink/dsh-memento/issues/1) 中的启动崩溃报告，催生了 0.3.1 引入的 `~/.dsh` 回退。
 
 ## Upstream
 

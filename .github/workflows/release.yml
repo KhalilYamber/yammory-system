@@ -3,7 +3,7 @@ name: release
 # 打 v* 标签 → 用 CHANGELOG 里该版本那一段，建一个 GitHub Release 页。
 #
 # 发布到 npm 已拆到 publish-npm.yml，且只能手动触发（workflow_dispatch）——
-# 标签本身不再发布任何东西。两条理由：五语 README 的渠道口径已经是 GitHub；
+# 标签本身不再发布任何东西。两条理由：四语 README 的渠道口径已经是 GitHub；
 # npm 侧的账号两步验证还在申诉（工单 #4755194），发布应当是有人按下的动作。
 on:
   push:

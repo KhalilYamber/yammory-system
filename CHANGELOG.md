@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The README language set is now four, and Chinese is the front page.** `README.md` is the Chinese edition (what GitHub and npm show by default), English moved to `README-en.md`, and Spanish / Portuguese / Hindi were retired in favour of new Japanese (`README-ja.md`) and Russian (`README-ru.md`) editions. The four-way switcher line and `scripts/verify-readmes.mjs` (the CI gate) were updated with it.
+- **The descriptive docs were rewritten for scanning.** `ARCHITECTURE.md` now gives every design decision a numbered heading, a one-line summary and a bulleted body (27 summaries; decisions 1–12 became headings, so the page sidebar lists all 25); `AGENTS.md`'s three longest red lines were split into sub-lists; the README capabilities section became a lead line plus sub-points. Three real defects surfaced while rewriting: a paragraph in decision 11 that had been duplicated, three places still describing the panel's tidy button as queue-only after decision 25 made it actually run, and 18 table cells with unescaped pipes (which had GitHub rendering an extra column in those tables).
+
 ## [0.8.0] - 2026-09-22
 
 ### Added

@@ -53,7 +53,7 @@ across their closed memory forms.
 | Budgets | per-plugin | hard per-track×scope character budgets with structured errors |
 | Audit | per-plugin | approval pair + provider ledger + `<action>-denied` rows; reconstruction guaranteed |
 | Interop | none | conformance suite + reference adapters (mem0, Hermes memory.md, CLAUDE.md) |
-| Session events | — | `memory/added|updated|removed|recalled|snapshot` vocabulary already merge-declared; runtime emission turns on automatically once the harness registers the types |
+| Session events | — | `memory/added\|updated\|removed\|recalled\|snapshot` vocabulary already merge-declared; runtime emission turns on automatically once the harness registers the types |
 
 ## Migration path
 
