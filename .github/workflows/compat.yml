@@ -11,6 +11,8 @@ name: Compat
 #      service) hits the 120s timeout and fails, which is exactly how a missing
 #      injected service surfaces.
 #   3. uninstall: the profile install must be fully reversible.
+# Runner: pinned to ubuntu-24.04 rather than ubuntu-latest so the monthly run
+# does not silently drift when the label migrates (Ubuntu 26.04 lands Nov 2026).
 # Platform guard: every assertion here is platform-neutral. Platform-specific
 # behavior (Windows/macOS-only rows) is never asserted on this Linux runner.
 on:
@@ -20,11 +22,11 @@ on:
 
 jobs:
   bare-import:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.7.0
 
@@ -43,11 +45,11 @@ jobs:
           pnpm add "$TARBALL" >/dev/null
           node --input-type=module -e "import('yammory_system').then(()=>process.exit(0)).catch(e=>{console.error(e);process.exit(1)})"
   profile:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.7.0
 
