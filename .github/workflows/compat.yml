@@ -4,10 +4,12 @@ name: Compat
 #   1. bare-import: install the packed tarball into an empty project and import
 #      its entry - catches devDependencies mistaken for dependencies.
 #   2. profile: install the tarball into a scratch DSH_HOME profile next to
-#      dsh-base + dsh-headless, assert the bundle row mounts (dump-config), and
-#      run one keyless headless task. MISSING_CREDENTIAL proves the plugin tree
-#      loaded; a hang (pending service) hits the 120s timeout and fails, which
-#      is exactly how a missing injected service surfaces.
+#      dsh-base + dsh-headless, pin the profile's patch reload to "startup" so
+#      boot does not demand a Cordis HMR service the tree does not ship, assert
+#      the bundle row mounts (dump-config), and run one keyless headless task.
+#      MISSING_CREDENTIAL proves the plugin tree loaded; a hang (pending
+#      service) hits the 120s timeout and fails, which is exactly how a missing
+#      injected service surfaces.
 #   3. uninstall: the profile install must be fully reversible.
 # Platform guard: every assertion here is platform-neutral. Platform-specific
 # behavior (Windows/macOS-only rows) is never asserted on this Linux runner.
@@ -77,6 +79,23 @@ jobs:
             '@google/genai': true
           YAML
           dsh plugin --profile compat add '@deepseek-ai/dsh-base@0.1.5-rc.2' '@deepseek-ai/dsh-headless@0.1.5-rc.2' "$TARBALL"
+
+      # A custom profile defaults to patchReload: "live", which makes boot watch
+      # the patch layer through Cordis HMR. A base + headless tree ships no HMR
+      # service, so that watch throws before the plugin tree ever loads. Pin the
+      # profile to the shipped headless policy ("startup") so the smoke reaches
+      # its intended MISSING_CREDENTIAL proof.
+      - name: Pin patch reload to startup (headless ships no HMR service)
+        run: |
+          set -euo pipefail
+          export DSH_HOME="$RUNNER_TEMP/dsh-home"
+          node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            const file = process.env.DSH_HOME + "/profiles/compat/package.json";
+            const manifest = JSON.parse(readFileSync(file, "utf8"));
+            manifest.dsh.profile.patchReload = "startup";
+            writeFileSync(file, JSON.stringify(manifest, null, 2) + "\n");
+          '
 
       - name: Row-mount assertion
         run: |
